@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+import os
+import sys
+import logging
+import uvicorn
+
+def main():
+    # Setup basic logging to stdout
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    logger = logging.getLogger("anti_gravity.docker_entrypoint")
+    logger.info("Starting Anti-Gravity Docker Engine entrypoint...")
+
+    # Load configuration from environment variables or use sensible production defaults
+    host = os.getenv("ANTI_GRAVITY_HOST", "0.0.0.0")
+    port = int(os.getenv("ANTI_GRAVITY_PORT", "8000"))
+
+    logger.info("Launching FastAPI Web Dashboard server on http://%s:%d", host, port)
+    try:
+        # Start uvicorn server running FastAPI application in src/web/app.py
+        uvicorn.run("src.web.app:app", host=host, port=port, log_level="info")
+    except Exception as e:
+        logger.error("Web server failed to start: %s", e)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

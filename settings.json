@@ -1,0 +1,13 @@
+{
+  "directionality": "bidirectional",
+  "sync_filters": {
+    "date_from": null,
+    "date_to": null,
+    "only_new": true,
+    "sync_gases": true,
+    "sync_fit": false
+  },
+  "grace_window_minutes": 15,
+  "api_cooldown_seconds": 1.0,
+  "schedule": []
+}
