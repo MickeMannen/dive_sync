@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DiveLogToGarminMappingMatrix",
+  "description": "Bidirectional declarative path resolution for telemetry normalization.",
+  "mappings": [
+    {
+      "internal_field": "dive_number",
+      "dive_log_path": "$.divenumber",
+      "garmin_api_path": "$.summarizedDiveInfo.maxDepth"
+    },
+    {
+      "internal_field": "max_depth",
+      "dive_log_path": "$.maxdepth",
+      "garmin_api_path": "$.summarizedDiveInfo.maxDepth"
+    },
+    {
+      "internal_field": "water_temperature",
+      "dive_log_path": "$.depthtemp",
+      "garmin_api_path": "$.summarizedDiveInfo.minTemperature"
+    },
+    {
+      "internal_field": "latitude",
+      "dive_log_path": "$.lat",
+      "garmin_api_path": "$.startLatitude"
+    },
+    {
+      "internal_field": "longitude",
+      "dive_log_path": "$.lng",
+      "garmin_api_path": "$.startLongitude"
+    },
+    {
+      "internal_field": "tank_start_pressure",
+      "dive_log_path": "$.tanks[*].start_pressure",
+      "garmin_api_path": "$.summarizedDiveInfo.tankSummaryList[*].startPressure"
+    }
+  ],
+  "transformations": {
+    "date_handling": {
+      "dive_log": "Combine $.date and $.time strings",
+      "garmin_api": "Parse standard ISO string from $.startTimeLocal"
+    }
+  }
+}

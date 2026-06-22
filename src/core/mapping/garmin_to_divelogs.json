@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GarminToDiveLogMappingMatrix",
+  "description": "Declarative JSONPath map to translate Garmin Connect API payloads into the local dive log schema.",
+  "mappings": [
+    {
+      "target_dive_log_field": "divenumber",
+      "source_garmin_path": "$.summarizedDiveInfo.diveNumber"
+    },
+    {
+      "target_dive_log_field": "maxdepth",
+      "source_garmin_path": "$.summarizedDiveInfo.maxDepth"
+    },
+    {
+      "target_dive_log_field": "meandepth",
+      "source_garmin_path": "$.summarizedDiveInfo.avgDepth"
+    },
+    {
+      "target_dive_log_field": "depthtemp",
+      "source_garmin_path": "$.summarizedDiveInfo.minTemperature"
+    },
+    {
+      "target_dive_log_field": "surfacetemp",
+      "source_garmin_path": "$.summarizedDiveInfo.surfaceTemperature"
+    },
+    {
+      "target_dive_log_field": "location",
+      "source_garmin_path": "$.locationName"
+    },
+    {
+      "target_dive_log_field": "divesite",
+      "source_garmin_path": "$.activityName"
+    },
+    {
+      "target_dive_log_field": "lat",
+      "source_garmin_path": "$.startLatitude"
+    },
+    {
+      "target_dive_log_field": "lng",
+      "source_garmin_path": "$.startLongitude"
+    },
+    {
+      "target_dive_log_field": "duration",
+      "source_garmin_path": "$.duration"
+    },
+    {
+      "target_tank_fields": {
+        "vol": "$.summarizedDiveInfo.tankSummaryList[*].tankVolume",
+        "start_pressure": "$.summarizedDiveInfo.tankSummaryList[*].startPressure",
+        "end_pressure": "$.summarizedDiveInfo.tankSummaryList[*].endPressure",
+        "o2": "$.summarizedDiveInfo.tankSummaryList[*].oxygenPercentage"
+      }
+    },
+    {
+      "target_sampledata_fields": {
+        "d": "$.metrics[*].depth",
+        "t": "$.metrics[*].temperature"
+      }
+    }
+  ],
+  "structural_mutations": {
+    "temporal_split": {
+      "source": "$.startTimeLocal",
+      "strategy": "Split ISO string at whitespace or 'T' boundary into distinct 'date' (YYYY-MM-DD) and 'time' (HH:MM:SS) target primitives."
+    }
+  }
+}

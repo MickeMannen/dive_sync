@@ -18,7 +18,7 @@ class SyncScheduleSlot(BaseModel):
     minute: int = Field(..., ge=0, le=59)
 
 class SettingsModel(BaseModel):
-    directionality: str = Field("bidirectional", description="bidirectional, garmin_to_divelogs, divelogs_to_garmin")
+    directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
     sync_filters: SyncFilters = Field(default_factory=SyncFilters)
     grace_window_minutes: int = Field(15, description="Matching grace window in minutes")
     api_cooldown_seconds: float = Field(1.0, description="Cool-down delay in seconds between API requests")

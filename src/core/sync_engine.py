@@ -180,8 +180,8 @@ class SyncEngine:
 
         direction = self.settings.directionality
 
-        # 1. Garmin -> Divelogs (if bidirectional or garmin_to_divelogs)
-        if direction in ["bidirectional", "garmin_to_divelogs"]:
+        # 1. Garmin -> Divelogs (if bidirectional or to_divelogs)
+        if direction in ["bidirectional", "to_divelogs"]:
             for dive in unique_garmin:
                 logger.info("Sync action: Upload Garmin dive at %s to Divelogs.org", dive.date_time)
                 if not dry_run:
@@ -199,8 +199,8 @@ class SyncEngine:
                         "dry_run": True
                     })
 
-        # 2. Divelogs -> Garmin (if bidirectional or divelogs_to_garmin)
-        if direction in ["bidirectional", "divelogs_to_garmin"]:
+        # 2. Divelogs -> Garmin (if bidirectional or to_garmin)
+        if direction in ["bidirectional", "to_garmin"]:
             for dive in unique_divelogs:
                 logger.info("Sync action: Upload Divelogs dive at %s to Garmin Connect", dive.date_time)
                 

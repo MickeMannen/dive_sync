@@ -290,3 +290,209 @@ def test_update_dive_preserves_other_fields(tmp_path):
     assert updated_data["details"]["summaryDTO"]["maxDepth"] == 15.0
 
 
+class TestSync:
+    @staticmethod
+    def _setup_mock_directories(tmp_path, dive_numbers, copy_garmin=True, copy_divelogs=True):
+        garmin_dest = os.path.join(tmp_path, "garmin")
+        divelogs_dest = os.path.join(tmp_path, "divelogs")
+        os.makedirs(garmin_dest, exist_ok=True)
+        os.makedirs(divelogs_dest, exist_ok=True)
+
+        real_garmin_dir = "./tests/garmin"
+        real_divelogs_dir = "./tests/divelogs"
+
+        import shutil
+        for num in dive_numbers:
+            filename = f"{num}.json"
+            g_src = os.path.join(real_garmin_dir, filename)
+            d_src = os.path.join(real_divelogs_dir, filename)
+
+            if copy_garmin and os.path.exists(g_src):
+                shutil.copy(g_src, os.path.join(garmin_dest, filename))
+            if copy_divelogs and os.path.exists(d_src):
+                shutil.copy(d_src, os.path.join(divelogs_dest, filename))
+
+        return str(tmp_path)
+
+    @staticmethod
+    def _write_settings(tmp_path, directionality="bidirectional", only_new=False):
+        settings_data = {
+            "directionality": directionality,
+            "sync_filters": {
+                "date_from": None,
+                "date_to": None,
+                "only_new": only_new,
+                "sync_gases": True,
+                "sync_fit": False
+            },
+            "grace_window_minutes": 15,
+            "api_cooldown_seconds": 0.0,
+            "schedule": []
+        }
+        path = os.path.join(tmp_path, "settings.json")
+        with open(path, "w") as f:
+            json.dump(settings_data, f, indent=2)
+        return path
+
+    def test_bidirectional_sync_with_modifications(self, tmp_path):
+        if not os.path.exists("./tests/garmin/502.json") or not os.path.exists("./tests/divelogs/488.json"):
+            pytest.skip("Real downloaded mock files 488.json and/or 502.json are not present on disk.")
+
+        # Setup: Dive 502 only in Garmin (modified), Dive 488 only in Divelogs (modified)
+        mock_dir = self._setup_mock_directories(tmp_path, [502], copy_garmin=True, copy_divelogs=False)
+        self._setup_mock_directories(tmp_path, [488], copy_garmin=False, copy_divelogs=True)
+
+        # Let's modify the Garmin 502 data to check if sync uses the modified values
+        g502_path = os.path.join(mock_dir, "garmin", "502.json")
+        with open(g502_path, "r") as f:
+            g502_data = json.load(f)
+        
+        # Modify activityName and description
+        g502_data["summary"]["activityName"] = "Modified Garmin Location Mabul"
+        g502_data["summary"]["description"] = "Modified Garmin Notes for 502"
+        g502_data["details"]["activityName"] = "Modified Garmin Location Mabul"
+        g502_data["details"]["description"] = "Modified Garmin Notes for 502"
+        
+        with open(g502_path, "w") as f:
+            json.dump(g502_data, f, indent=2)
+
+        # Let's modify the Divelogs 488 data to check if sync uses the modified values
+        d488_path = os.path.join(mock_dir, "divelogs", "488.json")
+        with open(d488_path, "r") as f:
+            d488_data = json.load(f)
+        
+        d488_data["location"] = "Modified Phuket Island"
+        d488_data["divesite"] = "King Cruiser Wreck"
+        d488_data["notes"] = "Modified Divelogs notes for 488"
+        
+        with open(d488_path, "w") as f:
+            json.dump(d488_data, f, indent=2)
+
+        # Run Sync bidirectional
+        settings_path = self._write_settings(tmp_path, directionality="bidirectional", only_new=False)
+        engine = SyncEngine(settings_path=settings_path, mock_data_dir=mock_dir)
+
+        results = engine.run_sync(dry_run=False)
+
+        # Assert uploads
+        assert len(results["uploaded_to_divelogs"]) == 1
+        assert len(results["uploaded_to_garmin"]) == 1
+
+        # Check created Divelogs 502 JSON contains the modified location & notes
+        d502_path = os.path.join(mock_dir, "divelogs", "502.json")
+        assert os.path.exists(d502_path)
+        with open(d502_path, "r") as f:
+            d502_created = json.load(f)
+        assert d502_created["divesite"] == "Modified Garmin Location Mabul"
+        assert d502_created["notes"] == "Modified Garmin Notes for 502"
+
+        # Check created Garmin 488 JSON contains the modified location & notes
+        g488_path = os.path.join(mock_dir, "garmin", "488.json")
+        assert os.path.exists(g488_path)
+        with open(g488_path, "r") as f:
+            g488_created = json.load(f)
+        assert g488_created["summary"]["activityName"] == "Modified Phuket Island, King Cruiser Wreck"
+        assert g488_created["summary"]["description"] == "Modified Divelogs notes for 488"
+
+    def test_to_garmin_directionality(self, tmp_path):
+        if not os.path.exists("./tests/garmin/502.json") or not os.path.exists("./tests/divelogs/488.json"):
+            pytest.skip("Real downloaded mock files 488.json and/or 502.json are not present on disk.")
+
+        # Setup: Dive 502 in Divelogs (modified), Garmin directory empty for 502
+        mock_dir = self._setup_mock_directories(tmp_path, [502], copy_garmin=False, copy_divelogs=True)
+        # Also copy Garmin 488, Divelogs empty for 488
+        self._setup_mock_directories(tmp_path, [488], copy_garmin=True, copy_divelogs=False)
+
+        # Modify Divelogs 502 notes
+        d502_path = os.path.join(mock_dir, "divelogs", "502.json")
+        with open(d502_path, "r") as f:
+            d502_data = json.load(f)
+        d502_data["notes"] = "Test to_garmin notes"
+        with open(d502_path, "w") as f:
+            json.dump(d502_data, f, indent=2)
+
+        settings_path = self._write_settings(tmp_path, directionality="to_garmin", only_new=False)
+        engine = SyncEngine(settings_path=settings_path, mock_data_dir=mock_dir)
+
+        results = engine.run_sync(dry_run=False)
+
+        # Divelogs 502 should be uploaded to Garmin
+        assert len(results["uploaded_to_garmin"]) == 1
+        g502_path = os.path.join(mock_dir, "garmin", "502.json")
+        assert os.path.exists(g502_path)
+        with open(g502_path, "r") as f:
+            g502_created = json.load(f)
+        assert g502_created["summary"]["description"] == "Test to_garmin notes"
+
+        # Unique Garmin 488 should NOT be uploaded to Divelogs because direction is to_garmin
+        assert len(results["uploaded_to_divelogs"]) == 0
+        assert not os.path.exists(os.path.join(mock_dir, "divelogs", "488.json"))
+
+    def test_to_divelogs_directionality(self, tmp_path):
+        if not os.path.exists("./tests/garmin/502.json") or not os.path.exists("./tests/divelogs/488.json"):
+            pytest.skip("Real downloaded mock files 488.json and/or 502.json are not present on disk.")
+
+        # Setup: Dive 502 in Garmin (modified), Divelogs directory empty for 502
+        mock_dir = self._setup_mock_directories(tmp_path, [502], copy_garmin=True, copy_divelogs=False)
+        # Also copy Divelogs 488, Garmin empty for 488
+        self._setup_mock_directories(tmp_path, [488], copy_garmin=False, copy_divelogs=True)
+
+        # Modify Garmin 502 description
+        g502_path = os.path.join(mock_dir, "garmin", "502.json")
+        with open(g502_path, "r") as f:
+            g502_data = json.load(f)
+        g502_data["summary"]["description"] = "Test to_divelogs description"
+        g502_data["details"]["description"] = "Test to_divelogs description"
+        with open(g502_path, "w") as f:
+            json.dump(g502_data, f, indent=2)
+
+        settings_path = self._write_settings(tmp_path, directionality="to_divelogs", only_new=False)
+        engine = SyncEngine(settings_path=settings_path, mock_data_dir=mock_dir)
+
+        results = engine.run_sync(dry_run=False)
+
+        # Garmin 502 should be uploaded to Divelogs
+        assert len(results["uploaded_to_divelogs"]) == 1
+        d502_path = os.path.join(mock_dir, "divelogs", "502.json")
+        assert os.path.exists(d502_path)
+        with open(d502_path, "r") as f:
+            d502_created = json.load(f)
+        assert d502_created["notes"] == "Test to_divelogs description"
+
+        # Unique Divelogs 488 should NOT be uploaded to Garmin because direction is to_divelogs
+        assert len(results["uploaded_to_garmin"]) == 0
+        assert not os.path.exists(os.path.join(mock_dir, "garmin", "488.json"))
+
+    def test_declarative_jsonpath_mappings(self):
+        from src.core.mapping_helper import resolve_jsonpath, set_jsonpath, MappingEngine
+        from src.core.models import UnifiedDive, GasMixture
+        
+        # Test JSONPath resolution
+        sample_data = {
+            "summarizedDiveInfo": {
+                "maxDepth": 18.5,
+                "tankSummaryList": [
+                    {"tankVolume": 12.0, "startPressure": 200.0},
+                    {"tankVolume": 10.0, "startPressure": 180.0}
+                ]
+            }
+        }
+        
+        assert resolve_jsonpath(sample_data, "$.summarizedDiveInfo.maxDepth") == 18.5
+        assert resolve_jsonpath(sample_data, "$.summarizedDiveInfo.tankSummaryList[*].startPressure") == [200.0, 180.0]
+        
+        # Test JSONPath setting
+        target = {}
+        set_jsonpath(target, "$.summarizedDiveInfo.maxDepth", 15.0)
+        assert target["summarizedDiveInfo"]["maxDepth"] == 15.0
+        
+        # Test Garmin payload mapping to UnifiedDive
+        dive = UnifiedDive(date_time=datetime.now(), duration=3600, max_depth=0.0)
+        MappingEngine.apply_garmin_to_divelogs_mapping(sample_data, dive)
+        assert dive.max_depth == 18.5
+        assert len(dive.gas_mixtures) == 2
+        assert dive.gas_mixtures[0].start_pressure == 200.0
+        assert dive.gas_mixtures[1].tank_volume == 10.0
+
+
+

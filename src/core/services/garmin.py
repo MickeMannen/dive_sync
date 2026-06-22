@@ -257,7 +257,7 @@ class GarminAdapter(BaseDiveAdapter):
         location = details.get("activityName") or summary.get("activityName") or details.get("locationName") or summary.get("locationName")
         notes = details.get("description") or summary.get("description")
 
-        return UnifiedDive(
+        dive = UnifiedDive(
             date_time=start_time,
             duration=duration,
             max_depth=max_depth,
@@ -271,6 +271,19 @@ class GarminAdapter(BaseDiveAdapter):
             notes=notes,
             dive_number=dive_number
         )
+
+        try:
+            merged_garmin = {}
+            if isinstance(summary, dict):
+                merged_garmin.update(summary)
+            if isinstance(details, dict):
+                merged_garmin.update(details)
+            from src.core.mapping_helper import MappingEngine
+            MappingEngine.apply_garmin_to_divelogs_mapping(merged_garmin, dive)
+        except Exception as e:
+            logger.warning("Failed to apply mapping file overrides for Garmin map_to_unified: %s", e)
+
+        return dive
 
     def _map_from_unified(self, dive: UnifiedDive) -> Dict[str, Any]:
         activity_type = "multi_gas_diving" if len(dive.gas_mixtures) > 1 else "single_gas_diving"
@@ -320,4 +333,27 @@ class GarminAdapter(BaseDiveAdapter):
                 "diveGases": garmin_gases
             }
         }
+        # Override fields using divelogs_to_garmin mappings
+        try:
+            mapping_path = os.path.join(os.path.dirname(__file__), "..", "mapping", "divelogs_to_garmin.json")
+            if os.path.exists(mapping_path):
+                with open(mapping_path, "r") as f:
+                    mapping_def = json.load(f)
+                from src.core.mapping_helper import set_jsonpath
+                mappings = mapping_def.get("mappings", [])
+                for m in mappings:
+                    internal_field = m.get("internal_field")
+                    garmin_api_path = m.get("garmin_api_path")
+                    if not internal_field or not garmin_api_path:
+                        continue
+                    
+                    if internal_field == "dive_number" and dive.dive_number is not None:
+                        set_jsonpath(payload, garmin_api_path, str(dive.dive_number))
+                    elif internal_field == "max_depth":
+                        set_jsonpath(payload, garmin_api_path, dive.max_depth)
+                    elif internal_field == "water_temperature" and dive.temp_min is not None:
+                        set_jsonpath(payload, garmin_api_path, dive.temp_min)
+        except Exception as e:
+            logger.warning("Failed to apply mapping file overrides for Garmin map_from_unified: %s", e)
+
         return payload

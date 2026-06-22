@@ -251,7 +251,7 @@ class DivelogsAdapter(BaseDiveAdapter):
 
         notes = data.get("notes")
 
-        return UnifiedDive(
+        dive = UnifiedDive(
             date_time=dt,
             duration=duration,
             max_depth=max_depth,
@@ -263,6 +263,14 @@ class DivelogsAdapter(BaseDiveAdapter):
             notes=notes,
             dive_number=dive_number
         )
+
+        try:
+            from src.core.mapping_helper import MappingEngine
+            MappingEngine.apply_divelogs_to_garmin_mapping(data, dive)
+        except Exception as e:
+            logger.warning("Failed to apply mapping file overrides for Divelogs map_to_unified: %s", e)
+
+        return dive
 
     def _map_from_unified(self, dive: UnifiedDive) -> Dict[str, Any]:
         # Formulate payload for Divelogs API
@@ -324,4 +332,27 @@ class DivelogsAdapter(BaseDiveAdapter):
             "divenumber": dive.dive_number or 0,
             "tanks": tanks
         }
+        # Override fields using divelogs_to_garmin mappings
+        try:
+            mapping_path = os.path.join(os.path.dirname(__file__), "..", "mapping", "divelogs_to_garmin.json")
+            if os.path.exists(mapping_path):
+                with open(mapping_path, "r") as f:
+                    mapping_def = json.load(f)
+                from src.core.mapping_helper import set_jsonpath
+                mappings = mapping_def.get("mappings", [])
+                for m in mappings:
+                    internal_field = m.get("internal_field")
+                    dive_log_path = m.get("dive_log_path")
+                    if not internal_field or not dive_log_path:
+                        continue
+                    
+                    if internal_field == "dive_number" and dive.dive_number is not None:
+                        set_jsonpath(payload, dive_log_path, dive.dive_number)
+                    elif internal_field == "max_depth":
+                        set_jsonpath(payload, dive_log_path, dive.max_depth)
+                    elif internal_field == "water_temperature" and dive.temp_min is not None:
+                        set_jsonpath(payload, dive_log_path, dive.temp_min)
+        except Exception as e:
+            logger.warning("Failed to apply mapping file overrides for Divelogs map_from_unified: %s", e)
+
         return payload
