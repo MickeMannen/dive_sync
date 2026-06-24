@@ -168,6 +168,12 @@ class MappingEngine:
                         dive.visibility = float(val)
                     elif target_field == "visibility_unit":
                         dive.visibility_unit = str(val)
+                    elif target_field == "buddy":
+                        dive.buddy = str(val)
+                    elif target_field == "lat":
+                        dive.lat = float(val) if val is not None else None
+                    elif target_field == "lng":
+                        dive.lng = float(val) if val is not None else None
                 elif "target_tank_fields" in m:
                     tank_fields = m["target_tank_fields"]
                     vol_path = tank_fields.get("vol")

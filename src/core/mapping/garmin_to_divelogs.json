@@ -33,11 +33,11 @@
     },
     {
       "target_dive_log_field": "lat",
-      "source_garmin_path": "$.startLatitude"
+      "source_garmin_path": "$.summaryDTO.startLatitude"
     },
     {
       "target_dive_log_field": "lng",
-      "source_garmin_path": "$.startLongitude"
+      "source_garmin_path": "$.summaryDTO.startLongitude"
     },
     {
       "target_dive_log_field": "duration",
@@ -58,6 +58,10 @@
     {
       "target_dive_log_field": "visibility_unit",
       "source_garmin_path": "$.diveInfo.visibilityUnit.unitKey"
+    },
+    {
+      "target_dive_log_field": "buddy",
+      "source_garmin_path": "$.diveInfo.buddy"
     },
     {
       "target_tank_fields": {

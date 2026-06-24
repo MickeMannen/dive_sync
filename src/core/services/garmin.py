@@ -14,7 +14,7 @@ from garminconnect import (
 )
 
 from src.core.adapter import BaseDiveAdapter
-from src.core.models import UnifiedDive, GasMixture
+from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
 logger = logging.getLogger("anti_gravity.garmin")
 
@@ -166,7 +166,15 @@ class GarminAdapter(BaseDiveAdapter):
                 time.sleep(self.cooldown_seconds)
                 details = self.client.connectapi(f"/activity-service/activity/{activity_id}")
                 
-                mapped_dive = self._map_to_unified(activity, details)
+                # Fetch detailed activity metrics containing chart/profile data
+                activity_details = None
+                try:
+                    time.sleep(self.cooldown_seconds)
+                    activity_details = self.client.get_activity_details(activity_id)
+                except Exception as detail_err:
+                    logger.warning("Failed to fetch activity details (telemetry) for %s: %s", activity_id, detail_err)
+
+                mapped_dive = self._map_to_unified(activity, details, activity_details)
                 unified_dives.append(mapped_dive)
             except Exception as e:
                 logger.error("Failed to fetch details for activity %s: %s", activity_id, e)
@@ -216,7 +224,109 @@ class GarminAdapter(BaseDiveAdapter):
 
         logger.info("Updating Garmin Connect Dive Activity ID %s...", external_id)
         try:
-            payload = self._map_from_unified(dive)
+            # 1. Fetch current details from Garmin to compare
+            time.sleep(self.cooldown_seconds)
+            current_raw = self.client.connectapi(f"/activity-service/activity/{external_id}")
+            
+            # Map existing raw activity to UnifiedDive using our parser
+            current_dive = self._map_to_unified({}, current_raw)
+            
+            # 2. Build partial payload based on differences
+            payload: Dict[str, Any] = {
+                "activityId": int(external_id) if str(external_id).isdigit() else external_id
+            }
+            
+            # Compare and add changed fields
+            if dive.location != current_dive.location:
+                payload["activityName"] = dive.location or "Sync Dive"
+                
+            if dive.notes != current_dive.notes:
+                payload["description"] = dive.notes or ""
+                
+            if dive.dive_number != current_dive.dive_number:
+                payload["metadataDTO"] = {
+                    "diveNumber": str(dive.dive_number) if dive.dive_number is not None else None
+                }
+                
+            # If weight, visibility, or buddy changes, we need to populate diveInfo
+            dive_info_changed = False
+            dive_info_payload = {}
+            
+            if dive.buddy != current_dive.buddy:
+                dive_info_payload["buddy"] = dive.buddy
+                dive_info_changed = True
+                
+            if dive.weight != current_dive.weight or dive.weight_unit != current_dive.weight_unit:
+                dive_info_payload["weight"] = dive.weight
+                if dive.weight is not None:
+                    unit_key = (dive.weight_unit or "kilogram").lower()
+                    if unit_key == "kg":
+                        unit_key = "kilogram"
+                    elif unit_key in ["lb", "lbs"]:
+                        unit_key = "pound"
+                    factor = 1000.0 if unit_key == "kilogram" else 453.59237
+                    unit_id = 8 if unit_key == "kilogram" else 9
+                    dive_info_payload["weightUnit"] = {
+                        "unitId": unit_id,
+                        "unitKey": unit_key,
+                        "factor": factor
+                    }
+                else:
+                    dive_info_payload["weightUnit"] = None
+                dive_info_changed = True
+                
+            if dive.visibility != current_dive.visibility or dive.visibility_unit != current_dive.visibility_unit:
+                dive_info_payload["visibility"] = dive.visibility
+                if dive.visibility is not None:
+                    unit_key = (dive.visibility_unit or "meter").lower()
+                    if unit_key == "m":
+                        unit_key = "meter"
+                    elif unit_key in ["ft", "feet"]:
+                        unit_key = "foot"
+                    factor = 100.0 if unit_key == "meter" else 30.48
+                    unit_id = 1 if unit_key == "meter" else 2
+                    dive_info_payload["visibilityUnit"] = {
+                        "unitId": unit_id,
+                        "unitKey": unit_key,
+                        "factor": factor
+                    }
+                else:
+                    dive_info_payload["visibilityUnit"] = None
+                dive_info_changed = True
+                
+            if dive_info_changed:
+                existing_dive_info = current_raw.get("diveInfo") or {}
+                if isinstance(existing_dive_info, dict):
+                    merged_dive_info = dict(existing_dive_info)
+                    merged_dive_info.update(dive_info_payload)
+                    payload["diveInfo"] = merged_dive_info
+                else:
+                    payload["diveInfo"] = dive_info_payload
+
+            # Check summaryDTO coordinates changes
+            if dive.lat != current_dive.lat or dive.lng != current_dive.lng:
+                summary_dto = {}
+                existing_summary = current_raw.get("summaryDTO") or {}
+                if isinstance(existing_summary, dict):
+                    summary_dto = dict(existing_summary)
+                
+                if dive.lat is not None:
+                    summary_dto["startLatitude"] = dive.lat
+                else:
+                    summary_dto.pop("startLatitude", None)
+                    
+                if dive.lng is not None:
+                    summary_dto["startLongitude"] = dive.lng
+                else:
+                    summary_dto.pop("startLongitude", None)
+                    
+                payload["summaryDTO"] = summary_dto
+                
+            # If no differences are found, skip update
+            if len(payload) <= 1:
+                logger.info("No changed fields detected for Garmin Connect Activity ID %s. Skipping update.", external_id)
+                return True
+                
             url = f"/activity-service/activity/{external_id}"
             res_data = self.client.client.put("connectapi", url, json=payload, api=True)
             
@@ -243,7 +353,7 @@ class GarminAdapter(BaseDiveAdapter):
                 continue
         return None
 
-    def _map_to_unified(self, summary: Dict[str, Any], details: Dict[str, Any]) -> UnifiedDive:
+    def _map_to_unified(self, summary: Dict[str, Any], details: Dict[str, Any], activity_details: Optional[Dict[str, Any]] = None) -> UnifiedDive:
         info = details.get("diveInfo", {}) or summary.get("diveInfo", {}) or {}
         sum_dto = details.get("summaryDTO", {}) or summary.get("summaryDTO", {}) or {}
         metadata = details.get("metadataDTO", {}) or summary.get("metadataDTO", {}) or {}
@@ -304,6 +414,83 @@ class GarminAdapter(BaseDiveAdapter):
             visibility = float(visibility)
         visibility_unit = info.get("visibilityUnit", {}).get("unitKey") if isinstance(info.get("visibilityUnit"), dict) else None
 
+        buddy = info.get("buddy")
+
+        # Parse GPS coordinates (startLatitude/startLongitude, falling back to endLatitude/endLongitude)
+        lat = sum_dto.get("startLatitude")
+        if lat is None:
+            lat = sum_dto.get("endLatitude")
+        if lat is None:
+            lat = summary.get("startLatitude")
+        if lat is None:
+            lat = summary.get("endLatitude")
+
+        lng = sum_dto.get("startLongitude")
+        if lng is None:
+            lng = sum_dto.get("endLongitude")
+        if lng is None:
+            lng = summary.get("startLongitude")
+        if lng is None:
+            lng = summary.get("endLongitude")
+
+        lat = float(lat) if lat is not None else None
+        lng = float(lng) if lng is not None else None
+
+        # Parse profile chart data samples
+        samples = []
+        if activity_details and isinstance(activity_details, dict):
+            descriptors = activity_details.get("metricDescriptors") or []
+            metrics_data = activity_details.get("activityDetailMetrics") or []
+            
+            if isinstance(descriptors, list) and isinstance(metrics_data, list):
+                duration_idx = None
+                depth_idx = None
+                temp_idx = None
+                
+                for desc in descriptors:
+                    if not isinstance(desc, dict):
+                        continue
+                    key = desc.get("key")
+                    idx = desc.get("metricsIndex")
+                    if key == "sumDuration":
+                        duration_idx = idx
+                    elif key == "directDepth" or (isinstance(key, str) and "depth" in key.lower()):
+                        if depth_idx is None or key == "directDepth":
+                            depth_idx = idx
+                    elif isinstance(key, str) and ("temperature" in key.lower() or "temp" in key.lower()):
+                        if temp_idx is None or key == "directAirTemperature":
+                            temp_idx = idx
+                
+                for item in metrics_data:
+                    if not isinstance(item, dict):
+                        continue
+                    m_list = item.get("metrics")
+                    if not m_list or not isinstance(m_list, list):
+                        continue
+                    
+                    if depth_idx is not None and depth_idx < len(m_list):
+                        depth_val = m_list[depth_idx]
+                        if depth_val is not None:
+                            depth = float(depth_val)
+                            
+                            time_sec = None
+                            if duration_idx is not None and duration_idx < len(m_list):
+                                dur_val = m_list[duration_idx]
+                                if dur_val is not None:
+                                    time_sec = int(round(float(dur_val)))
+                                    
+                            temp_c = None
+                            if temp_idx is not None and temp_idx < len(m_list):
+                                temp_val = m_list[temp_idx]
+                                if temp_val is not None:
+                                    temp_c = float(temp_val)
+                                    
+                            samples.append(UnifiedSample(
+                                depth=depth,
+                                temp=temp_c,
+                                time=time_sec
+                            ))
+
         dive = UnifiedDive(
             date_time=start_time,
             duration=duration,
@@ -320,7 +507,11 @@ class GarminAdapter(BaseDiveAdapter):
             weight=weight,
             weight_unit=weight_unit,
             visibility=visibility,
-            visibility_unit=visibility_unit
+            visibility_unit=visibility_unit,
+            buddy=buddy,
+            lat=lat,
+            lng=lng,
+            samples=samples
         )
 
         try:
@@ -329,6 +520,8 @@ class GarminAdapter(BaseDiveAdapter):
                 merged_garmin.update(summary)
             if isinstance(details, dict):
                 merged_garmin.update(details)
+            if isinstance(activity_details, dict):
+                merged_garmin.update(activity_details)
             from src.core.mapping_helper import MappingEngine
             MappingEngine.apply_garmin_to_divelogs_mapping(merged_garmin, dive)
         except Exception as e:
@@ -399,25 +592,42 @@ class GarminAdapter(BaseDiveAdapter):
                     "factor": factor
                 }
 
+        if dive.buddy is not None:
+            dive_info["buddy"] = dive.buddy
+
+        summary_dto = {
+            "startTimeLocal": dive.date_time.strftime("%Y-%m-%dT%H:%M:%S.0"),
+            "duration": dive.duration,
+            "bottomTime": dive.duration,
+            "maxDepth": dive.max_depth,
+            "averageDepth": dive.avg_depth,
+            "minTemperature": dive.temp_min,
+            "averageTemperature": dive.temp_avg,
+            "maxTemperature": dive.temp_max
+        }
+        if dive.lat is not None:
+            summary_dto["startLatitude"] = dive.lat
+        if dive.lng is not None:
+            summary_dto["startLongitude"] = dive.lng
+
         payload = {
             "activityTypeDTO": {
                 "typeKey": activity_type
             },
+            "accessControlRuleDTO": {
+                "typeId": 2,
+                "typeKey": "private"
+            },
+            "timeZoneUnitDTO": {
+                "unitKey": "UTC"
+            },
             "activityName": dive.location or "Sync Dive",
             "description": dive.notes or "",
             "metadataDTO": {
-                "diveNumber": str(dive.dive_number) if dive.dive_number is not None else None
+                "diveNumber": str(dive.dive_number) if dive.dive_number is not None else None,
+                "autoCalcCalories": True
             },
-            "summaryDTO": {
-                "startTimeLocal": dive.date_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "duration": dive.duration,
-                "bottomTime": dive.duration,
-                "maxDepth": dive.max_depth,
-                "averageDepth": dive.avg_depth,
-                "minTemperature": dive.temp_min,
-                "averageTemperature": dive.temp_avg,
-                "maxTemperature": dive.temp_max
-            },
+            "summaryDTO": summary_dto,
             "diveInfo": dive_info
         }
         # Override fields using divelogs_to_garmin mappings
@@ -440,6 +650,10 @@ class GarminAdapter(BaseDiveAdapter):
                         set_jsonpath(payload, garmin_api_path, dive.max_depth)
                     elif internal_field == "water_temperature" and dive.temp_min is not None:
                         set_jsonpath(payload, garmin_api_path, dive.temp_min)
+                    elif internal_field == "latitude" and dive.lat is not None:
+                        set_jsonpath(payload, garmin_api_path, dive.lat)
+                    elif internal_field == "longitude" and dive.lng is not None:
+                        set_jsonpath(payload, garmin_api_path, dive.lng)
         except Exception as e:
             logger.warning("Failed to apply mapping file overrides for Garmin map_from_unified: %s", e)
 

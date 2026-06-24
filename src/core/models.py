@@ -9,6 +9,11 @@ class GasMixture(BaseModel):
     end_pressure: Optional[float] = Field(None, description="Ending pressure in bar")
     tank_volume: Optional[float] = Field(None, description="Tank volume in liters")
 
+class UnifiedSample(BaseModel):
+    depth: float = Field(..., description="Depth in meters")
+    temp: Optional[float] = Field(None, description="Temperature in Celsius")
+    time: Optional[int] = Field(None, description="Time in seconds from start of dive")
+
 class UnifiedDive(BaseModel):
     date_time: datetime = Field(..., description="Local start date and time of the dive (timezone-naive)")
     duration: int = Field(..., description="Duration of the dive in seconds")
@@ -27,3 +32,7 @@ class UnifiedDive(BaseModel):
     weight_unit: Optional[str] = Field(None, description="Weight unit, e.g. 'kilogram' or 'pound'")
     visibility: Optional[float] = Field(None, description="Visibility value")
     visibility_unit: Optional[str] = Field(None, description="Visibility unit, e.g. 'meter' or 'foot'")
+    buddy: Optional[str] = Field(None, description="Dive buddy name")
+    lat: Optional[float] = Field(None, description="Latitude coordinate")
+    lng: Optional[float] = Field(None, description="Longitude coordinate")
+    samples: List[UnifiedSample] = Field(default_factory=list, description="Time-series dive profile samples")

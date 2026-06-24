@@ -234,30 +234,104 @@ class SyncEngine:
             # Check if links need updating
             needs_garmin_update = False
             needs_divelogs_update = False
+            is_linking_garmin = False
+            is_linking_divelogs = False
 
             if g_id and "divelogs" not in g_dive.external_ids:
                 g_dive.external_ids["divelogs"] = d_id
                 needs_garmin_update = True
+                is_linking_garmin = True
             
             if d_id and "garmin" not in d_dive.external_ids:
                 d_dive.external_ids["garmin"] = g_id
                 needs_divelogs_update = True
+                is_linking_divelogs = True
 
-            if needs_garmin_update:
-                logger.info("Sync action: Link Divelogs ID %s in Garmin Activity ID %s", d_id, g_id)
+            # If direction is to_divelogs or bidirectional, sync updates from Garmin to Divelogs
+            if direction in ["to_divelogs", "bidirectional"]:
+                has_diff = False
+                if g_dive.buddy != d_dive.buddy:
+                    logger.info("  Buddy differs (Garmin: '%s', Divelogs: '%s')", g_dive.buddy, d_dive.buddy)
+                    d_dive.buddy = g_dive.buddy
+                    has_diff = True
+                if g_dive.notes != d_dive.notes:
+                    logger.info("  Notes differ (Garmin: '%s', Divelogs: '%s')", g_dive.notes, d_dive.notes)
+                    d_dive.notes = g_dive.notes
+                    has_diff = True
+                if g_dive.weight != d_dive.weight or g_dive.weight_unit != d_dive.weight_unit:
+                    logger.info("  Weight differs (Garmin: %s %s, Divelogs: %s %s)", g_dive.weight, g_dive.weight_unit, d_dive.weight, d_dive.weight_unit)
+                    d_dive.weight = g_dive.weight
+                    d_dive.weight_unit = g_dive.weight_unit
+                    has_diff = True
+                if g_dive.visibility != d_dive.visibility or g_dive.visibility_unit != d_dive.visibility_unit:
+                    logger.info("  Visibility differs (Garmin: %s %s, Divelogs: %s %s)", g_dive.visibility, g_dive.visibility_unit, d_dive.visibility, d_dive.visibility_unit)
+                    d_dive.visibility = g_dive.visibility
+                    d_dive.visibility_unit = g_dive.visibility_unit
+                    has_diff = True
+                if g_dive.lat != d_dive.lat or g_dive.lng != d_dive.lng:
+                    logger.info("  GPS coordinates differ (Garmin: %s, %s, Divelogs: %s, %s)", g_dive.lat, g_dive.lng, d_dive.lat, d_dive.lng)
+                    d_dive.lat = g_dive.lat
+                    d_dive.lng = g_dive.lng
+                    has_diff = True
+                if g_dive.samples != d_dive.samples:
+                    logger.info("  Dive profile samples differ (Garmin: %d samples, Divelogs: %d samples)", len(g_dive.samples), len(d_dive.samples))
+                    d_dive.samples = g_dive.samples
+                    has_diff = True
+                if has_diff:
+                    needs_divelogs_update = True
+
+            # If direction is to_garmin or bidirectional, sync updates from Divelogs to Garmin
+            if direction in ["to_garmin", "bidirectional"]:
+                has_diff = False
+                if d_dive.buddy != g_dive.buddy:
+                    logger.info("  Buddy differs (Divelogs: '%s', Garmin: '%s')", d_dive.buddy, g_dive.buddy)
+                    g_dive.buddy = d_dive.buddy
+                    has_diff = True
+                if d_dive.notes != g_dive.notes:
+                    logger.info("  Notes differ (Divelogs: '%s', Garmin: '%s')", d_dive.notes, g_dive.notes)
+                    g_dive.notes = d_dive.notes
+                    has_diff = True
+                if d_dive.weight != g_dive.weight or d_dive.weight_unit != g_dive.weight_unit:
+                    logger.info("  Weight differs (Divelogs: %s %s, Garmin: %s %s)", d_dive.weight, d_dive.weight_unit, g_dive.weight, g_dive.weight_unit)
+                    g_dive.weight = d_dive.weight
+                    g_dive.weight_unit = d_dive.weight_unit
+                    has_diff = True
+                if d_dive.visibility != g_dive.visibility or d_dive.visibility_unit != g_dive.visibility_unit:
+                    logger.info("  Visibility differs (Divelogs: %s %s, Garmin: %s %s)", d_dive.visibility, d_dive.visibility_unit, g_dive.visibility, g_dive.visibility_unit)
+                    g_dive.visibility = d_dive.visibility
+                    g_dive.visibility_unit = d_dive.visibility_unit
+                    has_diff = True
+                if d_dive.lat != g_dive.lat or d_dive.lng != g_dive.lng:
+                    logger.info("  GPS coordinates differ (Divelogs: %s, %s, Garmin: %s, %s)", d_dive.lat, d_dive.lng, g_dive.lat, g_dive.lng)
+                    g_dive.lat = d_dive.lat
+                    g_dive.lng = d_dive.lng
+                    has_diff = True
+                if has_diff:
+                    needs_garmin_update = True
+
+            if needs_garmin_update and direction in ["bidirectional", "to_garmin"]:
+                if is_linking_garmin:
+                    logger.info("Sync action: Link Divelogs ID %s and update fields in Garmin Activity ID %s", d_id, g_id)
+                else:
+                    logger.info("Sync action: Update fields in Garmin Activity ID %s from Divelogs", g_id)
+                
                 if not dry_run:
                     self.garmin.update_dive(g_id, g_dive)
-                    sync_results["updated_on_garmin"].append({"id": g_id, "linked_divelogs": d_id})
+                    sync_results["updated_on_garmin"].append({"id": g_id, "linked_divelogs": d_id, "time": str(g_dive.date_time)})
                 else:
-                    sync_results["updated_on_garmin"].append({"id": g_id, "linked_divelogs": d_id, "dry_run": True})
+                    sync_results["updated_on_garmin"].append({"id": g_id, "linked_divelogs": d_id, "time": str(g_dive.date_time), "dry_run": True})
 
-            if needs_divelogs_update:
-                logger.info("Sync action: Link Garmin ID %s in Divelogs Dive ID %s", g_id, d_id)
+            if needs_divelogs_update and direction in ["bidirectional", "to_divelogs"]:
+                if is_linking_divelogs:
+                    logger.info("Sync action: Link Garmin ID %s and update fields in Divelogs Dive ID %s", g_id, d_id)
+                else:
+                    logger.info("Sync action: Update fields in Divelogs Dive ID %s from Garmin", d_id)
+                
                 if not dry_run:
                     self.divelogs.update_dive(d_id, d_dive)
-                    sync_results["updated_on_divelogs"].append({"id": d_id, "linked_garmin": g_id})
+                    sync_results["updated_on_divelogs"].append({"id": d_id, "linked_garmin": g_id, "time": str(d_dive.date_time)})
                 else:
-                    sync_results["updated_on_divelogs"].append({"id": d_id, "linked_garmin": g_id, "dry_run": True})
+                    sync_results["updated_on_divelogs"].append({"id": d_id, "linked_garmin": g_id, "time": str(d_dive.date_time), "dry_run": True})
 
         # Update last sync time if not dry run
         if not dry_run:

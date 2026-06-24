@@ -37,7 +37,8 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
                     
                     summary = data.get("summary", {})
                     details = data.get("details", {})
-                    mapped = self.helper._map_to_unified(summary, details)
+                    activity_details = data.get("activityDetails")
+                    mapped = self.helper._map_to_unified(summary, details, activity_details)
 
                     # Apply date filters
                     if date_from and mapped.date_time < date_from:

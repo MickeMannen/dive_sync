@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any
 import requests
 
 from src.core.adapter import BaseDiveAdapter
-from src.core.models import UnifiedDive, GasMixture
+from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
 logger = logging.getLogger("anti_gravity.divelogs")
 
@@ -317,6 +317,50 @@ class DivelogsAdapter(BaseDiveAdapter):
                     else:
                         visibility_unit = "foot" if self.imperial_units else "meter"
 
+        buddy = data.get("buddy")
+
+        # Parse GPS coordinates
+        lat_val = data.get("lat")
+        lat = float(lat_val) if lat_val not in [None, ""] else None
+        lng_val = data.get("lng")
+        lng = float(lng_val) if lng_val not in [None, ""] else None
+
+        # Parse profile chart data samples
+        samples = []
+        sampledata = data.get("sampledata")
+        samplerate_val = data.get("samplerate")
+        samplerate = int(samplerate_val) if samplerate_val not in [None, ""] and int(samplerate_val) > 0 else 1
+        
+        if sampledata and isinstance(sampledata, list):
+            for i, p in enumerate(sampledata):
+                d_val = None
+                t_val = None
+                
+                if isinstance(p, dict):
+                    d_val = p.get("d")
+                    t_val = p.get("t")
+                elif isinstance(p, (int, float)):
+                    d_val = p
+                    
+                if d_val is not None:
+                    d_val = float(d_val)
+                    if t_val is not None:
+                        t_val = float(t_val)
+                        
+                    # Apply imperial to metric conversion
+                    if self.imperial_units:
+                        # feet to meters
+                        d_val = d_val / 3.28084
+                        if t_val is not None:
+                            # Fahrenheit to Celsius
+                            t_val = (t_val - 32) * 5 / 9
+                            
+                    samples.append(UnifiedSample(
+                        depth=d_val,
+                        temp=t_val,
+                        time=i * samplerate
+                    ))
+
         dive = UnifiedDive(
             date_time=dt,
             duration=duration,
@@ -331,7 +375,11 @@ class DivelogsAdapter(BaseDiveAdapter):
             weight=weight,
             weight_unit=weight_unit,
             visibility=visibility,
-            visibility_unit=visibility_unit
+            visibility_unit=visibility_unit,
+            buddy=buddy,
+            lat=lat,
+            lng=lng,
+            samples=samples
         )
 
         try:
@@ -433,8 +481,47 @@ class DivelogsAdapter(BaseDiveAdapter):
             "divenumber": dive.dive_number or 0,
             "weights": weights_val,
             "visibility": visibility_val,
+            "buddy": dive.buddy or "",
             "tanks": tanks
         }
+        if dive.lat is not None:
+            payload["lat"] = dive.lat
+        if dive.lng is not None:
+            payload["lng"] = dive.lng
+
+        # Add sampledata and samplerate if samples are present
+        if dive.samples:
+            sampledata = []
+            for s in dive.samples:
+                d_val = s.depth
+                t_val = s.temp
+                
+                if self.imperial_units:
+                    # convert depth to feet
+                    d_val = d_val * 3.28084
+                    # convert temp to fahrenheit
+                    if t_val is not None:
+                        t_val = (t_val * 9 / 5) + 32
+                        
+                if t_val is not None:
+                    sampledata.append({"d": round(d_val, 2), "t": round(t_val, 2)})
+                else:
+                    sampledata.append(round(d_val, 2))
+            
+            payload["sampledata"] = sampledata
+            
+            # Calculate samplerate
+            samplerate = 1
+            times = [s.time for s in dive.samples if s.time is not None]
+            if len(times) > 1:
+                diffs = [times[i] - times[i-1] for i in range(1, len(times))]
+                if diffs:
+                    from collections import Counter
+                    c = Counter(diffs)
+                    most_common = c.most_common(1)[0][0]
+                    if most_common > 0:
+                        samplerate = int(most_common)
+            payload["samplerate"] = samplerate
         # Override fields using divelogs_to_garmin mappings
         try:
             mapping_path = os.path.join(os.path.dirname(__file__), "..", "mapping", "divelogs_to_garmin.json")

@@ -157,8 +157,13 @@ def main():
             for item in results['uploaded_to_garmin']:
                 print(f"  - {item['time']} (Divelogs ID: {item['divelogs_id']})")
                 
-            print(f"Linked on Garmin:      {len(results['updated_on_garmin'])}")
-            print(f"Linked on Divelogs:    {len(results['updated_on_divelogs'])}")
+            print(f"Updated/Linked on Garmin:   {len(results['updated_on_garmin'])}")
+            for item in results['updated_on_garmin']:
+                print(f"  - {item['time']} (Garmin ID: {item['id']}, Linked: {item['linked_divelogs']})")
+                
+            print(f"Updated/Linked on Divelogs: {len(results['updated_on_divelogs'])}")
+            for item in results['updated_on_divelogs']:
+                print(f"  - {item['time']} (Divelogs ID: {item['id']}, Linked: {item['linked_garmin']})")
             print("="*50)
 
     except Exception as e:

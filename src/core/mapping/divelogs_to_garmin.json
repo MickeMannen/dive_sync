@@ -6,7 +6,7 @@
     {
       "internal_field": "dive_number",
       "dive_log_path": "$.divenumber",
-      "garmin_api_path": "$.summarizedDiveInfo.maxDepth"
+      "garmin_api_path": "$.metadataDTO.diveNumber"
     },
     {
       "internal_field": "max_depth",
