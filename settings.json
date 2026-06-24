@@ -1,5 +1,5 @@
 {
-  "directionality": "bidirectional",
+  "directionality": "to_divelogs",
   "sync_filters": {
     "date_from": null,
     "date_to": null,

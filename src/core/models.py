@@ -23,3 +23,7 @@ class UnifiedDive(BaseModel):
     location: Optional[str] = Field(None, description="Location/Dive site name")
     notes: Optional[str] = Field(None, description="Notes/Description of the dive")
     dive_number: Optional[int] = Field(None, description="Dive number sequence")
+    weight: Optional[float] = Field(None, description="Lead weight value")
+    weight_unit: Optional[str] = Field(None, description="Weight unit, e.g. 'kilogram' or 'pound'")
+    visibility: Optional[float] = Field(None, description="Visibility value")
+    visibility_unit: Optional[str] = Field(None, description="Visibility unit, e.g. 'meter' or 'foot'")

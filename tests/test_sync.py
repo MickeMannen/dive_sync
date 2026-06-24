@@ -61,3 +61,85 @@ def test_matching_logic():
     
     assert len(unique_d) == 1
     assert unique_d[0].external_ids["divelogs"] == "2002"
+
+def test_weight_and_visibility_mapping():
+    from src.core.services.garmin import GarminAdapter
+    from src.core.services.divelogs import DivelogsAdapter
+    
+    # 1. Test Garmin payload mapping to UnifiedDive
+    garmin_details = {
+        "activityId": 12345,
+        "summaryDTO": {
+            "startTimeLocal": "2026-06-22T12:00:00",
+            "duration": 3000,
+            "maxDepth": 15.0
+        },
+        "diveInfo": {
+            "weight": 5.0,
+            "weightUnit": {
+                "unitId": 8,
+                "unitKey": "kilogram",
+                "factor": 1000.0
+            },
+            "visibility": 9.0,
+            "visibilityUnit": {
+                "unitId": 1,
+                "unitKey": "meter",
+                "factor": 100.0
+            }
+        }
+    }
+    
+    g_adapter = GarminAdapter("dummy", "dummy")
+    dive = g_adapter._map_to_unified({}, garmin_details)
+    
+    assert dive.weight == 5.0
+    assert dive.weight_unit == "kilogram"
+    assert dive.visibility == 9.0
+    assert dive.visibility_unit == "meter"
+    
+    # 2. Test mapping from UnifiedDive to Divelogs payload (Metric)
+    dl_adapter_metric = DivelogsAdapter("dummy", "dummy")
+    dl_adapter_metric.imperial_units = False
+    
+    payload_metric = dl_adapter_metric._map_from_unified(dive)
+    assert payload_metric["weights"] == 5.0
+    assert payload_metric["visibility"] == "9 m"
+    
+    # 3. Test mapping from UnifiedDive to Divelogs payload (Imperial)
+    dl_adapter_imperial = DivelogsAdapter("dummy", "dummy")
+    dl_adapter_imperial.imperial_units = True
+    
+    payload_imperial = dl_adapter_imperial._map_from_unified(dive)
+    assert payload_imperial["weights"] == 11.02
+    assert payload_imperial["visibility"] == "29.5 ft"
+
+    # 4. Test mapping back from Divelogs payload to UnifiedDive (Metric)
+    dl_data_metric = {
+        "date": "2026-06-22",
+        "time": "12:00:00",
+        "duration": 3000,
+        "maxdepth": 15.0,
+        "weights": 5.0,
+        "visibility": "9 m"
+    }
+    dive_back_metric = dl_adapter_metric._map_to_unified(dl_data_metric)
+    assert dive_back_metric.weight == 5.0
+    assert dive_back_metric.weight_unit == "kilogram"
+    assert dive_back_metric.visibility == 9.0
+    assert dive_back_metric.visibility_unit == "meter"
+    
+    # 5. Test mapping back from Divelogs payload to UnifiedDive (Imperial)
+    dl_data_imperial = {
+        "date": "2026-06-22",
+        "time": "12:00:00",
+        "duration": 3000,
+        "maxdepth": 15.0,
+        "weights": 11.02,
+        "visibility": "29.5 ft"
+    }
+    dive_back_imperial = dl_adapter_imperial._map_to_unified(dl_data_imperial)
+    assert dive_back_imperial.weight == 11.02
+    assert dive_back_imperial.weight_unit == "pound"
+    assert dive_back_imperial.visibility == 29.5
+    assert dive_back_imperial.visibility_unit == "foot"

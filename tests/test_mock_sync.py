@@ -84,12 +84,26 @@ def test_mock_sync_offline_mode(tmp_path):
     with open(os.path.join(divelogs_dir, "3.json"), "w") as f:
         json.dump(d_dive3, f)
 
+    # Write localized settings
+    settings_data = {
+        "directionality": "bidirectional",
+        "sync_filters": {
+            "date_from": None,
+            "date_to": None,
+            "only_new": False,
+            "sync_gases": True,
+            "sync_fit": False
+        },
+        "grace_window_minutes": 15,
+        "api_cooldown_seconds": 0.0,
+        "schedule": []
+    }
+    settings_path = os.path.join(mock_data_dir, "settings.json")
+    with open(settings_path, "w") as f:
+        json.dump(settings_data, f)
+
     # Initialize SyncEngine in mock mode
-    engine = SyncEngine(mock_data_dir=mock_data_dir)
-    
-    # We want bidirectional sync
-    engine.settings.directionality = "bidirectional"
-    engine.settings.grace_window_minutes = 15
+    engine = SyncEngine(settings_path=settings_path, mock_data_dir=mock_data_dir)
 
     # Run sync
     results = engine.run_sync(dry_run=False)
@@ -130,8 +144,26 @@ def test_mock_sync_offline_mode(tmp_path):
         assert uploaded_g3["summary"]["activityName"] == "Västra Hamnen"
 
 def test_download_and_save_raw_data(tmp_path, monkeypatch):
+    # Write localized settings
+    settings_data = {
+        "directionality": "bidirectional",
+        "sync_filters": {
+            "date_from": None,
+            "date_to": None,
+            "only_new": False,
+            "sync_gases": True,
+            "sync_fit": False
+        },
+        "grace_window_minutes": 15,
+        "api_cooldown_seconds": 0.0,
+        "schedule": []
+    }
+    settings_path = os.path.join(tmp_path, "settings.json")
+    with open(settings_path, "w") as f:
+        json.dump(settings_data, f)
+
     # Initialize SyncEngine with live mode (mock_data_dir=None)
-    engine = SyncEngine(mock_data_dir=None)
+    engine = SyncEngine(settings_path=settings_path, mock_data_dir=None)
     
     # Set dummy credentials so the engine attempts to download
     engine.credentials.garmin.username = "test_user@garmin"
@@ -493,6 +525,27 @@ class TestSync:
         assert len(dive.gas_mixtures) == 2
         assert dive.gas_mixtures[0].start_pressure == 200.0
         assert dive.gas_mixtures[1].tank_volume == 10.0
+
+    def test_run_sync_direction_override(self, tmp_path):
+        if not os.path.exists("./tests/garmin/502.json") or not os.path.exists("./tests/divelogs/488.json"):
+            pytest.skip("Real downloaded mock files 488.json and/or 502.json are not present on disk.")
+
+        # Setup: Garmin has dive 502, Divelogs is empty
+        mock_dir = self._setup_mock_directories(tmp_path, [502], copy_garmin=True, copy_divelogs=False)
+
+        # Write settings with directionality = "to_garmin"
+        settings_path = self._write_settings(tmp_path, directionality="to_garmin", only_new=False)
+        engine = SyncEngine(settings_path=settings_path, mock_data_dir=mock_dir)
+
+        # Calling run_sync without override should use "to_garmin" which does NOT sync Garmin -> Divelogs
+        res1 = engine.run_sync(dry_run=False)
+        assert len(res1["uploaded_to_divelogs"]) == 0
+        assert not os.path.exists(os.path.join(mock_dir, "divelogs", "502.json"))
+
+        # Calling run_sync WITH override "to_divelogs" should override config and perform sync Garmin -> Divelogs!
+        res2 = engine.run_sync(dry_run=False, direction_override="to_divelogs")
+        assert len(res2["uploaded_to_divelogs"]) == 1
+        assert os.path.exists(os.path.join(mock_dir, "divelogs", "502.json"))
 
 
 

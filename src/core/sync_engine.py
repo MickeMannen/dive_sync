@@ -21,13 +21,15 @@ class SyncEngine:
         self.settings = ConfigManager.load_settings(settings_path)
         self.credentials = ConfigManager.load_credentials(credentials_path)
         
-        # Instantiate adapters
+        # Determine sync state file location
         if mock_data_dir:
+            self.state_file = os.path.join(mock_data_dir, "sync_state.json")
             from src.core.services.mock_adapters import LocalMockGarminAdapter, LocalMockDivelogsAdapter
             logger.info("Initializing SyncEngine in OFFLINE/MOCK mode using data from: %s", mock_data_dir)
             self.garmin = LocalMockGarminAdapter(mock_data_dir=mock_data_dir)
             self.divelogs = LocalMockDivelogsAdapter(mock_data_dir=mock_data_dir)
         else:
+            self.state_file = os.path.join(os.path.dirname(settings_path) or ".", "sync_state.json")
             self.garmin = GarminAdapter(
                 username=self.credentials.garmin.username,
                 password=self.credentials.garmin.password,
@@ -41,9 +43,9 @@ class SyncEngine:
             )
 
     def load_last_sync_time(self) -> Optional[datetime]:
-        if os.path.exists(STATE_FILE):
+        if os.path.exists(self.state_file):
             try:
-                with open(STATE_FILE, "r") as f:
+                with open(self.state_file, "r") as f:
                     data = json.load(f)
                     ts = data.get("last_sync_time")
                     if ts:
@@ -54,7 +56,7 @@ class SyncEngine:
 
     def save_last_sync_time(self, dt: datetime) -> None:
         try:
-            with open(STATE_FILE, "w") as f:
+            with open(self.state_file, "w") as f:
                 json.dump({"last_sync_time": dt.isoformat()}, f)
             logger.info("Saved sync state with timestamp: %s", dt)
         except Exception as e:
@@ -102,7 +104,7 @@ class SyncEngine:
         
         return True
 
-    def run_sync(self, dry_run: bool = False, date_from_override: Optional[str] = None, date_to_override: Optional[str] = None, only_new_override: Optional[bool] = None) -> Dict[str, Any]:
+    def run_sync(self, dry_run: bool = False, date_from_override: Optional[str] = None, date_to_override: Optional[str] = None, only_new_override: Optional[bool] = None, direction_override: Optional[str] = None) -> Dict[str, Any]:
         """Perform bidirectional or directional synchronization."""
         logger.info("Initializing Sync Run (Dry Run: %s)...", dry_run)
         
@@ -116,6 +118,8 @@ class SyncEngine:
             self.settings.sync_filters.date_to = date_to_override
         if only_new_override is not None:
             self.settings.sync_filters.only_new = only_new_override
+        if direction_override is not None:
+            self.settings.directionality = direction_override
         
         # Login
         if not self.garmin.login():

@@ -30,149 +30,185 @@
             </div>
         </header>
 
-        <!-- MAIN LAYOUT -->
-        <main class="grid-layout">
-            <!-- LEFT COLUMN: STATUS & SETTINGS -->
-            <section class="panel-left">
-                <!-- CONNECTIONS STATUS CARD -->
-                <div class="card glass">
-                    <h2>Platform Integration</h2>
-                    <div class="connection-status-list">
-                        <div class="connection-item" id="garmin-status">
-                            <div class="service-info">
-                                <span class="service-logo">Garmin</span>
-                                <div>
-                                    <p class="service-name">Garmin Connect</p>
-                                    <p class="service-state text-subtle">Checking status...</p>
+        <!-- TAB NAVIGATION -->
+        <nav class="tab-nav">
+            <button class="tab-btn active" data-tab="dashboard">Sync Dashboard</button>
+            <button class="tab-btn" data-tab="dives-explorer">Dives Explorer</button>
+        </nav>
+
+        <!-- DASHBOARD TAB CONTENT -->
+        <div id="dashboard-tab" class="tab-content">
+            <main class="grid-layout">
+                <!-- LEFT COLUMN: STATUS & SETTINGS -->
+                <section class="panel-left">
+                    <!-- CONNECTIONS STATUS CARD -->
+                    <div class="card glass">
+                        <h2>Platform Integration</h2>
+                        <div class="connection-status-list">
+                            <div class="connection-item" id="garmin-status">
+                                <div class="service-info">
+                                    <span class="service-logo">Garmin</span>
+                                    <div>
+                                        <p class="service-name">Garmin Connect</p>
+                                        <p class="service-state text-subtle">Checking status...</p>
+                                    </div>
                                 </div>
+                                <span class="badge red">Unconfigured</span>
                             </div>
-                            <span class="badge red">Unconfigured</span>
-                        </div>
-                        <div class="connection-item" id="divelogs-status">
-                            <div class="service-info">
-                                <span class="service-logo">Divelogs</span>
-                                <div>
-                                    <p class="service-name">Divelogs.org</p>
-                                    <p class="service-state text-subtle">Checking status...</p>
+                            <div class="connection-item" id="divelogs-status">
+                                <div class="service-info">
+                                    <span class="service-logo">Divelogs</span>
+                                    <div>
+                                        <p class="service-name">Divelogs.org</p>
+                                        <p class="service-state text-subtle">Checking status...</p>
+                                    </div>
                                 </div>
+                                <span class="badge red">Unconfigured</span>
                             </div>
-                            <span class="badge red">Unconfigured</span>
                         </div>
                     </div>
-                </div>
 
-                <!-- CONTROLS CARD -->
-                <div class="card glass">
-                    <h2>Manual Execution</h2>
-                    <div class="manual-sync-actions">
-                        <div class="dry-run-toggle">
-                            <label class="switch">
-                                <input type="checkbox" id="dry-run-checkbox" checked>
-                                <span class="slider round"></span>
-                            </label>
-                            <span>Dry-run simulation mode</span>
+                    <!-- CONTROLS CARD -->
+                    <div class="card glass">
+                        <h2>Manual Execution</h2>
+                        <div class="manual-sync-actions">
+                            <div class="dry-run-toggle">
+                                <label class="switch">
+                                    <input type="checkbox" id="dry-run-checkbox" checked>
+                                    <span class="slider round"></span>
+                                </label>
+                                <span>Dry-run simulation mode</span>
+                            </div>
+                            <button id="trigger-sync-btn" class="btn primary-btn">
+                                <span class="btn-text">Trigger Manual Sync</span>
+                                <span class="spinner hidden"></span>
+                            </button>
                         </div>
-                        <button id="trigger-sync-btn" class="btn primary-btn">
-                            <span class="btn-text">Trigger Manual Sync</span>
-                            <span class="spinner hidden"></span>
-                        </button>
                     </div>
+
+                    <!-- CONFIGURATION FORM CARD -->
+                    <div class="card glass">
+                        <h2>Synchronization Engine Settings</h2>
+                        <form id="settings-form">
+                            <div class="form-group">
+                                <label for="directionality">Data Flow Directionality</label>
+                                <select id="directionality" name="directionality">
+                                    <option value="bidirectional">Bidirectional Synchronization</option>
+                                    <option value="to_divelogs">Garmin Connect ➔ Divelogs.org</option>
+                                    <option value="to_garmin">Divelogs.org ➔ Garmin Connect</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group-row">
+                                <div class="form-group">
+                                    <label for="date_from">Sync Start Date</label>
+                                    <input type="date" id="date_from" name="date_from">
+                                </div>
+                                <div class="form-group">
+                                    <label for="date_to">Sync End Date</label>
+                                    <input type="date" id="date_to" name="date_to">
+                                </div>
+                            </div>
+
+                            <div class="checkbox-group">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="only_new" name="only_new">
+                                    <span class="checkmark"></span>
+                                    Only new dives since last run (Incremental)
+                                </label>
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="sync_gases" name="sync_gases">
+                                    <span class="checkmark"></span>
+                                    Synchronize detailed gas mixtures
+                                </label>
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="sync_fit" name="sync_fit">
+                                    <span class="checkmark"></span>
+                                    Synchronize Garmin native .FIT files
+                                </label>
+                            </div>
+
+                            <div class="form-group-row">
+                                <div class="form-group">
+                                    <label for="grace_window_minutes">Grace Window (min)</label>
+                                    <input type="number" id="grace_window_minutes" name="grace_window_minutes" min="1" max="120">
+                                </div>
+                                <div class="form-group">
+                                    <label for="api_cooldown_seconds">API Cooldown (sec)</label>
+                                    <input type="number" id="api_cooldown_seconds" name="api_cooldown_seconds" step="0.1" min="0.1" max="10">
+                                </div>
+                            </div>
+
+                            <button type="submit" class="btn secondary-btn">Save Configuration</button>
+                        </form>
+                    </div>
+                </section>
+
+                <!-- RIGHT COLUMN: SCHEDULER & LOGS -->
+                <section class="panel-right">
+                    <!-- SCHEDULER CARD -->
+                    <div class="card glass">
+                        <h2>Cron Task Scheduler (Multi-Slot)</h2>
+                        <div class="scheduler-controls">
+                            <div class="add-slot-row">
+                                <input type="time" id="new-slot-time">
+                                <button id="add-slot-btn" class="btn add-btn">+ Add Slot</button>
+                            </div>
+                            <ul class="schedule-slots-list" id="schedule-slots-list">
+                                <!-- Populated dynamically -->
+                                <li class="empty-state text-subtle">No schedules configured.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- LIVE LOG VIEWER CARD -->
+                    <div class="card glass log-card">
+                        <div class="log-header">
+                            <h2>Live Synchronization Output Console</h2>
+                            <div class="log-actions">
+                                <label class="checkbox-container inline">
+                                    <input type="checkbox" id="autoscroll-checkbox" checked>
+                                    <span class="checkmark"></span>
+                                    Autoscroll
+                                </label>
+                                <button id="clear-log-btn" class="btn text-btn">Clear</button>
+                            </div>
+                        </div>
+                        <div class="terminal" id="log-terminal">
+                            <div class="terminal-line system-msg">Console initialized. Awaiting logs...</div>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+
+        <!-- DIVES EXPLORER TAB CONTENT -->
+        <div id="dives-explorer-tab" class="tab-content hidden">
+            <div class="explorer-layout">
+                <div class="explorer-header">
+                    <h2>Cached Dives Explorer</h2>
+                    <p class="text-subtle">Explore local cached dives from Garmin Connect and Divelogs.org</p>
                 </div>
-
-                <!-- CONFIGURATION FORM CARD -->
-                <div class="card glass">
-                    <h2>Synchronization Engine Settings</h2>
-                    <form id="settings-form">
-                        <div class="form-group">
-                            <label for="directionality">Data Flow Directionality</label>
-                            <select id="directionality" name="directionality">
-                                <option value="bidirectional">Bidirectional Synchronization</option>
-                                <option value="to_divelogs">Garmin Connect ➔ Divelogs.org</option>
-                                <option value="to_garmin">Divelogs.org ➔ Garmin Connect</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group">
-                                <label for="date_from">Sync Start Date</label>
-                                <input type="date" id="date_from" name="date_from">
-                            </div>
-                            <div class="form-group">
-                                <label for="date_to">Sync End Date</label>
-                                <input type="date" id="date_to" name="date_to">
-                            </div>
-                        </div>
-
-                        <div class="checkbox-group">
-                            <label class="checkbox-container">
-                                <input type="checkbox" id="only_new" name="only_new">
-                                <span class="checkmark"></span>
-                                Only new dives since last run (Incremental)
-                            </label>
-                            <label class="checkbox-container">
-                                <input type="checkbox" id="sync_gases" name="sync_gases">
-                                <span class="checkmark"></span>
-                                Synchronize detailed gas mixtures
-                            </label>
-                            <label class="checkbox-container">
-                                <input type="checkbox" id="sync_fit" name="sync_fit">
-                                <span class="checkmark"></span>
-                                Synchronize Garmin native .FIT files
-                            </label>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group">
-                                <label for="grace_window_minutes">Grace Window (min)</label>
-                                <input type="number" id="grace_window_minutes" name="grace_window_minutes" min="1" max="120">
-                            </div>
-                            <div class="form-group">
-                                <label for="api_cooldown_seconds">API Cooldown (sec)</label>
-                                <input type="number" id="api_cooldown_seconds" name="api_cooldown_seconds" step="0.1" min="0.1" max="10">
-                            </div>
-                        </div>
-
-                        <button type="submit" class="btn secondary-btn">Save Configuration</button>
-                    </form>
-                </div>
-            </section>
-
-            <!-- RIGHT COLUMN: SCHEDULER & LOGS -->
-            <section class="panel-right">
-                <!-- SCHEDULER CARD -->
-                <div class="card glass">
-                    <h2>Cron Task Scheduler (Multi-Slot)</h2>
-                    <div class="scheduler-controls">
-                        <div class="add-slot-row">
-                            <input type="time" id="new-slot-time">
-                            <button id="add-slot-btn" class="btn add-btn">+ Add Slot</button>
-                        </div>
-                        <ul class="schedule-slots-list" id="schedule-slots-list">
+                <div class="explorer-grid">
+                    <!-- Garmin Column -->
+                    <div class="card glass explorer-column">
+                        <h2>Garmin Connect Dives <span class="badge count-badge" id="garmin-count">0</span></h2>
+                        <div class="dives-list" id="garmin-dives-list">
                             <!-- Populated dynamically -->
-                            <li class="empty-state text-subtle">No schedules configured.</li>
-                        </ul>
-                    </div>
-                </div>
-
-                <!-- LIVE LOG VIEWER CARD -->
-                <div class="card glass log-card">
-                    <div class="log-header">
-                        <h2>Live Synchronization Output Console</h2>
-                        <div class="log-actions">
-                            <label class="checkbox-container inline">
-                                <input type="checkbox" id="autoscroll-checkbox" checked>
-                                <span class="checkmark"></span>
-                                Autoscroll
-                            </label>
-                            <button id="clear-log-btn" class="btn text-btn">Clear</button>
+                            <div class="empty-state text-subtle">Loading Garmin dives...</div>
                         </div>
                     </div>
-                    <div class="terminal" id="log-terminal">
-                        <div class="terminal-line system-msg">Console initialized. Awaiting logs...</div>
+                    <!-- Divelogs Column -->
+                    <div class="card glass explorer-column">
+                        <h2>Divelogs.org Dives <span class="badge count-badge" id="divelogs-count">0</span></h2>
+                        <div class="dives-list" id="divelogs-dives-list">
+                            <!-- Populated dynamically -->
+                            <div class="empty-state text-subtle">Loading Divelogs dives...</div>
+                        </div>
                     </div>
                 </div>
-            </section>
-        </main>
+            </div>
+        </div>
     </div>
     <script src="/static/script.js"></script>
 </body>

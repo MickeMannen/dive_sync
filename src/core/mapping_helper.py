@@ -160,6 +160,14 @@ class MappingEngine:
                             dive.location = str(val)
                     elif target_field == "duration":
                         dive.duration = int(val)
+                    elif target_field == "weights":
+                        dive.weight = float(val)
+                    elif target_field == "weight_unit":
+                        dive.weight_unit = str(val)
+                    elif target_field == "visibility":
+                        dive.visibility = float(val)
+                    elif target_field == "visibility_unit":
+                        dive.visibility_unit = str(val)
                 elif "target_tank_fields" in m:
                     tank_fields = m["target_tank_fields"]
                     vol_path = tank_fields.get("vol")

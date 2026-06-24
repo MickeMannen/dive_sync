@@ -56,9 +56,17 @@ def main():
     )
 
     parser.add_argument(
-        "--only-new",
+        "--full-sync", "--no-incremental",
+        dest="full_sync",
         action="store_true",
-        help="Override config: Only synchronize dives since the last sync run."
+        help="Perform a full sync instead of incremental sync (defaults to incremental)."
+    )
+    
+    parser.add_argument(
+        "--direction",
+        type=str,
+        choices=["bidirectional", "to_garmin", "to_divelogs"],
+        help="Override config: Sync flow directionality (bidirectional, to_garmin, to_divelogs)."
     )
     
     parser.add_argument(
@@ -129,7 +137,8 @@ def main():
                 dry_run=args.dry_run,
                 date_from_override=args.date_from,
                 date_to_override=args.date_to,
-                only_new_override=args.only_new if args.only_new else None
+                only_new_override=False if args.full_sync else True,
+                direction_override=args.direction
             )
             
             # Print sync results summary

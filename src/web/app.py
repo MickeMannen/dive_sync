@@ -205,6 +205,148 @@ def stream_logs():
                 
     return StreamingResponse(log_generator(), media_type="text/event-stream")
 
+def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
+    garmin_dives = []
+    divelogs_dives = []
+    
+    # Check paths
+    base_dirs = ["./tests/real", "./tests"]
+    
+    # 1. Garmin
+    garmin_dir = None
+    for d in base_dirs:
+        path = os.path.join(d, "garmin")
+        if os.path.exists(path) and os.listdir(path):
+            garmin_dir = path
+            break
+            
+    if garmin_dir:
+        import json
+        for filename in os.listdir(garmin_dir):
+            if filename.endswith(".json") and filename != "sync_state.json":
+                filepath = os.path.join(garmin_dir, filename)
+                try:
+                    with open(filepath, "r") as f:
+                        data = json.load(f)
+                    
+                    summary = data.get("summary", {})
+                    details = data.get("details") or {}
+                    if not isinstance(details, dict):
+                        details = {}
+                    
+                    # Parse essential information
+                    sum_dto = details.get("summaryDTO", {}) or summary.get("summaryDTO", {}) or {}
+                    metadata = details.get("metadataDTO", {}) or summary.get("metadataDTO", {}) or {}
+                    
+                    dive_num = metadata.get("diveNumber") or filename.replace(".json", "")
+                    date_time = sum_dto.get("startTimeLocal") or summary.get("startTimeLocal") or ""
+                    duration = sum_dto.get("duration") or summary.get("duration") or 0
+                    max_depth = sum_dto.get("maxDepth") or summary.get("maxDepth") or 0.0
+                    location = details.get("activityName") or summary.get("activityName") or ""
+                    notes = details.get("description") or summary.get("description") or ""
+                    
+                    info = details.get("diveInfo") or summary.get("diveInfo") or {}
+                    weight = info.get("weight")
+                    weight_unit = info.get("weightUnit", {}).get("unitKey") if isinstance(info.get("weightUnit"), dict) else ""
+                    visibility = info.get("visibility")
+                    visibility_unit = info.get("visibilityUnit", {}).get("unitKey") if isinstance(info.get("visibilityUnit"), dict) else ""
+                    
+                    weight_str = ""
+                    if weight is not None:
+                        w_unit = "kg" if "kilogram" in str(weight_unit).lower() else "lbs"
+                        weight_str = f"{weight:g} {w_unit}"
+                        
+                    visibility_str = ""
+                    if visibility is not None:
+                        v_unit = "m" if "meter" in str(visibility_unit).lower() else "ft"
+                        visibility_str = f"{visibility:g} {v_unit}"
+
+                    garmin_dives.append({
+                        "id": str(summary.get("activityId") or ""),
+                        "dive_number": dive_num,
+                        "date_time": date_time,
+                        "duration": duration,
+                        "max_depth": max_depth,
+                        "location": location,
+                        "notes": notes,
+                        "weight": weight_str,
+                        "visibility": visibility_str,
+                        "filename": filename
+                    })
+                except Exception as e:
+                    logger.warning("Failed to parse cached Garmin dive file %s: %s", filename, e)
+                    
+    # 2. Divelogs
+    divelogs_dir = None
+    for d in base_dirs:
+        path = os.path.join(d, "divelogs")
+        if os.path.exists(path) and os.listdir(path):
+            divelogs_dir = path
+            break
+            
+    if divelogs_dir:
+        import json
+        for filename in os.listdir(divelogs_dir):
+            if filename.endswith(".json") and filename != "sync_state.json":
+                filepath = os.path.join(divelogs_dir, filename)
+                try:
+                    with open(filepath, "r") as f:
+                        data = json.load(f)
+                    
+                    dive_num = data.get("divenumber") or filename.replace(".json", "")
+                    date = data.get("date") or ""
+                    time = data.get("time") or "00:00:00"
+                    
+                    garmin_id = data.get("garmin_id") or ""
+                    
+                    # Essential information
+                    location_parts = []
+                    if data.get("location"):
+                        location_parts.append(str(data["location"]))
+                    if data.get("divesite"):
+                        location_parts.append(str(data["divesite"]))
+                    location = ", ".join(location_parts) if location_parts else ""
+                    
+                    weights_val = data.get("weights")
+                    weight_str = ""
+                    if weights_val not in [None, "", 0]:
+                        try:
+                            w_num = float(weights_val)
+                            weight_str = f"{w_num:g}"
+                        except (ValueError, TypeError):
+                            weight_str = str(weights_val)
+                            
+                    visibility_str = str(data.get("visibility") or "")
+
+                    divelogs_dives.append({
+                        "id": str(data.get("id") or ""),
+                        "dive_number": dive_num,
+                        "date_time": f"{date} {time}",
+                        "duration": data.get("duration") or 0,
+                        "max_depth": data.get("maxdepth") or 0.0,
+                        "location": location,
+                        "notes": data.get("notes") or "",
+                        "garmin_id": garmin_id,
+                        "weight": weight_str,
+                        "visibility": visibility_str,
+                        "filename": filename
+                    })
+                except Exception as e:
+                    logger.warning("Failed to parse cached Divelogs dive file %s: %s", filename, e)
+                    
+    # Sort dives by date descending
+    garmin_dives.sort(key=lambda x: x["date_time"], reverse=True)
+    divelogs_dives.sort(key=lambda x: x["date_time"], reverse=True)
+    
+    return {
+        "garmin": garmin_dives,
+        "divelogs": divelogs_dives
+    }
+
+@app.get("/api/dives")
+def get_dives():
+    return get_cached_dives()
+
 # Serve index.html statically
 @app.get("/")
 def read_root():

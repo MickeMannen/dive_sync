@@ -267,6 +267,104 @@ document.addEventListener("DOMContentLoaded", () => {
         globalStatusText.textContent = "System Ready";
     }
 
+    // 7. Load and Render Dives Explorer
+    async function loadDives() {
+        const garminList = document.getElementById("garmin-dives-list");
+        const divelogsList = document.getElementById("divelogs-dives-list");
+        const garminCount = document.getElementById("garmin-count");
+        const divelogsCount = document.getElementById("divelogs-count");
+
+        garminList.innerHTML = `<div class="empty-state text-subtle">Loading Garmin dives...</div>`;
+        divelogsList.innerHTML = `<div class="empty-state text-subtle">Loading Divelogs dives...</div>`;
+
+        try {
+            const response = await fetch("/api/dives");
+            if (!response.ok) throw new Error("Failed to load dives.");
+            const data = await response.json();
+
+            // Render Garmin
+            garminList.innerHTML = "";
+            garminCount.textContent = data.garmin.length;
+            if (data.garmin.length === 0) {
+                garminList.innerHTML = `<div class="empty-state text-subtle">No cached Garmin dives found. Please run sync or download raw data.</div>`;
+            } else {
+                data.garmin.forEach(dive => {
+                    const card = createDiveCard(dive, "garmin");
+                    garminList.appendChild(card);
+                });
+            }
+
+            // Render Divelogs
+            divelogsList.innerHTML = "";
+            divelogsCount.textContent = data.divelogs.length;
+            if (data.divelogs.length === 0) {
+                divelogsList.innerHTML = `<div class="empty-state text-subtle">No cached Divelogs dives found. Please run sync or download raw data.</div>`;
+            } else {
+                data.divelogs.forEach(dive => {
+                    const card = createDiveCard(dive, "divelogs");
+                    divelogsList.appendChild(card);
+                });
+            }
+
+        } catch (err) {
+            console.error("Error loading dives:", err);
+            garminList.innerHTML = `<div class="empty-state text-subtle" style="color: var(--color-danger)">Error: ${err.message}</div>`;
+            divelogsList.innerHTML = `<div class="empty-state text-subtle" style="color: var(--color-danger)">Error: ${err.message}</div>`;
+        }
+    }
+
+    function createDiveCard(dive, type) {
+        const card = document.createElement("div");
+        card.className = "dive-item-card";
+
+        const maxDepthM = parseFloat(dive.max_depth || 0);
+        const durationMin = Math.round(parseInt(dive.duration || 0) / 60);
+
+        card.innerHTML = `
+            <div class="dive-card-header">
+                <span class="dive-title">${dive.location || "Unknown Location"}</span>
+                <span class="dive-meta-date">${dive.date_time}</span>
+            </div>
+            <div class="dive-card-details">
+                <span><span class="dive-detail-label">Dive:</span><span class="dive-detail-val">#${dive.dive_number}</span></span>
+                <span><span class="dive-detail-label">Depth:</span><span class="dive-detail-val">${maxDepthM.toFixed(1)}m</span></span>
+                <span><span class="dive-detail-label">Duration:</span><span class="dive-detail-val">${durationMin} min</span></span>
+                ${dive.weight ? `<span><span class="dive-detail-label">Weight:</span><span class="dive-detail-val">${dive.weight}</span></span>` : ""}
+                ${dive.visibility ? `<span><span class="dive-detail-label">Vis:</span><span class="dive-detail-val">${dive.visibility}</span></span>` : ""}
+            </div>
+            ${dive.notes ? `<p class="dive-notes" title="${dive.notes.replace(/"/g, '&quot;')}">${dive.notes}</p>` : ""}
+        `;
+        return card;
+    }
+
+    // 8. Tab Navigation Logic
+    const tabBtns = document.querySelectorAll(".tab-btn");
+    const tabContents = document.querySelectorAll(".tab-content");
+
+    tabBtns.forEach(btn => {
+        btn.addEventListener("click", () => {
+            const targetTab = btn.getAttribute("data-tab");
+
+            // Update button active state
+            tabBtns.forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+
+            // Update content visibility
+            tabContents.forEach(content => {
+                if (content.id === `${targetTab}-tab`) {
+                    content.classList.remove("hidden");
+                } else {
+                    content.classList.add("hidden");
+                }
+            });
+
+            // Load dives if explorer is chosen
+            if (targetTab === "dives-explorer") {
+                loadDives();
+            }
+        });
+    });
+
     // Initialize
     loadSettings();
     loadCredentialsStatus();

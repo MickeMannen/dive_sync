@@ -1,4 +1,5 @@
 import os
+import json
 import base64
 import logging
 import time
@@ -25,7 +26,9 @@ class GarminAdapter(BaseDiveAdapter):
         self.cooldown_seconds = cooldown_seconds
         
         os.makedirs(self.token_dir, exist_ok=True)
-        self.tokenstore_path = os.path.join(self.token_dir, "garmin_tokens.json")
+        import re
+        safe_username = re.sub(r'[^a-zA-Z0-9_.-]', '_', self.username)
+        self.tokenstore_path = os.path.join(self.token_dir, f"garmin_tokens_{safe_username}.json")
         
         # Initialize garminconnect Garmin client
         # Uses curl_cffi under the hood to bypass SSO rate limits and emulate browser profiles
@@ -33,30 +36,62 @@ class GarminAdapter(BaseDiveAdapter):
         self.logged_in = False
 
     def login(self) -> bool:
-        logger.info("Attempting Garmin Connect login via python-garminconnect...")
+        logger.info("Attempting Garmin Connect login for user '%s' via python-garminconnect...", self.username)
         try:
             # garminconnect automatically checks for cached tokens in the tokenstore_path
             # and performs credentials login with browser emulation only if needed
             self.client.login(self.tokenstore_path)
             self.logged_in = True
-            logger.info("Successfully authenticated with Garmin Connect.")
+            logger.info("Successfully authenticated with Garmin Connect for user '%s'.", self.username)
+            self._fetch_user_preferences()
             return True
         except GarminConnectTooManyRequestsError as e:
-            logger.error("Failed to authenticate with Garmin Connect: Rate limit exceeded (HTTP 429). "
+            logger.error("Failed to authenticate with Garmin Connect for user '%s': Rate limit exceeded (HTTP 429). "
                          "Garmin Connect has rate-limited login requests. Please wait 10-15 minutes "
-                         "before retrying, and verify that your credentials are correct.")
+                         "before retrying, and verify that your credentials are correct.", self.username)
             return False
         except GarminConnectAuthenticationError as e:
-            logger.error("Authentication failed: Invalid credentials or MFA prompt required. Details: %s", e)
+            logger.error("Authentication failed for user '%s': Invalid credentials or MFA prompt required. Details: %s", self.username, e)
             return False
         except Exception as e:
             if "429" in str(e):
-                logger.error("Failed to authenticate with Garmin Connect: Rate limit exceeded (HTTP 429). "
+                logger.error("Failed to authenticate with Garmin Connect for user '%s': Rate limit exceeded (HTTP 429). "
                              "Garmin Connect has rate-limited login requests. Please wait 10-15 minutes "
-                             "before retrying, and verify that your credentials are correct.")
+                             "before retrying, and verify that your credentials are correct.", self.username)
             else:
-                logger.error("Failed to authenticate with Garmin Connect: %s", e)
+                logger.error("Failed to authenticate with Garmin Connect for user '%s': %s", self.username, e)
             return False
+
+    def _fetch_user_preferences(self) -> None:
+        try:
+            logger.info("Fetching Garmin user profile settings for user '%s'...", self.username)
+            
+            start = 0
+            limit = 50
+            all_dives = []
+
+            while True:
+                response = self.client.get_activities(start, limit, activitytype="diving")
+                if not response:
+                    break
+                
+                dives_batch = [
+                    act for act in response 
+                    if act.get("activityType", {}).get("typeKey") == "diving" or 
+                       (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving") or
+                       "diving" in (act.get("activityType", {}).get("typeKey") or "")
+                ]
+                all_dives.extend(dives_batch)
+                
+                if len(response) < limit:
+                    break
+                start += limit
+                time.sleep(self.cooldown_seconds)
+            
+            dives_count = len(all_dives)
+            logger.info("Fetching Garmin user profile settings for user '%s'... - %d dives found", self.username, dives_count)
+        except Exception as e:
+            logger.warning("Error fetching Garmin user preferences: %s", e)
 
     def fetch_dives(self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None) -> List[UnifiedDive]:
         if not self.logged_in and not self.login():
@@ -79,7 +114,8 @@ class GarminAdapter(BaseDiveAdapter):
                 dives_batch = [
                     act for act in response 
                     if act.get("activityType", {}).get("typeKey") == "diving" or 
-                       (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving")
+                       (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving") or
+                       "diving" in (act.get("activityType", {}).get("typeKey") or "")
                 ]
                 all_dives.extend(response)
                 
@@ -95,7 +131,8 @@ class GarminAdapter(BaseDiveAdapter):
         diving_activities = [
             act for act in all_dives 
             if act.get("activityType", {}).get("typeKey") == "diving" or 
-               (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving")
+               (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving") or
+               "diving" in (act.get("activityType", {}).get("typeKey") or "")
         ]
 
         # Filter by date ranges before fetching details to determine accurate progress count
@@ -257,6 +294,16 @@ class GarminAdapter(BaseDiveAdapter):
         location = details.get("activityName") or summary.get("activityName") or details.get("locationName") or summary.get("locationName")
         notes = details.get("description") or summary.get("description")
 
+        weight = info.get("weight")
+        if weight is not None:
+            weight = float(weight)
+        weight_unit = info.get("weightUnit", {}).get("unitKey") if isinstance(info.get("weightUnit"), dict) else None
+
+        visibility = info.get("visibility")
+        if visibility is not None:
+            visibility = float(visibility)
+        visibility_unit = info.get("visibilityUnit", {}).get("unitKey") if isinstance(info.get("visibilityUnit"), dict) else None
+
         dive = UnifiedDive(
             date_time=start_time,
             duration=duration,
@@ -269,7 +316,11 @@ class GarminAdapter(BaseDiveAdapter):
             gas_mixtures=gas_mixtures,
             location=location,
             notes=notes,
-            dive_number=dive_number
+            dive_number=dive_number,
+            weight=weight,
+            weight_unit=weight_unit,
+            visibility=visibility,
+            visibility_unit=visibility_unit
         )
 
         try:
@@ -286,7 +337,11 @@ class GarminAdapter(BaseDiveAdapter):
         return dive
 
     def _map_from_unified(self, dive: UnifiedDive) -> Dict[str, Any]:
-        activity_type = "multi_gas_diving" if len(dive.gas_mixtures) > 1 else "single_gas_diving"
+        # Determine activity type: single gas by default; multi-gas if 2 or more different gas mixes are used.
+        unique_mixes = set()
+        for gas in dive.gas_mixtures:
+            unique_mixes.add((gas.oxygen, gas.helium))
+        activity_type = "multi_gas_diving" if len(unique_mixes) > 1 else "single_gas_diving"
         
         garmin_gases = []
         for idx, gas in enumerate(dive.gas_mixtures):
@@ -309,6 +364,41 @@ class GarminAdapter(BaseDiveAdapter):
             
             garmin_gases.append(g_dict)
 
+        dive_info = {
+            "entryType": "Shore",
+            "diveGases": garmin_gases
+        }
+        if dive.weight is not None:
+            dive_info["weight"] = dive.weight
+            if dive.weight_unit:
+                unit_key = dive.weight_unit.lower()
+                if unit_key == "kg":
+                    unit_key = "kilogram"
+                elif unit_key in ["lb", "lbs"]:
+                    unit_key = "pound"
+                factor = 1000.0 if unit_key == "kilogram" else 453.59237
+                unit_id = 8 if unit_key == "kilogram" else 9
+                dive_info["weightUnit"] = {
+                    "unitId": unit_id,
+                    "unitKey": unit_key,
+                    "factor": factor
+                }
+        if dive.visibility is not None:
+            dive_info["visibility"] = dive.visibility
+            if dive.visibility_unit:
+                unit_key = dive.visibility_unit.lower()
+                if unit_key == "m":
+                    unit_key = "meter"
+                elif unit_key in ["ft", "feet"]:
+                    unit_key = "foot"
+                factor = 100.0 if unit_key == "meter" else 30.48
+                unit_id = 1 if unit_key == "meter" else 2
+                dive_info["visibilityUnit"] = {
+                    "unitId": unit_id,
+                    "unitKey": unit_key,
+                    "factor": factor
+                }
+
         payload = {
             "activityTypeDTO": {
                 "typeKey": activity_type
@@ -328,10 +418,7 @@ class GarminAdapter(BaseDiveAdapter):
                 "averageTemperature": dive.temp_avg,
                 "maxTemperature": dive.temp_max
             },
-            "diveInfo": {
-                "entryType": "Shore",
-                "diveGases": garmin_gases
-            }
+            "diveInfo": dive_info
         }
         # Override fields using divelogs_to_garmin mappings
         try:

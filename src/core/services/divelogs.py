@@ -1,3 +1,5 @@
+import os
+import json
 import logging
 import time
 from datetime import datetime
@@ -19,7 +21,7 @@ class DivelogsAdapter(BaseDiveAdapter):
         self.imperial_units = False
 
     def login(self) -> bool:
-        logger.info("Attempting Divelogs.org login...")
+        logger.info("Attempting Divelogs.org login for user '%s'...", self.username)
         if not self.username or not self.password:
             logger.error("No Divelogs credentials provided.")
             return False
@@ -38,7 +40,7 @@ class DivelogsAdapter(BaseDiveAdapter):
                         "Accept": "application/json",
                         "Authorization": f"Bearer {self.bearer_token}"
                     })
-                    logger.info("Successfully authenticated with Divelogs.org.")
+                    logger.info("Successfully authenticated with Divelogs.org for user '%s'.", self.username)
                     
                     # Fetch user unit preferences (imperial vs metric)
                     self._fetch_user_preferences()
@@ -53,12 +55,26 @@ class DivelogsAdapter(BaseDiveAdapter):
 
     def _fetch_user_preferences(self) -> None:
         try:
-            logger.info("Fetching Divelogs user profile settings...")
+            logger.info("Fetching Divelogs user profile settings for user '%s'...", self.username)
             url = "https://divelogs.de/api/user"
             response = self.session.get(url, timeout=20)
+            
+            # Fetch dives list to count dives
+            dives_count = 0
+            try:
+                dives_url = "https://divelogs.de/api/dives"
+                dives_res = self.session.get(dives_url, timeout=20)
+                if dives_res.status_code == 200:
+                    dives_list = dives_res.json()
+                    if isinstance(dives_list, list):
+                        dives_count = len(dives_list)
+            except Exception as e:
+                logger.warning("Failed to fetch dives list for counting: %s", e)
+
             if response.status_code == 200:
                 profile = response.json()
                 self.imperial_units = bool(profile.get("imperial", False))
+                logger.info("Fetching Divelogs user profile settings for user '%s'... - %d dives found", self.username, dives_count)
                 logger.info("User preferences loaded. Imperial system active: %s", self.imperial_units)
             else:
                 logger.warning("Failed to load user profile settings (status: %d). Defaulting to Metric.", response.status_code)
@@ -251,6 +267,56 @@ class DivelogsAdapter(BaseDiveAdapter):
 
         notes = data.get("notes")
 
+        # Parse weight from Divelogs
+        raw_weight = data.get("weights")
+        weight = None
+        weight_unit = None
+        if raw_weight is not None and raw_weight != "" and raw_weight != 0:
+            import re
+            try:
+                weight = float(raw_weight)
+                if weight != 0.0:
+                    weight_unit = "pound" if self.imperial_units else "kilogram"
+                else:
+                    weight = None
+            except (ValueError, TypeError):
+                m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z\s]+)?$", str(raw_weight))
+                if m:
+                    val_str, unit_str = m.groups()
+                    weight = float(val_str)
+                    unit_str = unit_str.strip().lower() if unit_str else ""
+                    if "kg" in unit_str or "kilogram" in unit_str:
+                        weight_unit = "kilogram"
+                    elif "lb" in unit_str or "pound" in unit_str:
+                        weight_unit = "pound"
+                    else:
+                        weight_unit = "pound" if self.imperial_units else "kilogram"
+
+        # Parse visibility from Divelogs
+        raw_visibility = data.get("visibility")
+        visibility = None
+        visibility_unit = None
+        if raw_visibility is not None and raw_visibility != "":
+            import re
+            try:
+                visibility = float(raw_visibility)
+                if visibility != 0.0:
+                    visibility_unit = "foot" if self.imperial_units else "meter"
+                else:
+                    visibility = None
+            except (ValueError, TypeError):
+                m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z\s]+)?$", str(raw_visibility))
+                if m:
+                    val_str, unit_str = m.groups()
+                    visibility = float(val_str)
+                    unit_str = unit_str.strip().lower() if unit_str else ""
+                    if "m" in unit_str or "meter" in unit_str:
+                        visibility_unit = "meter"
+                    elif "ft" in unit_str or "foot" in unit_str or "feet" in unit_str:
+                        visibility_unit = "foot"
+                    else:
+                        visibility_unit = "foot" if self.imperial_units else "meter"
+
         dive = UnifiedDive(
             date_time=dt,
             duration=duration,
@@ -261,7 +327,11 @@ class DivelogsAdapter(BaseDiveAdapter):
             gas_mixtures=gas_mixtures,
             location=location,
             notes=notes,
-            dive_number=dive_number
+            dive_number=dive_number,
+            weight=weight,
+            weight_unit=weight_unit,
+            visibility=visibility,
+            visibility_unit=visibility_unit
         )
 
         try:
@@ -319,6 +389,37 @@ class DivelogsAdapter(BaseDiveAdapter):
                 "vol": vol
             })
 
+        # Convert weight from Garmin to Divelogs unit preference
+        weights_val = 0.0
+        if dive.weight is not None:
+            w_val = dive.weight
+            w_unit = (dive.weight_unit or "kilogram").lower()
+            if self.imperial_units:
+                # Divelogs expects pounds (lbs)
+                if "kg" in w_unit or "kilogram" in w_unit:
+                    w_val = w_val * 2.20462
+            else:
+                # Divelogs expects kilograms (kg)
+                if "lb" in w_unit or "pound" in w_unit:
+                    w_val = w_val / 2.20462
+            weights_val = round(w_val, 2)
+
+        # Convert and format visibility as a string
+        visibility_val = ""
+        if dive.visibility is not None:
+            v_val = dive.visibility
+            v_unit = (dive.visibility_unit or "").lower()
+            if self.imperial_units:
+                # Divelogs expects Imperial (feet / ft)
+                if "meter" in v_unit or "m" in v_unit or not v_unit:
+                    v_val = v_val * 3.28084
+                visibility_val = f"{round(v_val, 1):g} ft"
+            else:
+                # Divelogs expects Metric (meters / m)
+                if "foot" in v_unit or "feet" in v_unit or "ft" in v_unit:
+                    v_val = v_val / 3.28084
+                visibility_val = f"{round(v_val, 1):g} m"
+
         payload = {
             "date": dive.date_time.strftime("%Y-%m-%d"),
             "time": dive.date_time.strftime("%H:%M:%S"),
@@ -330,6 +431,8 @@ class DivelogsAdapter(BaseDiveAdapter):
             "divesite": divesite,
             "notes": dive.notes or "",
             "divenumber": dive.dive_number or 0,
+            "weights": weights_val,
+            "visibility": visibility_val,
             "tanks": tanks
         }
         # Override fields using divelogs_to_garmin mappings

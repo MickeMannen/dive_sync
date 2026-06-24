@@ -44,6 +44,22 @@
       "source_garmin_path": "$.duration"
     },
     {
+      "target_dive_log_field": "weights",
+      "source_garmin_path": "$.diveInfo.weight"
+    },
+    {
+      "target_dive_log_field": "weight_unit",
+      "source_garmin_path": "$.diveInfo.weightUnit.unitKey"
+    },
+    {
+      "target_dive_log_field": "visibility",
+      "source_garmin_path": "$.diveInfo.visibility"
+    },
+    {
+      "target_dive_log_field": "visibility_unit",
+      "source_garmin_path": "$.diveInfo.visibilityUnit.unitKey"
+    },
+    {
       "target_tank_fields": {
         "vol": "$.summarizedDiveInfo.tankSummaryList[*].tankVolume",
         "start_pressure": "$.summarizedDiveInfo.tankSummaryList[*].startPressure",
