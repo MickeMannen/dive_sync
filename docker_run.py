@@ -18,10 +18,21 @@ def main():
     host = os.getenv("ANTI_GRAVITY_HOST", "0.0.0.0")
     port = int(os.getenv("ANTI_GRAVITY_PORT", "8000"))
 
+    # Configure and instantiate uvicorn Server explicitly to control graceful exit
+    config = uvicorn.Config("src.web.app:app", host=host, port=port, log_level="info")
+    server = uvicorn.Server(config)
+
+    import signal
+    def handle_signal(sig, frame):
+        logger.info("Received signal %d. Shutting down server gracefully...", sig)
+        server.should_exit = True
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
     logger.info("Launching FastAPI Web Dashboard server on http://%s:%d", host, port)
     try:
-        # Start uvicorn server running FastAPI application in src/web/app.py
-        uvicorn.run("src.web.app:app", host=host, port=port, log_level="info")
+        server.run()
     except Exception as e:
         logger.error("Web server failed to start: %s", e)
         sys.exit(1)

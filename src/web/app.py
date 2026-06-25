@@ -5,7 +5,7 @@ import asyncio
 import threading
 from datetime import datetime
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
@@ -250,6 +250,7 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
                     weight_unit = info.get("weightUnit", {}).get("unitKey") if isinstance(info.get("weightUnit"), dict) else ""
                     visibility = info.get("visibility")
                     visibility_unit = info.get("visibilityUnit", {}).get("unitKey") if isinstance(info.get("visibilityUnit"), dict) else ""
+                    buddy = info.get("buddy") or ""
                     
                     weight_str = ""
                     if weight is not None:
@@ -271,6 +272,7 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
                         "notes": notes,
                         "weight": weight_str,
                         "visibility": visibility_str,
+                        "buddy": buddy,
                         "filename": filename
                     })
                 except Exception as e:
@@ -317,6 +319,7 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
                             weight_str = str(weights_val)
                             
                     visibility_str = str(data.get("visibility") or "")
+                    buddy = data.get("buddy") or ""
 
                     divelogs_dives.append({
                         "id": str(data.get("id") or ""),
@@ -329,6 +332,7 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
                         "garmin_id": garmin_id,
                         "weight": weight_str,
                         "visibility": visibility_str,
+                        "buddy": buddy,
                         "filename": filename
                     })
                 except Exception as e:
@@ -346,6 +350,355 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
 @app.get("/api/dives")
 def get_dives():
     return get_cached_dives()
+
+is_download_running = False
+last_download_error = None
+
+def run_download_thread(overwrite: bool, base_dir: str):
+    global is_download_running, last_download_error
+    is_download_running = True
+    last_download_error = None
+    try:
+        engine = SyncEngine()
+        success = engine.download_and_save_raw_data(mock_data_dir=base_dir, overwrite=overwrite)
+        if not success:
+            last_download_error = "Download completed with warnings/failures."
+    except Exception as e:
+        last_download_error = str(e)
+        logger.error("Raw data download failed: %s", e)
+    finally:
+        is_download_running = False
+
+@app.post("/api/dives/download")
+def download_raw_dives(overwrite: bool = Query(True)):
+    global is_sync_running, is_download_running
+    if is_sync_running or is_download_running:
+        raise HTTPException(status_code=409, detail="A synchronization or download job is already in progress.")
+        
+    base_dir = "./tests/real" if os.path.exists("./tests/real") else "./tests"
+    threading.Thread(target=run_download_thread, args=(overwrite, base_dir), daemon=True).start()
+    return {"status": "success", "message": "Raw data download started in background."}
+
+@app.get("/api/dives/download/status")
+def get_download_status():
+    global is_download_running, last_download_error
+    return {
+        "is_running": is_download_running,
+        "error": last_download_error
+    }
+
+@app.get("/api/dives/raw")
+def get_raw_dive(service: str, filename: str):
+    import json
+    base_dirs = ["./tests/real", "./tests"]
+    found_dir = None
+    for d in base_dirs:
+        path = os.path.join(d, service)
+        if os.path.exists(path):
+            found_dir = path
+            break
+            
+    if not found_dir:
+        raise HTTPException(status_code=404, detail="Service directory not found.")
+        
+    filepath = os.path.join(found_dir, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Dive file not found.")
+        
+    try:
+        with open(filepath, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error("Failed to read raw dive file %s: %s", filename, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+def push_garmin_update_background(filename: str, filepath: str):
+    import json
+    import time
+    try:
+        from src.core.config import ConfigManager
+        creds = ConfigManager.load_credentials()
+        if not creds.garmin.username or not creds.garmin.password:
+            logger.warning("Garmin Connect credentials not found, skipping background remote update.")
+            return
+            
+        with open(filepath, "r") as f:
+            dive_data = json.load(f)
+            
+        summary = dive_data.get("summary", {})
+        details = dive_data.get("details") or {}
+        
+        activity_id = summary.get("activityId")
+        if not activity_id:
+            logger.error("No Garmin activityId found in cache for %s; cannot update remotely.", filename)
+            return
+            
+        from src.core.services.garmin import GarminAdapter
+        adapter = GarminAdapter(creds.garmin.username, creds.garmin.password)
+        
+        # Map raw cached dict to UnifiedDive
+        unified_dive = adapter._map_to_unified(summary, details)
+        
+        logger.info("Background thread updating Garmin Connect for Activity ID %s...", activity_id)
+        success = adapter.update_dive(str(activity_id), unified_dive)
+        if success:
+            logger.info("Garmin Connect successfully updated in background for Activity ID %s.", activity_id)
+        else:
+            logger.error("Garmin Connect background update failed for Activity ID %s.", activity_id)
+    except Exception as e:
+        logger.error("Error in background Garmin remote update for file %s: %s", filename, e)
+
+def push_divelogs_update_background(filename: str, filepath: str):
+    import json
+    import time
+    try:
+        from src.core.config import ConfigManager
+        creds = ConfigManager.load_credentials()
+        if not creds.divelogs.username or not creds.divelogs.password:
+            logger.warning("Divelogs.org credentials not found, skipping background remote update.")
+            return
+            
+        with open(filepath, "r") as f:
+            dive_data = json.load(f)
+            
+        dive_id = dive_data.get("id")
+        if not dive_id:
+            logger.error("No Divelogs ID found in cache for %s; cannot update remotely.", filename)
+            return
+            
+        from src.core.services.divelogs import DivelogsAdapter
+        adapter = DivelogsAdapter(creds.divelogs.username, creds.divelogs.password)
+        
+        # Map raw cached dict to UnifiedDive
+        unified_dive = adapter._map_to_unified(dive_data)
+        
+        logger.info("Background thread updating Divelogs.org for Dive ID %s...", dive_id)
+        success = adapter.update_dive(str(dive_id), unified_dive)
+        if success:
+            logger.info("Divelogs.org successfully updated in background for Dive ID %s.", dive_id)
+        else:
+            logger.error("Divelogs.org background update failed for Dive ID %s.", dive_id)
+    except Exception as e:
+        logger.error("Error in background Divelogs remote update for file %s: %s", filename, e)
+
+class UpdateDiveSchema(BaseModel):
+    service: str  # "garmin" or "divelogs"
+    filename: str
+    dive_number: Optional[str] = None
+    date_time: Optional[str] = None
+    duration: Optional[int] = None
+    max_depth: Optional[float] = None
+    location: Optional[str] = None
+    notes: Optional[str] = None
+    weight: Optional[str] = None
+    visibility: Optional[str] = None
+    buddy: Optional[str] = None
+
+@app.post("/api/dives/update")
+def update_dive_endpoint(data: UpdateDiveSchema):
+    import json
+    base_dirs = ["./tests/real", "./tests"]
+    found_dir = None
+    for d in base_dirs:
+        path = os.path.join(d, data.service)
+        if os.path.exists(path):
+            found_dir = path
+            break
+            
+    if not found_dir:
+        raise HTTPException(status_code=404, detail="Service directory not found.")
+        
+    filepath = os.path.join(found_dir, data.filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Dive file not found.")
+        
+    try:
+        with open(filepath, "r") as f:
+            dive_data = json.load(f)
+            
+        if data.service == "garmin":
+            summary = dive_data.get("summary", {})
+            details = dive_data.get("details") or {}
+            if not isinstance(details, dict):
+                details = {}
+                dive_data["details"] = details
+            
+            # Update fields in Garmin structure
+            if data.dive_number is not None:
+                if "metadataDTO" not in summary:
+                    summary["metadataDTO"] = {}
+                if "metadataDTO" not in details:
+                    details["metadataDTO"] = {}
+                summary["metadataDTO"]["diveNumber"] = data.dive_number
+                details["metadataDTO"]["diveNumber"] = data.dive_number
+                
+            if data.date_time is not None:
+                if "summaryDTO" not in summary:
+                    summary["summaryDTO"] = {}
+                if "summaryDTO" not in details:
+                    details["summaryDTO"] = {}
+                summary["startTimeLocal"] = data.date_time
+                details["startTimeLocal"] = data.date_time
+                summary["summaryDTO"]["startTimeLocal"] = data.date_time
+                details["summaryDTO"]["startTimeLocal"] = data.date_time
+                
+            if data.duration is not None:
+                if "summaryDTO" not in summary:
+                    summary["summaryDTO"] = {}
+                if "summaryDTO" not in details:
+                    details["summaryDTO"] = {}
+                summary["duration"] = data.duration
+                details["duration"] = data.duration
+                summary["summaryDTO"]["duration"] = data.duration
+                details["summaryDTO"]["duration"] = data.duration
+                summary["summaryDTO"]["bottomTime"] = data.duration
+                details["summaryDTO"]["bottomTime"] = data.duration
+                
+            if data.max_depth is not None:
+                if "summaryDTO" not in summary:
+                    summary["summaryDTO"] = {}
+                if "summaryDTO" not in details:
+                    details["summaryDTO"] = {}
+                summary["maxDepth"] = data.max_depth
+                details["maxDepth"] = data.max_depth
+                summary["summaryDTO"]["maxDepth"] = data.max_depth
+                details["summaryDTO"]["maxDepth"] = data.max_depth
+                
+            if data.location is not None:
+                summary["activityName"] = data.location
+                details["activityName"] = data.location
+                details["locationName"] = data.location
+                summary["locationName"] = data.location
+                
+            if data.notes is not None:
+                summary["description"] = data.notes
+                details["description"] = data.notes
+                
+            if "diveInfo" not in summary or not isinstance(summary["diveInfo"], dict):
+                summary["diveInfo"] = {}
+            if "diveInfo" not in details or not isinstance(details["diveInfo"], dict):
+                details["diveInfo"] = {}
+                
+            if data.weight is not None:
+                import re
+                weight_val = None
+                weight_unit = "kilogram"
+                match = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)?$", data.weight)
+                if match:
+                    weight_val = float(match.group(1))
+                    unit_str = (match.group(2) or "").strip().lower()
+                    if "lb" in unit_str or "pound" in unit_str:
+                        weight_unit = "pound"
+                else:
+                    try:
+                        weight_val = float(data.weight)
+                    except ValueError:
+                        pass
+                
+                summary["diveInfo"]["weight"] = weight_val
+                details["diveInfo"]["weight"] = weight_val
+                if weight_val is not None:
+                    u_key = weight_unit
+                    u_id = 8 if u_key == "kilogram" else 9
+                    factor = 1000.0 if u_key == "kilogram" else 453.59237
+                    u_info = {"unitId": u_id, "unitKey": u_key, "factor": factor}
+                    summary["diveInfo"]["weightUnit"] = u_info
+                    details["diveInfo"]["weightUnit"] = u_info
+                else:
+                    summary["diveInfo"]["weightUnit"] = None
+                    details["diveInfo"]["weightUnit"] = None
+                    
+            if data.visibility is not None:
+                import re
+                vis_val = None
+                vis_unit = "meter"
+                match = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)?$", data.visibility)
+                if match:
+                    vis_val = float(match.group(1))
+                    unit_str = (match.group(2) or "").strip().lower()
+                    if "ft" in unit_str or "foot" in unit_str or "feet" in unit_str:
+                        vis_unit = "foot"
+                else:
+                    try:
+                        vis_val = float(data.visibility)
+                    except ValueError:
+                        pass
+                        
+                summary["diveInfo"]["visibility"] = vis_val
+                details["diveInfo"]["visibility"] = vis_val
+                if vis_val is not None:
+                    u_key = vis_unit
+                    u_id = 1 if u_key == "meter" else 2
+                    factor = 100.0 if u_key == "meter" else 30.48
+                    u_info = {"unitId": u_id, "unitKey": u_key, "factor": factor}
+                    summary["diveInfo"]["visibilityUnit"] = u_info
+                    details["diveInfo"]["visibilityUnit"] = u_info
+                else:
+                    summary["diveInfo"]["visibilityUnit"] = None
+                    details["diveInfo"]["visibilityUnit"] = None
+                    
+            if data.buddy is not None:
+                summary["diveInfo"]["buddy"] = data.buddy
+                details["diveInfo"]["buddy"] = data.buddy
+                
+        elif data.service == "divelogs":
+            if data.date_time is not None:
+                dt_parts = data.date_time.split(" ", 1)
+                dive_data["date"] = dt_parts[0]
+                if len(dt_parts) > 1:
+                    dive_data["time"] = dt_parts[1]
+                    
+            if data.duration is not None:
+                dive_data["duration"] = data.duration
+                
+            if data.max_depth is not None:
+                dive_data["maxdepth"] = data.max_depth
+                
+            if data.location is not None:
+                if "," in data.location:
+                    parts = data.location.split(",", 1)
+                    dive_data["location"] = parts[0].strip()
+                    dive_data["divesite"] = parts[1].strip()
+                else:
+                    dive_data["location"] = data.location
+                    dive_data["divesite"] = ""
+                    
+            if data.notes is not None:
+                dive_data["notes"] = data.notes
+                
+            if data.weight is not None:
+                dive_data["weights"] = data.weight
+                
+            if data.visibility is not None:
+                dive_data["visibility"] = data.visibility
+                
+            if data.buddy is not None:
+                dive_data["buddy"] = data.buddy
+
+        with open(filepath, "w") as f:
+            json.dump(dive_data, f, indent=2)
+            
+        logger.info("Successfully updated cached %s dive filename %s.", data.service, data.filename)
+        
+        # Trigger background update to remote site
+        if data.service == "garmin":
+            threading.Thread(
+                target=push_garmin_update_background,
+                args=(data.filename, filepath),
+                daemon=True
+            ).start()
+        elif data.service == "divelogs":
+            threading.Thread(
+                target=push_divelogs_update_background,
+                args=(data.filename, filepath),
+                daemon=True
+            ).start()
+            
+        return {"status": "success", "message": "Dive updated."}
+        
+    except Exception as e:
+        logger.error("Failed to update dive: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Serve index.html statically
 @app.get("/")

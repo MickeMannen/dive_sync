@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=1.0.2">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤿</text></svg>">
 </head>
 <body>
@@ -34,6 +34,7 @@
         <nav class="tab-nav">
             <button class="tab-btn active" data-tab="dashboard">Sync Dashboard</button>
             <button class="tab-btn" data-tab="dives-explorer">Dives Explorer</button>
+            <button class="tab-btn" data-tab="spreadsheet-editor">Spreadsheet Editor</button>
         </nav>
 
         <!-- DASHBOARD TAB CONTENT -->
@@ -185,9 +186,15 @@
         <!-- DIVES EXPLORER TAB CONTENT -->
         <div id="dives-explorer-tab" class="tab-content hidden">
             <div class="explorer-layout">
-                <div class="explorer-header">
-                    <h2>Cached Dives Explorer</h2>
-                    <p class="text-subtle">Explore local cached dives from Garmin Connect and Divelogs.org</p>
+                <div class="explorer-header" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                    <div>
+                        <h2>Cached Dives Explorer</h2>
+                        <p class="text-subtle">Explore local cached dives from Garmin Connect and Divelogs.org</p>
+                    </div>
+                    <div class="explorer-actions" style="display: flex; gap: 0.75rem;">
+                        <button id="download-raw-btn" class="btn secondary-btn">Download Raw Data</button>
+                        <button id="refresh-explorer-btn" class="btn secondary-btn">Refresh Dives</button>
+                    </div>
                 </div>
                 <div class="explorer-grid">
                     <!-- Garmin Column -->
@@ -209,7 +216,111 @@
                 </div>
             </div>
         </div>
+        
+        <!-- SPREADSHEET EDITOR TAB CONTENT -->
+        <div id="spreadsheet-editor-tab" class="tab-content hidden">
+            <div class="spreadsheet-layout">
+                <div class="explorer-header">
+                    <h2>Spreadsheet Dive Editor</h2>
+                    <p class="text-subtle">Directly edit dive parameters in the local cache. Changes are auto-saved on blur or Enter.</p>
+                </div>
+                
+                <div class="card glass spreadsheet-control-card">
+                    <div class="spreadsheet-actions">
+                        <div class="control-group">
+                            <label for="sheet-service-select">Data Source</label>
+                            <select id="sheet-service-select">
+                                <option value="garmin">Garmin Connect Schema</option>
+                                <option value="divelogs">Divelogs.org Schema</option>
+                            </select>
+                        </div>
+                        
+                        <div class="control-group">
+                            <label for="sheet-size-select">Page Size</label>
+                            <select id="sheet-size-select">
+                                <option value="10">10 rows</option>
+                                <option value="20" selected>20 rows</option>
+                                <option value="30">30 rows</option>
+                                <option value="40">40 rows</option>
+                                <option value="50">50 rows</option>
+                            </select>
+                        </div>
+                        
+                        <div class="search-box">
+                            <label for="sheet-search-input">Search Location/Notes/Buddy</label>
+                            <input type="text" id="sheet-search-input" placeholder="Type to filter...">
+                        </div>
+                        
+                        <div class="pagination-container">
+                            <button id="sheet-prev-btn" class="btn pagination-btn" disabled>&lt; Prev</button>
+                            <span id="sheet-page-info" class="page-info">Page 1 of 1</span>
+                            <button id="sheet-next-btn" class="btn pagination-btn" disabled>Next &gt;</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card glass spreadsheet-table-card">
+                    <div class="table-scroll-container">
+                        <table class="spreadsheet-table">
+                            <thead>
+                                <tr>
+                                    <th data-sort="dive_number" class="sortable">No. <span class="sort-icon"></span></th>
+                                    <th data-sort="date_time" class="sortable">Date/Time <span class="sort-icon"></span></th>
+                                    <th data-sort="duration" class="sortable">Duration (sec) <span class="sort-icon"></span></th>
+                                    <th data-sort="max_depth" class="sortable">Max Depth (m) <span class="sort-icon"></span></th>
+                                    <th data-sort="location" class="sortable">Location/Site <span class="sort-icon"></span></th>
+                                    <th data-sort="weight" class="sortable">Weight <span class="sort-icon"></span></th>
+                                    <th data-sort="visibility" class="sortable">Visibility <span class="sort-icon"></span></th>
+                                    <th data-sort="buddy" class="sortable">Buddy <span class="sort-icon"></span></th>
+                                    <th data-sort="notes" class="sortable">Notes <span class="sort-icon"></span></th>
+                                </tr>
+                            </thead>
+                            <tbody id="spreadsheet-tbody">
+                                <!-- Populated dynamically -->
+                                <tr>
+                                    <td colspan="9" class="empty-state text-subtle">Loading spreadsheet data...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="spreadsheet-footer">
+                        <span id="sheet-total-info" class="text-subtle">Showing 0-0 of 0 dives</span>
+                        <div id="sheet-saving-indicator" class="saving-indicator hidden">
+                            <span class="spinner-small"></span>
+                            <span>Saving changes...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- DIVE DETAILS MODAL -->
+        <div id="dive-details-modal" class="modal-backdrop hidden">
+            <div class="modal-content glass">
+                <div class="modal-header">
+                    <h2 id="modal-dive-title">Dive Details</h2>
+                    <button id="modal-close-btn" class="modal-close-btn">&times;</button>
+                </div>
+                
+                <div class="modal-tabs">
+                    <button id="modal-tab-fancy" class="modal-tab-btn active">Overview</button>
+                    <button id="modal-tab-raw" class="modal-tab-btn">Raw JSON Data</button>
+                </div>
+                
+                <div class="modal-body">
+                    <!-- Fancy Tab Content -->
+                    <div id="modal-content-fancy" class="modal-tab-content">
+                        <div class="modal-empty text-subtle">No data loaded.</div>
+                    </div>
+                    
+                    <!-- Raw JSON Tab Content -->
+                    <div id="modal-content-raw" class="modal-tab-content hidden">
+                        <pre id="modal-raw-json" class="terminal modal-json-pre"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-    <script src="/static/script.js"></script>
+    <script src="/static/script.js?v=1.0.2"></script>
 </body>
 </html>
