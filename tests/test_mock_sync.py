@@ -162,12 +162,17 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
     with open(settings_path, "w") as f:
         json.dump(settings_data, f)
 
-    # Initialize SyncEngine with live mode (mock_data_dir=None)
-    engine = SyncEngine(settings_path=settings_path, mock_data_dir=None)
-    
-    # Set dummy credentials so the engine attempts to download
-    engine.credentials.garmin.username = "test_user@garmin"
-    engine.credentials.divelogs.username = "test_user_divelogs"
+    # Write localized credentials
+    creds_data = {
+        "garmin": {"username": "test_user@garmin", "password": "password"},
+        "divelogs": {"username": "test_user_divelogs", "password": "password"}
+    }
+    creds_path = os.path.join(tmp_path, "credentials.json")
+    with open(creds_path, "w") as f:
+        json.dump(creds_data, f)
+
+    # Initialize SyncEngine with live mode (mock_data_dir=None) and test credentials
+    engine = SyncEngine(settings_path=settings_path, credentials_path=creds_path, mock_data_dir=None)
     
     # Mock Garmin login and API client
     monkeypatch.setattr(engine.garmin, "login", lambda: True)

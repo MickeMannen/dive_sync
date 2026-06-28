@@ -12,8 +12,11 @@ from src.core.services.divelogs import DivelogsAdapter
 logger = logging.getLogger("anti_gravity.mock_adapters")
 
 class LocalMockGarminAdapter(BaseDiveAdapter):
-    def __init__(self, mock_data_dir: str = "./tests"):
-        self.mock_dir = os.path.join(mock_data_dir, "garmin")
+    def __init__(self, mock_data_dir: str = "./tests", username: Optional[str] = None):
+        if username and os.path.exists(os.path.join(mock_data_dir, "garmin", username)):
+            self.mock_dir = os.path.join(mock_data_dir, "garmin", username)
+        else:
+            self.mock_dir = os.path.join(mock_data_dir, "garmin")
         # Dummy adapter to reuse parsing & mapping logic
         self.helper = GarminAdapter("dummy", "dummy", token_dir="/tmp")
 
@@ -136,8 +139,11 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
         return True
 
 class LocalMockDivelogsAdapter(BaseDiveAdapter):
-    def __init__(self, mock_data_dir: str = "./tests"):
-        self.mock_dir = os.path.join(mock_data_dir, "divelogs")
+    def __init__(self, mock_data_dir: str = "./tests", username: Optional[str] = None):
+        if username and os.path.exists(os.path.join(mock_data_dir, "divelogs", username)):
+            self.mock_dir = os.path.join(mock_data_dir, "divelogs", username)
+        else:
+            self.mock_dir = os.path.join(mock_data_dir, "divelogs")
         # Dummy adapter to reuse parsing & mapping logic
         self.helper = DivelogsAdapter("dummy", "dummy")
 

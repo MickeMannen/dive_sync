@@ -15,32 +15,99 @@ logger = logging.getLogger("anti_gravity.sync_engine")
 STATE_FILE = "sync_state.json"
 
 class SyncEngine:
-    def __init__(self, settings_path: str = "settings.json", credentials_path: str = "credentials.json", mock_data_dir: Optional[str] = None):
+    def __init__(self, settings_path: str = "settings.json", credentials_path: str = "credentials.json", 
+                 mock_data_dir: Optional[str] = None, garmin_username: Optional[str] = None, 
+                 divelogs_username: Optional[str] = None):
         self.settings_path = settings_path
         self.credentials_path = credentials_path
         self.settings = ConfigManager.load_settings(settings_path)
         self.credentials = ConfigManager.load_credentials(credentials_path)
         
+        self._garmin_username_override = garmin_username
+        self._divelogs_username_override = divelogs_username
+        
         # Determine sync state file location
         if mock_data_dir:
-            self.state_file = os.path.join(mock_data_dir, "sync_state.json")
+            # If subdirectories with username exist under mock_data_dir, use segmented state file
+            g_path = os.path.join(mock_data_dir, "garmin", self.garmin_username) if self.garmin_username else None
+            if g_path and os.path.exists(g_path):
+                self.state_file = os.path.join(mock_data_dir, f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
+            else:
+                self.state_file = os.path.join(mock_data_dir, "sync_state.json")
+            
             from src.core.services.mock_adapters import LocalMockGarminAdapter, LocalMockDivelogsAdapter
             logger.info("Initializing SyncEngine in OFFLINE/MOCK mode using data from: %s", mock_data_dir)
-            self.garmin = LocalMockGarminAdapter(mock_data_dir=mock_data_dir)
-            self.divelogs = LocalMockDivelogsAdapter(mock_data_dir=mock_data_dir)
+            self.garmin = LocalMockGarminAdapter(mock_data_dir=mock_data_dir, username=self.garmin_username)
+            self.divelogs = LocalMockDivelogsAdapter(mock_data_dir=mock_data_dir, username=self.divelogs_username)
         else:
-            self.state_file = os.path.join(os.path.dirname(settings_path) or ".", "sync_state.json")
+            if self.garmin_username and self.divelogs_username and (len(self.credentials.get_garmin_accounts()) > 1 or len(self.credentials.get_divelogs_accounts()) > 1):
+                self.state_file = os.path.join(os.path.dirname(settings_path) or ".", f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
+            else:
+                self.state_file = os.path.join(os.path.dirname(settings_path) or ".", "sync_state.json")
+                
             self.garmin = GarminAdapter(
-                username=self.credentials.garmin.username,
-                password=self.credentials.garmin.password,
-                token_dir=self.credentials.garmin.token_dir,
+                username=self.garmin_creds.username,
+                password=self.garmin_creds.password,
+                token_dir=self.garmin_creds.token_dir,
                 cooldown_seconds=self.settings.api_cooldown_seconds
             )
             self.divelogs = DivelogsAdapter(
-                username=self.credentials.divelogs.username,
-                password=self.credentials.divelogs.password,
+                username=self.divelogs_creds.username,
+                password=self.divelogs_creds.password,
                 cooldown_seconds=self.settings.api_cooldown_seconds
             )
+
+    @property
+    def garmin_creds(self) -> GarminCredentials:
+        garmin_accounts = self.credentials.get_garmin_accounts()
+        if not garmin_accounts:
+            return GarminCredentials()
+        if len(garmin_accounts) == 1:
+            return garmin_accounts[0]
+        username = self._garmin_username_override
+        if not username:
+            raise ValueError("Multiple Garmin accounts configured. Please specify --garmin username.")
+        matching = [a for a in garmin_accounts if a.username == username]
+        if not matching:
+            raise ValueError(f"No Garmin account configured matching username: {username}")
+        return matching[0]
+
+    @property
+    def divelogs_creds(self) -> DivelogsCredentials:
+        divelogs_accounts = self.credentials.get_divelogs_accounts()
+        if not divelogs_accounts:
+            return DivelogsCredentials()
+        if len(divelogs_accounts) == 1:
+            return divelogs_accounts[0]
+        username = self._divelogs_username_override
+        if not username:
+            raise ValueError("Multiple Divelogs accounts configured. Please specify --divelogs username.")
+        matching = [a for a in divelogs_accounts if a.username == username]
+        if not matching:
+            raise ValueError(f"No Divelogs account configured matching username: {username}")
+        return matching[0]
+
+    @property
+    def garmin_username(self) -> str:
+        return self.garmin_creds.username
+
+    @property
+    def divelogs_username(self) -> str:
+        return self.divelogs_creds.username
+
+    @property
+    def garmin_dir_name(self) -> str:
+        garmin_accounts = self.credentials.get_garmin_accounts()
+        if len(garmin_accounts) > 1:
+            return os.path.join("garmin", self.garmin_username)
+        return "garmin"
+
+    @property
+    def divelogs_dir_name(self) -> str:
+        divelogs_accounts = self.credentials.get_divelogs_accounts()
+        if len(divelogs_accounts) > 1:
+            return os.path.join("divelogs", self.divelogs_username)
+        return "divelogs"
 
     def load_last_sync_time(self) -> Optional[datetime]:
         if os.path.exists(self.state_file):
@@ -373,12 +440,12 @@ class SyncEngine:
 
         return matched_pairs, unique_garmin, unique_divelogs
 
-    def download_and_save_raw_data(self, mock_data_dir: str = "./tests", overwrite: bool = False) -> bool:
+    def download_and_save_raw_data(self, mock_data_dir: str = "./data", overwrite: bool = False) -> bool:
         """Download all raw data from Garmin and Divelogs and save to directory structure."""
         logger.info("Starting raw data download...")
         
-        garmin_dir = os.path.join(mock_data_dir, "garmin")
-        divelogs_dir = os.path.join(mock_data_dir, "divelogs")
+        garmin_dir = os.path.join(mock_data_dir, self.garmin_dir_name)
+        divelogs_dir = os.path.join(mock_data_dir, self.divelogs_dir_name)
         
         if overwrite:
             import shutil
@@ -392,7 +459,7 @@ class SyncEngine:
         os.makedirs(divelogs_dir, exist_ok=True)
         
         # 1. Garmin raw data
-        if self.credentials.garmin.username:
+        if self.garmin_username:
             logger.info("Authenticating with Garmin Connect...")
             if self.garmin.login():
                 logger.info("Fetching Garmin dive activities list...")
@@ -484,7 +551,7 @@ class SyncEngine:
             logger.warning("Garmin credentials not found, skipping Garmin download.")
         
         # 2. Divelogs raw data
-        if self.credentials.divelogs.username:
+        if self.divelogs_username:
             logger.info("Authenticating with Divelogs.org...")
             if self.divelogs.login():
                 logger.info("Fetching detailed dive logs list from Divelogs.org...")

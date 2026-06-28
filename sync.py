@@ -73,24 +73,36 @@ def main():
         "--save-raw-data",
         type=str,
         nargs="?",
-        const="./tests",
+        const="./data",
         default=None,
-        help="Download and save all raw data from Garmin and Divelogs to the specified local directory (default: ./tests)."
+        help="Download and save all raw data from Garmin and Divelogs to the specified local directory (default: ./data)."
     )
 
     parser.add_argument(
         "--mock-data-dir",
         type=str,
         nargs="?",
-        const="./tests",
+        const="./data",
         default=None,
-        help="Run sync utilizing local mock/stored raw JSON data (default: ./tests) instead of communicating with remote APIs."
+        help="Run sync utilizing local mock/stored raw JSON data (default: ./data) instead of communicating with remote APIs."
     )
 
     parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite/clear existing local mock data directories before downloading raw data."
+    )
+
+    parser.add_argument(
+        "--garmin",
+        type=str,
+        help="Garmin account username to use (optional if only one is configured)."
+    )
+
+    parser.add_argument(
+        "--divelogs",
+        type=str,
+        help="Divelogs account username to use (optional if only one is configured)."
     )
 
     parser.add_argument(
@@ -109,7 +121,11 @@ def main():
     try:
         if args.save_raw_data:
             logger.info("Executing raw data downloader...")
-            engine = SyncEngine(mock_data_dir=None)
+            engine = SyncEngine(
+                mock_data_dir=None,
+                garmin_username=args.garmin,
+                divelogs_username=args.divelogs
+            )
             success = engine.download_and_save_raw_data(mock_data_dir=args.save_raw_data, overwrite=args.overwrite)
             if success:
                 logger.info("Raw data download completed successfully.")
@@ -118,7 +134,11 @@ def main():
                 sys.exit(1)
             return
 
-        engine = SyncEngine(mock_data_dir=args.mock_data_dir)
+        engine = SyncEngine(
+            mock_data_dir=args.mock_data_dir,
+            garmin_username=args.garmin,
+            divelogs_username=args.divelogs
+        )
         
         if args.backup:
             logger.info("Executing history backup...")

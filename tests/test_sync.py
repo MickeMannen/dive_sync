@@ -387,3 +387,59 @@ def test_gps_and_profile_graph_mapping():
     assert round(dive_back_imperial.samples[0].depth, 2) == 1.2
     assert round(dive_back_imperial.samples[0].temp, 2) == 30.0
     assert dive_back_imperial.samples[1].time == 10
+
+def test_multi_account_handling(tmp_path):
+    import os
+    import json
+    import pytest
+    from src.core.config import CredentialsModel
+    
+    settings_data = {
+        "directionality": "bidirectional",
+        "sync_filters": {},
+        "grace_window_minutes": 15,
+        "api_cooldown_seconds": 0.0,
+        "schedule": []
+    }
+    
+    creds_data = {
+        "garmin": [
+            {"username": "user1@garmin", "password": "pass1", "token_dir": str(tmp_path / "tokens" / "user1")},
+            {"username": "user2@garmin", "password": "pass2", "token_dir": str(tmp_path / "tokens" / "user2")}
+        ],
+        "divelogs": [
+            {"username": "user1_divelogs", "password": "pass1"},
+            {"username": "user2_divelogs", "password": "pass2"}
+        ]
+    }
+    
+    settings_path = os.path.join(tmp_path, "settings.json")
+    creds_path = os.path.join(tmp_path, "credentials.json")
+    
+    with open(settings_path, "w") as f:
+        json.dump(settings_data, f)
+    with open(creds_path, "w") as f:
+        json.dump(creds_data, f)
+        
+    creds_model = CredentialsModel.model_validate(creds_data)
+    assert len(creds_model.get_garmin_accounts()) == 2
+    assert len(creds_model.get_divelogs_accounts()) == 2
+    assert creds_model.get_garmin_accounts()[0].username == "user1@garmin"
+    
+    with pytest.raises(ValueError, match="Multiple Garmin accounts configured"):
+        SyncEngine(settings_path=settings_path, credentials_path=creds_path)
+        
+    with pytest.raises(ValueError, match="No Garmin account configured matching username"):
+        SyncEngine(settings_path=settings_path, credentials_path=creds_path, garmin_username="invalid_user")
+        
+    engine = SyncEngine(
+        settings_path=settings_path, 
+        credentials_path=creds_path, 
+        garmin_username="user2@garmin",
+        divelogs_username="user1_divelogs"
+    )
+    
+    assert engine.garmin_username == "user2@garmin"
+    assert engine.divelogs_username == "user1_divelogs"
+    assert engine.garmin_dir_name == os.path.join("garmin", "user2@garmin")
+    assert engine.divelogs_dir_name == os.path.join("divelogs", "user1_divelogs")

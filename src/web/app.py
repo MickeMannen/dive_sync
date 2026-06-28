@@ -205,25 +205,51 @@ def stream_logs():
                 
     return StreamingResponse(log_generator(), media_type="text/event-stream")
 
-def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
+def get_cached_dives(garmin_username: Optional[str] = None, divelogs_username: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
     garmin_dives = []
     divelogs_dives = []
     
     # Check paths
-    base_dirs = ["./tests/real", "./tests"]
+    base_dirs = ["./data", "./tests"]
+    
+    from src.core.config import ConfigManager
+    try:
+        creds = ConfigManager.load_credentials()
+        garmin_accounts = creds.get_garmin_accounts()
+        divelogs_accounts = creds.get_divelogs_accounts()
+    except Exception:
+        garmin_accounts = []
+        divelogs_accounts = []
+
+    if not garmin_username:
+        if len(garmin_accounts) == 1:
+            garmin_username = garmin_accounts[0].username
+        elif len(garmin_accounts) > 1:
+            garmin_username = garmin_accounts[0].username
+
+    if not divelogs_username:
+        if len(divelogs_accounts) == 1:
+            divelogs_username = divelogs_accounts[0].username
+        elif len(divelogs_accounts) > 1:
+            divelogs_username = divelogs_accounts[0].username
     
     # 1. Garmin
     garmin_dir = None
     for d in base_dirs:
-        path = os.path.join(d, "garmin")
-        if os.path.exists(path) and os.listdir(path):
-            garmin_dir = path
+        if garmin_username:
+            path_user = os.path.join(d, "garmin", garmin_username)
+            if os.path.exists(path_user) and os.listdir(path_user):
+                garmin_dir = path_user
+                break
+        path_direct = os.path.join(d, "garmin")
+        if os.path.exists(path_direct) and os.listdir(path_direct):
+            garmin_dir = path_direct
             break
             
     if garmin_dir:
         import json
         for filename in os.listdir(garmin_dir):
-            if filename.endswith(".json") and filename != "sync_state.json":
+            if filename.endswith(".json") and filename != "sync_state.json" and not os.path.isdir(os.path.join(garmin_dir, filename)):
                 filepath = os.path.join(garmin_dir, filename)
                 try:
                     with open(filepath, "r") as f:
@@ -261,7 +287,7 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
                     if visibility is not None:
                         v_unit = "m" if "meter" in str(visibility_unit).lower() else "ft"
                         visibility_str = f"{visibility:g} {v_unit}"
-
+ 
                     garmin_dives.append({
                         "id": str(summary.get("activityId") or ""),
                         "dive_number": dive_num,
@@ -281,15 +307,20 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
     # 2. Divelogs
     divelogs_dir = None
     for d in base_dirs:
-        path = os.path.join(d, "divelogs")
-        if os.path.exists(path) and os.listdir(path):
-            divelogs_dir = path
+        if divelogs_username:
+            path_user = os.path.join(d, "divelogs", divelogs_username)
+            if os.path.exists(path_user) and os.listdir(path_user):
+                divelogs_dir = path_user
+                break
+        path_direct = os.path.join(d, "divelogs")
+        if os.path.exists(path_direct) and os.listdir(path_direct):
+            divelogs_dir = path_direct
             break
             
     if divelogs_dir:
         import json
         for filename in os.listdir(divelogs_dir):
-            if filename.endswith(".json") and filename != "sync_state.json":
+            if filename.endswith(".json") and filename != "sync_state.json" and not os.path.isdir(os.path.join(divelogs_dir, filename)):
                 filepath = os.path.join(divelogs_dir, filename)
                 try:
                     with open(filepath, "r") as f:
@@ -320,7 +351,7 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
                             
                     visibility_str = str(data.get("visibility") or "")
                     buddy = data.get("buddy") or ""
-
+ 
                     divelogs_dives.append({
                         "id": str(data.get("id") or ""),
                         "dive_number": dive_num,
@@ -346,20 +377,20 @@ def get_cached_dives() -> Dict[str, List[Dict[str, Any]]]:
         "garmin": garmin_dives,
         "divelogs": divelogs_dives
     }
-
+ 
 @app.get("/api/dives")
-def get_dives():
-    return get_cached_dives()
-
+def get_dives(garmin_user: Optional[str] = None, divelogs_user: Optional[str] = None):
+    return get_cached_dives(garmin_username=garmin_user, divelogs_username=divelogs_user)
+ 
 is_download_running = False
 last_download_error = None
-
-def run_download_thread(overwrite: bool, base_dir: str):
+ 
+def run_download_thread(overwrite: bool, base_dir: str, garmin_user: Optional[str] = None, divelogs_user: Optional[str] = None):
     global is_download_running, last_download_error
     is_download_running = True
     last_download_error = None
     try:
-        engine = SyncEngine()
+        engine = SyncEngine(garmin_username=garmin_user, divelogs_username=divelogs_user)
         success = engine.download_and_save_raw_data(mock_data_dir=base_dir, overwrite=overwrite)
         if not success:
             last_download_error = "Download completed with warnings/failures."
@@ -368,17 +399,17 @@ def run_download_thread(overwrite: bool, base_dir: str):
         logger.error("Raw data download failed: %s", e)
     finally:
         is_download_running = False
-
+ 
 @app.post("/api/dives/download")
-def download_raw_dives(overwrite: bool = Query(True)):
+def download_raw_dives(overwrite: bool = Query(True), garmin_user: Optional[str] = None, divelogs_user: Optional[str] = None):
     global is_sync_running, is_download_running
     if is_sync_running or is_download_running:
         raise HTTPException(status_code=409, detail="A synchronization or download job is already in progress.")
         
-    base_dir = "./tests/real" if os.path.exists("./tests/real") else "./tests"
-    threading.Thread(target=run_download_thread, args=(overwrite, base_dir), daemon=True).start()
+    base_dir = "./data" if os.path.exists("./data") else "./tests"
+    threading.Thread(target=run_download_thread, args=(overwrite, base_dir, garmin_user, divelogs_user), daemon=True).start()
     return {"status": "success", "message": "Raw data download started in background."}
-
+ 
 @app.get("/api/dives/download/status")
 def get_download_status():
     global is_download_running, last_download_error
@@ -386,13 +417,18 @@ def get_download_status():
         "is_running": is_download_running,
         "error": last_download_error
     }
-
+ 
 @app.get("/api/dives/raw")
-def get_raw_dive(service: str, filename: str):
+def get_raw_dive(service: str, filename: str, username: Optional[str] = None):
     import json
-    base_dirs = ["./tests/real", "./tests"]
+    base_dirs = ["./data", "./tests"]
     found_dir = None
     for d in base_dirs:
+        if username:
+            path = os.path.join(d, service, username)
+            if os.path.exists(path):
+                found_dir = path
+                break
         path = os.path.join(d, service)
         if os.path.exists(path):
             found_dir = path
@@ -411,14 +447,35 @@ def get_raw_dive(service: str, filename: str):
     except Exception as e:
         logger.error("Failed to read raw dive file %s: %s", filename, e)
         raise HTTPException(status_code=500, detail=str(e))
-
+ 
 def push_garmin_update_background(filename: str, filepath: str):
     import json
     import time
     try:
         from src.core.config import ConfigManager
         creds = ConfigManager.load_credentials()
-        if not creds.garmin.username or not creds.garmin.password:
+        
+        # Determine username from filepath (if nested)
+        username = None
+        parts = filepath.replace("\\", "/").split("/")
+        if len(parts) >= 3 and parts[-3] == "garmin":
+            username = parts[-2]
+            
+        garmin_accounts = creds.get_garmin_accounts()
+        if not username:
+            if len(garmin_accounts) == 1:
+                username = garmin_accounts[0].username
+            else:
+                logger.error("Multiple Garmin accounts configured but username could not be determined from path: %s", filepath)
+                return
+                
+        matching = [a for a in garmin_accounts if a.username == username]
+        if not matching:
+            logger.error("No Garmin credentials found for username: %s", username)
+            return
+        active_creds = matching[0]
+        
+        if not active_creds.username or not active_creds.password:
             logger.warning("Garmin Connect credentials not found, skipping background remote update.")
             return
             
@@ -434,7 +491,7 @@ def push_garmin_update_background(filename: str, filepath: str):
             return
             
         from src.core.services.garmin import GarminAdapter
-        adapter = GarminAdapter(creds.garmin.username, creds.garmin.password)
+        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=active_creds.token_dir)
         
         # Map raw cached dict to UnifiedDive
         unified_dive = adapter._map_to_unified(summary, details)
@@ -447,14 +504,35 @@ def push_garmin_update_background(filename: str, filepath: str):
             logger.error("Garmin Connect background update failed for Activity ID %s.", activity_id)
     except Exception as e:
         logger.error("Error in background Garmin remote update for file %s: %s", filename, e)
-
+ 
 def push_divelogs_update_background(filename: str, filepath: str):
     import json
     import time
     try:
         from src.core.config import ConfigManager
         creds = ConfigManager.load_credentials()
-        if not creds.divelogs.username or not creds.divelogs.password:
+        
+        # Determine username from filepath (if nested)
+        username = None
+        parts = filepath.replace("\\", "/").split("/")
+        if len(parts) >= 3 and parts[-3] == "divelogs":
+            username = parts[-2]
+            
+        divelogs_accounts = creds.get_divelogs_accounts()
+        if not username:
+            if len(divelogs_accounts) == 1:
+                username = divelogs_accounts[0].username
+            else:
+                logger.error("Multiple Divelogs accounts configured but username could not be determined from path: %s", filepath)
+                return
+                
+        matching = [a for a in divelogs_accounts if a.username == username]
+        if not matching:
+            logger.error("No Divelogs credentials found for username: %s", username)
+            return
+        active_creds = matching[0]
+        
+        if not active_creds.username or not active_creds.password:
             logger.warning("Divelogs.org credentials not found, skipping background remote update.")
             return
             
@@ -467,7 +545,7 @@ def push_divelogs_update_background(filename: str, filepath: str):
             return
             
         from src.core.services.divelogs import DivelogsAdapter
-        adapter = DivelogsAdapter(creds.divelogs.username, creds.divelogs.password)
+        adapter = DivelogsAdapter(active_creds.username, active_creds.password)
         
         # Map raw cached dict to UnifiedDive
         unified_dive = adapter._map_to_unified(dive_data)
@@ -480,10 +558,11 @@ def push_divelogs_update_background(filename: str, filepath: str):
             logger.error("Divelogs.org background update failed for Dive ID %s.", dive_id)
     except Exception as e:
         logger.error("Error in background Divelogs remote update for file %s: %s", filename, e)
-
+ 
 class UpdateDiveSchema(BaseModel):
     service: str  # "garmin" or "divelogs"
     filename: str
+    username: Optional[str] = None
     dive_number: Optional[str] = None
     date_time: Optional[str] = None
     duration: Optional[int] = None
@@ -493,13 +572,18 @@ class UpdateDiveSchema(BaseModel):
     weight: Optional[str] = None
     visibility: Optional[str] = None
     buddy: Optional[str] = None
-
+ 
 @app.post("/api/dives/update")
 def update_dive_endpoint(data: UpdateDiveSchema):
     import json
-    base_dirs = ["./tests/real", "./tests"]
+    base_dirs = ["./data", "./tests"]
     found_dir = None
     for d in base_dirs:
+        if data.username:
+            path = os.path.join(d, data.service, data.username)
+            if os.path.exists(path):
+                found_dir = path
+                break
         path = os.path.join(d, data.service)
         if os.path.exists(path):
             found_dir = path

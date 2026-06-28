@@ -33,9 +33,25 @@ class DivelogsCredentials(BaseModel):
     username: str = ""
     password: str = ""
 
+from typing import Union
+
 class CredentialsModel(BaseModel):
-    garmin: GarminCredentials = Field(default_factory=GarminCredentials)
-    divelogs: DivelogsCredentials = Field(default_factory=DivelogsCredentials)
+    garmin: Union[List[GarminCredentials], GarminCredentials] = Field(default_factory=GarminCredentials)
+    divelogs: Union[List[DivelogsCredentials], DivelogsCredentials] = Field(default_factory=DivelogsCredentials)
+
+    def get_garmin_accounts(self) -> List[GarminCredentials]:
+        if isinstance(self.garmin, list):
+            return self.garmin
+        if getattr(self.garmin, "username", None):
+            return [self.garmin]
+        return []
+
+    def get_divelogs_accounts(self) -> List[DivelogsCredentials]:
+        if isinstance(self.divelogs, list):
+            return self.divelogs
+        if getattr(self.divelogs, "username", None):
+            return [self.divelogs]
+        return []
 
 class ConfigManager:
     @staticmethod
