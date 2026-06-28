@@ -9,7 +9,7 @@ from src.core.models import UnifiedDive
 from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
 
-logger = logging.getLogger("anti_gravity.mock_adapters")
+logger = logging.getLogger("dive_sync.mock_adapters")
 
 class LocalMockGarminAdapter(BaseDiveAdapter):
     def __init__(self, mock_data_dir: str = "./tests", username: Optional[str] = None):

@@ -10,18 +10,19 @@ from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
 from src.core.models import UnifiedDive
 
-logger = logging.getLogger("anti_gravity.sync_engine")
+logger = logging.getLogger("dive_sync.sync_engine")
 
 STATE_FILE = "sync_state.json"
 
 class SyncEngine:
-    def __init__(self, settings_path: str = "settings.json", credentials_path: str = "credentials.json", 
+    def __init__(self, settings_path: Optional[str] = None, credentials_path: Optional[str] = None, 
                  mock_data_dir: Optional[str] = None, garmin_username: Optional[str] = None, 
                  divelogs_username: Optional[str] = None):
-        self.settings_path = settings_path
-        self.credentials_path = credentials_path
-        self.settings = ConfigManager.load_settings(settings_path)
-        self.credentials = ConfigManager.load_credentials(credentials_path)
+        from src.core.config import SETTINGS_FILE, CREDENTIALS_FILE
+        self.settings_path = settings_path or SETTINGS_FILE
+        self.credentials_path = credentials_path or CREDENTIALS_FILE
+        self.settings = ConfigManager.load_settings(self.settings_path)
+        self.credentials = ConfigManager.load_credentials(self.credentials_path)
         
         self._garmin_username_override = garmin_username
         self._divelogs_username_override = divelogs_username
@@ -41,14 +42,18 @@ class SyncEngine:
             self.divelogs = LocalMockDivelogsAdapter(mock_data_dir=mock_data_dir, username=self.divelogs_username)
         else:
             if self.garmin_username and self.divelogs_username and (len(self.credentials.get_garmin_accounts()) > 1 or len(self.credentials.get_divelogs_accounts()) > 1):
-                self.state_file = os.path.join(os.path.dirname(settings_path) or ".", f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
+                self.state_file = os.path.join(os.path.dirname(self.settings_path) or ".", f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
             else:
-                self.state_file = os.path.join(os.path.dirname(settings_path) or ".", "sync_state.json")
+                self.state_file = os.path.join(os.path.dirname(self.settings_path) or ".", "sync_state.json")
+                
+            token_dir = self.garmin_creds.token_dir
+            if not os.path.isabs(token_dir):
+                token_dir = os.path.join(os.environ.get("DATA_DIR", "."), token_dir)
                 
             self.garmin = GarminAdapter(
                 username=self.garmin_creds.username,
                 password=self.garmin_creds.password,
-                token_dir=self.garmin_creds.token_dir,
+                token_dir=token_dir,
                 cooldown_seconds=self.settings.api_cooldown_seconds
             )
             self.divelogs = DivelogsAdapter(

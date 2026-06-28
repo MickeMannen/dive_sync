@@ -16,7 +16,7 @@ from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncSched
 from src.core.sync_engine import SyncEngine
 
 # Configure logger
-logger = logging.getLogger("anti_gravity.web")
+logger = logging.getLogger("dive_sync.web")
 logger.setLevel(logging.INFO)
 
 # SSE Queue for log streaming
@@ -37,7 +37,7 @@ class SSELogHandler(logging.Handler):
 # Add SSE log handler to parent logger so it intercepts core engine logs
 sse_handler = SSELogHandler(sse_log_queue)
 sse_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-logging.getLogger("anti_gravity").addHandler(sse_handler)
+logging.getLogger("dive_sync").addHandler(sse_handler)
 
 is_sync_running = False
 last_sync_results: Dict[str, Any] = {}
@@ -99,8 +99,8 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(scheduler_task, return_exceptions=True)
 
 app = FastAPI(
-    title="Anti-Gravity Sync Dashboard", 
-    description="Anti-Gravity Web Service Synchronization Dashboard.",
+    title="Dive Sync Dashboard", 
+    description="Dive Sync Web Service Synchronization Dashboard.",
     lifespan=lifespan
 )
 

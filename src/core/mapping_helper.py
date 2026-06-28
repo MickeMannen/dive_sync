@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, List
 from src.core.models import UnifiedDive, GasMixture
 
-logger = logging.getLogger("anti_gravity.mapping")
+logger = logging.getLogger("dive_sync.mapping")
 
 def resolve_jsonpath(obj: Any, path: str) -> Any:
     if not isinstance(path, str) or not path.startswith("$."):

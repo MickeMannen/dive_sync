@@ -11,12 +11,12 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)]
     )
-    logger = logging.getLogger("anti_gravity.docker_entrypoint")
-    logger.info("Starting Anti-Gravity Docker Engine entrypoint...")
+    logger = logging.getLogger("dive_sync.docker_entrypoint")
+    logger.info("Starting Dive Sync Docker Engine entrypoint...")
 
     # Load configuration from environment variables or use sensible production defaults
-    host = os.getenv("ANTI_GRAVITY_HOST", "0.0.0.0")
-    port = int(os.getenv("ANTI_GRAVITY_PORT", "8000"))
+    host = os.getenv("DIVE_SYNC_HOST", "0.0.0.0")
+    port = int(os.getenv("DIVE_SYNC_PORT", "8000"))
 
     # Configure and instantiate uvicorn Server explicitly to control graceful exit
     config = uvicorn.Config("src.web.app:app", host=host, port=port, log_level="info")

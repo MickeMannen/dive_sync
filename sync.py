@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import sys
 import argparse
 import logging
@@ -14,7 +15,7 @@ def setup_logging(verbose: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Anti-Gravity: Dive synchronization engine between Garmin Connect and Divelogs.org."
+        description="Dive Sync: Dive synchronization engine between Garmin Connect and Divelogs.org."
     )
     
     parser.add_argument(
@@ -69,22 +70,23 @@ def main():
         help="Override config: Sync flow directionality (bidirectional, to_garmin, to_divelogs)."
     )
     
+    default_data_dir = os.environ.get("DATA_DIR", "./data")
     parser.add_argument(
         "--save-raw-data",
         type=str,
         nargs="?",
-        const="./data",
+        const=default_data_dir,
         default=None,
-        help="Download and save all raw data from Garmin and Divelogs to the specified local directory (default: ./data)."
+        help=f"Download and save all raw data from Garmin and Divelogs to the specified local directory (default: {default_data_dir})."
     )
 
     parser.add_argument(
         "--mock-data-dir",
         type=str,
         nargs="?",
-        const="./data",
+        const=default_data_dir,
         default=None,
-        help="Run sync utilizing local mock/stored raw JSON data (default: ./data) instead of communicating with remote APIs."
+        help=f"Run sync utilizing local mock/stored raw JSON data (default: {default_data_dir}) instead of communicating with remote APIs."
     )
 
     parser.add_argument(
@@ -114,9 +116,9 @@ def main():
     args = parser.parse_args()
 
     setup_logging(args.verbose)
-    logger = logging.getLogger("anti_gravity.sync_cli")
+    logger = logging.getLogger("dive_sync.sync_cli")
 
-    logger.info("Anti-Gravity Dive Sync CLI initialized.")
+    logger.info("Dive Sync CLI initialized.")
 
     try:
         if args.save_raw_data:
@@ -163,7 +165,7 @@ def main():
             
             # Print sync results summary
             print("\n" + "="*50)
-            print("       ANTI-GRAVITY SYNC RESULTS SUMMARY")
+            print("       DIVE SYNC RESULTS SUMMARY")
             print("="*50)
             print(f"Dry Run Mode:    {results['dry_run']}")
             print(f"Directionality:  {results['directionality']}")

@@ -24,7 +24,7 @@ def append_to_gitignore(entry: str):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     print("="*60)
-    print("      ANTI-GRAVITY INTERACTIVE PROVISIONER & CREDENTIAL SETUP")
+    print("      DIVE SYNC INTERACTIVE PROVISIONER & CREDENTIAL SETUP")
     print("="*60)
     
     # Prompt for Garmin

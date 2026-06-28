@@ -16,7 +16,7 @@ from garminconnect import (
 from src.core.adapter import BaseDiveAdapter
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
-logger = logging.getLogger("anti_gravity.garmin")
+logger = logging.getLogger("dive_sync.garmin")
 
 class GarminAdapter(BaseDiveAdapter):
     def __init__(self, username: str, password: str, token_dir: str = "tokens/garmin", cooldown_seconds: float = 1.0):

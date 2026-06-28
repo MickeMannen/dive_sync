@@ -9,7 +9,7 @@ import requests
 from src.core.adapter import BaseDiveAdapter
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
-logger = logging.getLogger("anti_gravity.divelogs")
+logger = logging.getLogger("dive_sync.divelogs")
 
 class DivelogsAdapter(BaseDiveAdapter):
     def __init__(self, username: str, password: str, cooldown_seconds: float = 1.0):

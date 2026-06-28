@@ -3,8 +3,8 @@ import json
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-SETTINGS_FILE = "settings.json"
-CREDENTIALS_FILE = "credentials.json"
+SETTINGS_FILE = os.path.join(os.environ.get("DATA_DIR", "."), "settings.json")
+CREDENTIALS_FILE = os.path.join(os.environ.get("DATA_DIR", "."), "credentials.json")
 
 class SyncFilters(BaseModel):
     date_from: Optional[str] = Field(None, description="Sync start date, format YYYY-MM-DD")
