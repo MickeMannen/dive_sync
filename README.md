@@ -9,6 +9,12 @@ There are most likely a lot of bugs so please use it carefully, I will use the d
 
 It features bidirectional syncing, detailed telemetry parsing (depth/temperature graphs and gas mixture sensors), an interactive web-based spreadsheet editor, and multi-account support.
 
+<p align="left">
+  <a href="https://skillicons.dev">
+    <img src="https://skillicons.dev/icons?i=python,fastapi,js,html,css,docker,bash,git,gemini,claude" alt="Tech Stack" />
+  </a>
+</p>
+
 ---
 
 ## 🚀 Key Features
