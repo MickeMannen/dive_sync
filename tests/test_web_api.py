@@ -228,6 +228,8 @@ def test_credentials_api(tmp_path, monkeypatch):
     assert res.json()["divelogs_configured"] is True
     assert res.json()["garmin_username"] == "test@garmin.com"
     assert res.json()["divelogs_username"] == "test_divelogs"
+    assert res.json()["garmin_accounts"] == ["test@garmin.com"]
+    assert res.json()["divelogs_accounts"] == ["test_divelogs"]
 
 def test_credentials_test_api(monkeypatch):
     client = TestClient(app)

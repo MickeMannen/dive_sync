@@ -163,12 +163,17 @@ def get_credentials_status():
     creds = ConfigManager.load_credentials()
     garmin_accounts = creds.get_garmin_accounts()
     divelogs_accounts = creds.get_divelogs_accounts()
+    garmin_users = [acc.username for acc in garmin_accounts if acc.username]
+    divelogs_users = [acc.username for acc in divelogs_accounts if acc.username]
     return {
-        "garmin_configured": len(garmin_accounts) > 0 and bool(garmin_accounts[0].username),
-        "divelogs_configured": len(divelogs_accounts) > 0 and bool(divelogs_accounts[0].username),
-        "garmin_username": garmin_accounts[0].username if garmin_accounts else "",
-        "divelogs_username": divelogs_accounts[0].username if divelogs_accounts else ""
+        "garmin_configured": len(garmin_users) > 0,
+        "divelogs_configured": len(divelogs_users) > 0,
+        "garmin_username": garmin_users[0] if garmin_users else "",
+        "divelogs_username": divelogs_users[0] if divelogs_users else "",
+        "garmin_accounts": garmin_users,
+        "divelogs_accounts": divelogs_users
     }
+
 
 @app.post("/api/credentials")
 def save_credentials(data: CredentialsSchema):

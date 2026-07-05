@@ -124,9 +124,9 @@ python sync.py --backup --garmin-path my_garmin.json --divelogs-path my_divelogs
 
 The application is fully containerized. You can run the web dashboard server in background mode, mount a local volume for configurations/session persistence, and select a port:
 
-### 1. Build the Image
+### 1. Pull Pre-built Image from Docker Hub
 ```bash
-docker build -t mickemannen/dive_sync:latest .
+docker pull mickemannen/dive_sync:latest
 ```
 
 ### 2. Run the Container
@@ -142,6 +142,17 @@ docker run -d \
 The container exposes:
 - **Dashboard UI**: available at `http://localhost:8080`
 - **Volume Mount**: `/app/data/` (contains `settings.json`, `credentials.json`, `tokens/`, `garmin/`, and `divelogs/`)
+
+### 3. Automated Docker Hub Builds on Release (GitHub Actions)
+An automated GitHub Actions workflow (`.github/workflows/docker-release.yml`) builds and publishes updated multi-architecture images (`linux/amd64`, `linux/arm64`) to Docker Hub whenever a new GitHub Release is published or a version tag (e.g., `v1.0.0`) is pushed.
+
+#### Required GitHub Secrets:
+Set the following secrets in your GitHub repository (**Settings ➔ Secrets and variables ➔ Actions**):
+- `DOCKERHUB_USERNAME`: Your Docker Hub username (`mickemannen`)
+- `DOCKERHUB_TOKEN`: A Personal Access Token (PAT) generated in Docker Hub (**Account Settings ➔ Security ➔ Personal access tokens**)
+
+#### Updating the Docker Hub Overview Page:
+The GitHub workflow automatically syncs [`DOCKERHUB.md`](DOCKERHUB.md) to your Docker Hub repository description overview page (`hub.docker.com/r/mickemannen/dive_sync`) on every release.
 
 ---
 

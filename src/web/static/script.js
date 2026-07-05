@@ -50,21 +50,38 @@ document.addEventListener("DOMContentLoaded", () => {
             const response = await fetch("/api/credentials/status");
             const status = await response.json();
             
-            updateCredentialBadge(garminStatusEl, status.garmin_configured);
-            updateCredentialBadge(divelogsStatusEl, status.divelogs_configured);
+            updateCredentialBadge(
+                garminStatusEl,
+                status.garmin_configured,
+                status.garmin_username,
+                status.garmin_accounts
+            );
+            updateCredentialBadge(
+                divelogsStatusEl,
+                status.divelogs_configured,
+                status.divelogs_username,
+                status.divelogs_accounts
+            );
         } catch (err) {
             appendLogLine(`[ERROR] Failed to fetch credential status: ${err.message}`, "error");
         }
     }
 
-    function updateCredentialBadge(element, configured) {
+    function updateCredentialBadge(element, configured, username = "", accounts = []) {
+        if (!element) return;
         const badge = element.querySelector(".badge");
         const stateText = element.querySelector(".service-state");
         
         if (configured) {
             badge.className = "badge green";
             badge.textContent = "Active";
-            stateText.textContent = "Credentials loaded and ready.";
+            if (accounts && accounts.length > 1) {
+                stateText.innerHTML = `Account: <span style="color: var(--color-text-main, #f8fafc); font-weight: 500;">${escapeHtml(accounts.join(", "))}</span>`;
+            } else if (username) {
+                stateText.innerHTML = `Account: <span style="color: var(--color-text-main, #f8fafc); font-weight: 500;">${escapeHtml(username)}</span>`;
+            } else {
+                stateText.textContent = "Credentials loaded and ready.";
+            }
         } else {
             badge.className = "badge red";
             badge.textContent = "Unconfigured";
