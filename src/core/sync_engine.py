@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Tuple, Dict, Any, Optional
 
-from src.core.config import ConfigManager, SettingsModel, CredentialsModel
+from src.core.config import ConfigManager, SettingsModel, CredentialsModel, GarminCredentials, DivelogsCredentials
 from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
 from src.core.models import UnifiedDive
@@ -102,15 +102,13 @@ class SyncEngine:
 
     @property
     def garmin_dir_name(self) -> str:
-        garmin_accounts = self.credentials.get_garmin_accounts()
-        if len(garmin_accounts) > 1:
+        if self.garmin_username:
             return os.path.join("garmin", self.garmin_username)
         return "garmin"
 
     @property
     def divelogs_dir_name(self) -> str:
-        divelogs_accounts = self.credentials.get_divelogs_accounts()
-        if len(divelogs_accounts) > 1:
+        if self.divelogs_username:
             return os.path.join("divelogs", self.divelogs_username)
         return "divelogs"
 

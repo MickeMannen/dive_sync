@@ -238,18 +238,18 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
     
     # Run the downloader with overwrite=True and a leftover file
     mock_data_dir = str(tmp_path)
-    garmin_leftover = os.path.join(mock_data_dir, "garmin", "999.json")
+    garmin_leftover = os.path.join(mock_data_dir, "garmin", "test_user@garmin", "999.json")
     os.makedirs(os.path.dirname(garmin_leftover), exist_ok=True)
     with open(garmin_leftover, "w") as f:
         f.write("{}")
- 
+
     success = engine.download_and_save_raw_data(mock_data_dir=mock_data_dir, overwrite=True)
     
     assert success
     assert not os.path.exists(garmin_leftover)
     
     # Verify Garmin raw file
-    garmin_file = os.path.join(mock_data_dir, "garmin", "10.json")
+    garmin_file = os.path.join(mock_data_dir, "garmin", "test_user@garmin", "10.json")
     assert os.path.exists(garmin_file)
     with open(garmin_file, "r") as f:
         data = json.load(f)
@@ -259,7 +259,7 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
         assert data["tanksensor"]["sensorData"] == "mock_tanksensor_data"
         
     # Verify Divelogs raw file
-    divelogs_file = os.path.join(mock_data_dir, "divelogs", "12.json")
+    divelogs_file = os.path.join(mock_data_dir, "divelogs", "test_user_divelogs", "12.json")
     assert os.path.exists(divelogs_file)
     with open(divelogs_file, "r") as f:
         data = json.load(f)

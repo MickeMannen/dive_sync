@@ -1224,3 +1224,70 @@ input:checked + .slider:before {
     font-size: 0.8rem;
     color: #a5f3fc;
 }
+
+/* CREDENTIALS MODAL */
+.creds-section {
+    margin-bottom: 1.75rem;
+}
+
+.creds-section:last-of-type {
+    margin-bottom: 1.5rem;
+}
+
+.creds-section-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--color-primary);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.creds-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+}
+
+.creds-actions .btn {
+    flex: 1;
+}
+
+.creds-test-results {
+    margin-top: 1.25rem;
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.85rem;
+    line-height: 1.6;
+}
+
+.creds-test-results.hidden {
+    display: none;
+}
+
+.creds-result-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+}
+
+.creds-result-line .result-icon {
+    font-size: 1rem;
+}
+
+.creds-result-line.success {
+    color: var(--color-success);
+}
+
+.creds-result-line.failure {
+    color: var(--color-danger);
+}
+
+.creds-result-line.skipped {
+    color: var(--color-text-subtle);
+}

@@ -68,7 +68,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
             badge.className = "badge red";
             badge.textContent = "Unconfigured";
-            stateText.textContent = "Run setup.py to configure.";
+            stateText.textContent = "Click Configure to set up.";
         }
     }
 
@@ -900,4 +900,120 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Periodically poll credentials status & active sync state
     setInterval(loadCredentialsStatus, 10000);
+
+    // ===== CREDENTIALS MODAL =====
+    const credsModal = document.getElementById("credentials-modal");
+    const credsForm = document.getElementById("credentials-form");
+    const configureCredsBtn = document.getElementById("configure-creds-btn");
+    const credsModalCloseBtn = document.getElementById("creds-modal-close-btn");
+    const testCredsBtn = document.getElementById("test-creds-btn");
+    const credsTestResults = document.getElementById("creds-test-results");
+
+    function openCredsModal() {
+        credsModal.classList.remove("hidden");
+        credsTestResults.classList.add("hidden");
+        fetch("/api/credentials/status")
+            .then(r => r.json())
+            .then(status => {
+                if (status.garmin_username) {
+                    document.getElementById("cred-garmin-user").value = status.garmin_username;
+                }
+                if (status.divelogs_username) {
+                    document.getElementById("cred-divelogs-user").value = status.divelogs_username;
+                }
+            })
+            .catch(() => {});
+    }
+
+    function closeCredsModal() {
+        credsModal.classList.add("hidden");
+    }
+
+    configureCredsBtn.addEventListener("click", openCredsModal);
+    credsModalCloseBtn.addEventListener("click", closeCredsModal);
+    credsModal.addEventListener("click", (e) => {
+        if (e.target === credsModal) closeCredsModal();
+    });
+
+    function getCredsPayload() {
+        return {
+            garmin_username: document.getElementById("cred-garmin-user").value.trim(),
+            garmin_password: document.getElementById("cred-garmin-pass").value.trim(),
+            garmin_token_dir: "tokens/garmin",
+            divelogs_username: document.getElementById("cred-divelogs-user").value.trim(),
+            divelogs_password: document.getElementById("cred-divelogs-pass").value.trim()
+        };
+    }
+
+    testCredsBtn.addEventListener("click", async () => {
+        const payload = getCredsPayload();
+        testCredsBtn.disabled = true;
+        testCredsBtn.textContent = "Testing...";
+        credsTestResults.classList.remove("hidden");
+        credsTestResults.innerHTML = '<div class="creds-result-line skipped"><span>⏳ Testing connections...</span></div>';
+
+        try {
+            const response = await fetch("/api/credentials/test", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const results = await response.json();
+            let html = "";
+
+            if (results.garmin === true) {
+                html += '<div class="creds-result-line success"><span class="result-icon">✓</span> Garmin Connect authentication succeeded</div>';
+            } else if (results.garmin === false) {
+                html += '<div class="creds-result-line failure"><span class="result-icon">✗</span> Garmin Connect authentication failed</div>';
+            } else {
+                html += '<div class="creds-result-line skipped"><span class="result-icon">—</span> Garmin Connect skipped (no credentials)</div>';
+            }
+
+            if (results.divelogs === true) {
+                html += '<div class="creds-result-line success"><span class="result-icon">✓</span> Divelogs.org authentication succeeded</div>';
+            } else if (results.divelogs === false) {
+                html += '<div class="creds-result-line failure"><span class="result-icon">✗</span> Divelogs.org authentication failed</div>';
+            } else {
+                html += '<div class="creds-result-line skipped"><span class="result-icon">—</span> Divelogs.org skipped (no credentials)</div>';
+            }
+
+            credsTestResults.innerHTML = html;
+        } catch (err) {
+            credsTestResults.innerHTML = '<div class="creds-result-line failure"><span class="result-icon">✗</span> Test request failed: ' + err.message + '</div>';
+        } finally {
+            testCredsBtn.disabled = false;
+            testCredsBtn.textContent = "Test Connection";
+        }
+    });
+
+    credsForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const payload = getCredsPayload();
+        const saveBtn = document.getElementById("save-creds-btn");
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving...";
+
+        try {
+            const response = await fetch("/api/credentials", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+                appendLogLine("[SYSTEM] Credentials saved successfully via web dashboard.", "system-msg");
+                closeCredsModal();
+                loadCredentialsStatus();
+            } else {
+                const errData = await response.json();
+                throw new Error(errData.detail || "Failed to save credentials.");
+            }
+        } catch (err) {
+            appendLogLine(`[ERROR] Failed to save credentials: ${err.message}`, "error");
+            alert("Failed to save credentials: " + err.message);
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = "Save Credentials";
+        }
+    });
 });

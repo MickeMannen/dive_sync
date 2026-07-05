@@ -8,12 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set workspace
 WORKDIR /app
 
-# Copy requirements and setup utility
-COPY requirements.txt setup.py ./
-RUN pip install --no-cache-dir -r requirements.txt && pip install -e .
+# Copy requirements and install dependencies
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy sources
+# Copy sources and utilities
 COPY src/ ./src/
+COPY setup_credentials.py ./
 COPY docker_run.py ./
 COPY sync.py ./
 

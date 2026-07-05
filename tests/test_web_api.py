@@ -185,3 +185,67 @@ def test_get_raw_dive(mock_dirs):
     assert response.status_code == 200
     data = response.json()
     assert data["summary"]["activityId"] == "10001"
+
+def test_credentials_api(tmp_path, monkeypatch):
+    client = TestClient(app)
+    creds_file = str(tmp_path / "credentials.json")
+    
+    import src.core.config
+    monkeypatch.setattr(src.core.config, "CREDENTIALS_FILE", creds_file)
+    
+    # Save empty credentials
+    empty_creds = src.core.config.CredentialsModel()
+    src.core.config.ConfigManager.save_credentials(empty_creds, creds_file)
+    
+    # Patch load_credentials default path or method
+    original_load = src.core.config.ConfigManager.load_credentials
+    original_save = src.core.config.ConfigManager.save_credentials
+    monkeypatch.setattr(src.core.config.ConfigManager, "load_credentials", lambda path=creds_file: original_load(creds_file))
+    monkeypatch.setattr(src.core.config.ConfigManager, "save_credentials", lambda creds, path=creds_file: original_save(creds, creds_file))
+
+    # Get initial status
+    res = client.get("/api/credentials/status")
+    assert res.status_code == 200
+    assert res.json()["garmin_configured"] is False
+    assert res.json()["divelogs_configured"] is False
+    
+    # Save credentials
+    save_payload = {
+        "garmin_username": "test@garmin.com",
+        "garmin_password": "garminpassword",
+        "garmin_token_dir": "tokens/garmin",
+        "divelogs_username": "test_divelogs",
+        "divelogs_password": "divelogspassword"
+    }
+    res = client.post("/api/credentials", json=save_payload)
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    
+    # Check status after saving
+    res = client.get("/api/credentials/status")
+    assert res.status_code == 200
+    assert res.json()["garmin_configured"] is True
+    assert res.json()["divelogs_configured"] is True
+    assert res.json()["garmin_username"] == "test@garmin.com"
+    assert res.json()["divelogs_username"] == "test_divelogs"
+
+def test_credentials_test_api(monkeypatch):
+    client = TestClient(app)
+    
+    from src.core.services.garmin import GarminAdapter
+    from src.core.services.divelogs import DivelogsAdapter
+    
+    monkeypatch.setattr(GarminAdapter, "login", lambda self: True)
+    monkeypatch.setattr(DivelogsAdapter, "login", lambda self: True)
+    
+    payload = {
+        "garmin_username": "user",
+        "garmin_password": "pass",
+        "divelogs_username": "user",
+        "divelogs_password": "pass"
+    }
+    res = client.post("/api/credentials/test", json=payload)
+    assert res.status_code == 200
+    assert res.json()["garmin"] is True
+    assert res.json()["divelogs"] is True
+

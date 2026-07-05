@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot
+from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, CredentialsModel
 from src.core.sync_engine import SyncEngine
 
 # Configure logger
@@ -119,6 +119,13 @@ class SettingsSchema(BaseModel):
     api_cooldown_seconds: float
     schedule: List[Dict[str, int]]
 
+class CredentialsSchema(BaseModel):
+    garmin_username: str = ""
+    garmin_password: str = ""
+    garmin_token_dir: str = "tokens/garmin"
+    divelogs_username: str = ""
+    divelogs_password: str = ""
+
 @app.get("/api/settings")
 def get_settings():
     settings = ConfigManager.load_settings()
@@ -154,10 +161,68 @@ def save_settings(data: SettingsSchema):
 @app.get("/api/credentials/status")
 def get_credentials_status():
     creds = ConfigManager.load_credentials()
+    garmin_accounts = creds.get_garmin_accounts()
+    divelogs_accounts = creds.get_divelogs_accounts()
     return {
-        "garmin_configured": bool(creds.garmin.username and creds.garmin.password),
-        "divelogs_configured": bool(creds.divelogs.username and creds.divelogs.password)
+        "garmin_configured": len(garmin_accounts) > 0 and bool(garmin_accounts[0].username),
+        "divelogs_configured": len(divelogs_accounts) > 0 and bool(divelogs_accounts[0].username),
+        "garmin_username": garmin_accounts[0].username if garmin_accounts else "",
+        "divelogs_username": divelogs_accounts[0].username if divelogs_accounts else ""
     }
+
+@app.post("/api/credentials")
+def save_credentials(data: CredentialsSchema):
+    try:
+        creds = CredentialsModel(
+            garmin=GarminCredentials(
+                username=data.garmin_username,
+                password=data.garmin_password,
+                token_dir=data.garmin_token_dir
+            ),
+            divelogs=DivelogsCredentials(
+                username=data.divelogs_username,
+                password=data.divelogs_password
+            )
+        )
+        ConfigManager.save_credentials(creds)
+        logger.info("Credentials updated via web dashboard.")
+        return {"status": "success", "message": "Credentials saved successfully."}
+    except Exception as e:
+        logger.error("Failed to save credentials: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/credentials/test")
+def test_credentials(data: CredentialsSchema):
+    results = {"garmin": None, "divelogs": None}
+    
+    if data.garmin_username and data.garmin_password:
+        try:
+            from src.core.services.garmin import GarminAdapter
+            adapter = GarminAdapter(
+                username=data.garmin_username,
+                password=data.garmin_password,
+                token_dir=data.garmin_token_dir,
+                cooldown_seconds=1.0
+            )
+            results["garmin"] = adapter.login()
+        except Exception as e:
+            logger.error("Garmin credential test failed: %s", e)
+            results["garmin"] = False
+    
+    if data.divelogs_username and data.divelogs_password:
+        try:
+            from src.core.services.divelogs import DivelogsAdapter
+            adapter = DivelogsAdapter(
+                username=data.divelogs_username,
+                password=data.divelogs_password,
+                cooldown_seconds=1.0
+            )
+            results["divelogs"] = adapter.login()
+        except Exception as e:
+            logger.error("Divelogs credential test failed: %s", e)
+            results["divelogs"] = False
+    
+    return results
 
 @app.post("/api/sync/trigger")
 def trigger_sync(dry_run: bool = Query(False)):
