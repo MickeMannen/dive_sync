@@ -2,6 +2,9 @@
 
 **Dive Sync** is an automated dive log synchronization engine and web dashboard that seamlessly matches and syncs dive logs between **Garmin Connect** and **Divelogs.org**.
 
+# THIS IS STILL IN EARLY BETA - BE CAREFUL
+
+
 GitHub Repository: [github.com/MickeMannen/dive_sync](https://github.com/MickeMannen/dive_sync)
 
 ---

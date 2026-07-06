@@ -1,6 +1,10 @@
-# Dive Sync 🤿✨
+# Dive Sync 🤿✨ 
 
-Dive Sync is a robust dive log synchronization engine and web dashboard that seamlessly matches and syncs your dive history between **Garmin Connect** and **Divelogs.org**. 
+# Solution is still in Beta!!!!!
+## I have mainly tested Garmin sync to Divelogs and not the other direction - be careful and keep a backup!
+
+
+Dive Sync is a dive log synchronization engine and web dashboard that seamlessly matches and syncs your dive history between **Garmin Connect** and **Divelogs.org**. 
 
 I started this project when i got back to diving and had to import all dives from logbooks to Garmin and to Divelogs.
 I managed to make the import but the stability of the code wasn't good enough for release. Because of lack of time I didnt continue but with Gemini I saw the opportunity to finalize the project.
