@@ -8,6 +8,7 @@ class GasMixture(BaseModel):
     start_pressure: Optional[float] = Field(None, description="Starting pressure in bar")
     end_pressure: Optional[float] = Field(None, description="Ending pressure in bar")
     tank_volume: Optional[float] = Field(None, description="Tank volume in liters")
+    tank_name: Optional[str] = Field(None, description="Custom name of the tank/cylinder")
 
 class UnifiedSample(BaseModel):
     depth: float = Field(..., description="Depth in meters")

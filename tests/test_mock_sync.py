@@ -5,6 +5,8 @@ import pytest
 from src.core.sync_engine import SyncEngine
 from src.core.models import UnifiedDive, GasMixture
 
+TEST_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
 def test_mock_sync_offline_mode(tmp_path):
     # Set up mock data directory structure
     mock_data_dir = str(tmp_path)
@@ -335,8 +337,8 @@ class TestSync:
         os.makedirs(garmin_dest, exist_ok=True)
         os.makedirs(divelogs_dest, exist_ok=True)
 
-        real_garmin_dir = "./tests/garmin"
-        real_divelogs_dir = "./tests/divelogs"
+        real_garmin_dir = os.path.join(TEST_DATA_DIR, "garmin")
+        real_divelogs_dir = os.path.join(TEST_DATA_DIR, "divelogs")
 
         import shutil
         for num in dive_numbers:
@@ -372,7 +374,7 @@ class TestSync:
         return path
 
     def test_bidirectional_sync_with_modifications(self, tmp_path):
-        if not os.path.exists("./tests/garmin/502.json") or not os.path.exists("./tests/divelogs/488.json"):
+        if not os.path.exists(os.path.join(TEST_DATA_DIR, "garmin", "502.json")) or not os.path.exists(os.path.join(TEST_DATA_DIR, "divelogs", "488.json")):
             pytest.skip("Real downloaded mock files 488.json and/or 502.json are not present on disk.")
 
         # Setup: Dive 502 only in Garmin (modified), Dive 488 only in Divelogs (modified)
@@ -432,7 +434,7 @@ class TestSync:
         assert g488_created["summary"]["description"] == "Modified Divelogs notes for 488"
 
     def test_to_garmin_directionality(self, tmp_path):
-        if not os.path.exists("./tests/garmin/502.json") or not os.path.exists("./tests/divelogs/488.json"):
+        if not os.path.exists(os.path.join(TEST_DATA_DIR, "garmin", "502.json")) or not os.path.exists(os.path.join(TEST_DATA_DIR, "divelogs", "488.json")):
             pytest.skip("Real downloaded mock files 488.json and/or 502.json are not present on disk.")
 
         # Setup: Dive 502 in Divelogs (modified), Garmin directory empty for 502
@@ -466,7 +468,7 @@ class TestSync:
         assert not os.path.exists(os.path.join(mock_dir, "divelogs", "488.json"))
 
     def test_to_divelogs_directionality(self, tmp_path):
-        if not os.path.exists("./tests/garmin/502.json") or not os.path.exists("./tests/divelogs/488.json"):
+        if not os.path.exists(os.path.join(TEST_DATA_DIR, "garmin", "502.json")) or not os.path.exists(os.path.join(TEST_DATA_DIR, "divelogs", "488.json")):
             pytest.skip("Real downloaded mock files 488.json and/or 502.json are not present on disk.")
 
         # Setup: Dive 502 in Garmin (modified), Divelogs directory empty for 502
@@ -532,7 +534,7 @@ class TestSync:
         assert dive.gas_mixtures[1].tank_volume == 10.0
 
     def test_run_sync_direction_override(self, tmp_path):
-        if not os.path.exists("./tests/garmin/502.json") or not os.path.exists("./tests/divelogs/488.json"):
+        if not os.path.exists(os.path.join(TEST_DATA_DIR, "garmin", "502.json")) or not os.path.exists(os.path.join(TEST_DATA_DIR, "divelogs", "488.json")):
             pytest.skip("Real downloaded mock files 488.json and/or 502.json are not present on disk.")
 
         # Setup: Garmin has dive 502, Divelogs is empty

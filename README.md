@@ -184,5 +184,11 @@ Run all unit, mock, and API tests to verify execution logic:
 
 ---
 
+## ⚠️ Limitations
+
+- **Gas/Tank Data Syncing (Divelogs → Garmin)**: Synchronization of gas mixtures and tank data from Divelogs.org to Garmin Connect is not supported during updates of matched dives. Garmin's native dive gas structures are complex, and direct updates from external platforms are restricted to maintain data integrity on Garmin Connect.
+
+---
+
 ## 📄 License
 This project is open-source. See license files for details.

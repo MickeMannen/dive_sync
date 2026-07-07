@@ -3,7 +3,7 @@
   "sync_filters": {
     "date_from": null,
     "date_to": null,
-    "only_new": true,
+    "only_new": false,
     "sync_gases": true,
     "sync_fit": false
   },

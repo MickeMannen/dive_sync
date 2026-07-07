@@ -474,6 +474,177 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!res.ok) throw new Error("Failed to load raw JSON.");
             const rawData = await res.json();
             modalRawJson.textContent = JSON.stringify(rawData, null, 2);
+            
+            // Extract tanks & gases data from raw JSON
+            let tanks = [];
+            if (service === "garmin") {
+                const info = (rawData.details && rawData.details.diveInfo) || (rawData.summary && rawData.summary.diveInfo) || {};
+                const diveGases = info.diveGases || [];
+                const tankSensors = (rawData.tanksensor && rawData.tanksensor.tankSensors) || [];
+                
+                tanks = diveGases.map((gas, idx) => {
+                    const o2 = gas.oxygenContent || 21;
+                    const he = gas.heliumContent || 0;
+                    
+                    let startP = gas.tankStartingPressure;
+                    let endP = gas.tankEndingPressure;
+                    let size = gas.tankSize;
+                    let volUsed = null;
+                    let name = `Tank #${idx + 1}`;
+                    let unitPressure = "bar";
+                    let unitSize = "L";
+                    
+                    // Match with tank sensor data by index or gasIndex
+                    const sensor = tankSensors.find(s => s.tankIndex === idx || s.tankIndex === gas.gasIndex);
+                    if (sensor) {
+                        if (sensor.name) name = sensor.name;
+                        if (sensor.startingPressure !== undefined && sensor.startingPressure !== null) {
+                            startP = sensor.startingPressure;
+                        }
+                        if (sensor.endingPressure !== undefined && sensor.endingPressure !== null) {
+                            endP = sensor.endingPressure;
+                        }
+                        if (sensor.volumeUsed !== undefined && sensor.volumeUsed !== null) {
+                            volUsed = sensor.volumeUsed;
+                        }
+                        if (sensor.pressureUnit) {
+                            unitPressure = sensor.pressureUnit.toLowerCase();
+                        }
+                    }
+                    
+                    return {
+                        name: name,
+                        o2: o2,
+                        he: he,
+                        startPressure: startP,
+                        endPressure: endP,
+                        size: size,
+                        volumeUsed: volUsed,
+                        unitPressure: unitPressure,
+                        unitSize: unitSize
+                    };
+                });
+                
+                // Fallback to tankSensors if no diveGases are listed but telemetry exists
+                if (tanks.length === 0 && tankSensors.length > 0) {
+                    tanks = tankSensors.map((sensor, idx) => {
+                        const unitPressure = (sensor.pressureUnit || "bar").toLowerCase();
+                        return {
+                            name: sensor.name || `Tank #${idx + 1}`,
+                            o2: 21,
+                            he: 0,
+                            startPressure: sensor.startingPressure,
+                            endPressure: sensor.endingPressure,
+                            size: null,
+                            volumeUsed: sensor.volumeUsed,
+                            unitPressure: unitPressure,
+                            unitSize: "L"
+                        };
+                    });
+                }
+            } else if (service === "divelogs") {
+                const rawTanks = rawData.tanks || [];
+                tanks = rawTanks.map((tank, idx) => {
+                    const o2 = tank.o2 || 21;
+                    const he = tank.he || 0;
+                    const startP = tank.start_pressure;
+                    const endP = tank.end_pressure;
+                    const size = tank.vol;
+                    
+                    const isPsi = (startP > 500 || endP > 500);
+                    
+                    return {
+                        name: `Tank #${idx + 1}`,
+                        o2: o2,
+                        he: he,
+                        startPressure: startP,
+                        endPressure: endP,
+                        size: size,
+                        volumeUsed: null,
+                        unitPressure: isPsi ? "psi" : "bar",
+                        unitSize: isPsi ? "cu ft" : "L"
+                    };
+                });
+            }
+            
+            if (tanks.length > 0) {
+                let tanksHtml = `
+                    <div class="modal-section-divider"></div>
+                    <h3 class="modal-section-title">🛡️ Tanks & Gases</h3>
+                    <div class="tanks-container">
+                `;
+                
+                tanks.forEach(tank => {
+                    let gasType = "Air";
+                    if (tank.he > 0) {
+                        gasType = `Trimix (${Math.round(tank.o2)}/${Math.round(tank.he)})`;
+                    } else if (tank.o2 > 21.5) {
+                        gasType = `Nitrox (${Math.round(tank.o2)}%)`;
+                    } else if (tank.o2 >= 99) {
+                        gasType = "Oxygen (100%)";
+                    }
+                    
+                    let pressureStr = "N/A";
+                    if (tank.startPressure !== undefined && tank.startPressure !== null) {
+                        pressureStr = `${Math.round(tank.startPressure)}`;
+                        if (tank.endPressure !== undefined && tank.endPressure !== null) {
+                            pressureStr += ` → ${Math.round(tank.endPressure)} ${tank.unitPressure}`;
+                        } else {
+                            pressureStr += ` ${tank.unitPressure}`;
+                        }
+                    }
+                    
+                    let sizeStr = "N/A";
+                    if (tank.size !== undefined && tank.size !== null) {
+                        sizeStr = `${tank.size} ${tank.unitSize}`;
+                    }
+                    
+                    let volUsedStr = "N/A";
+                    if (tank.volumeUsed !== undefined && tank.volumeUsed !== null) {
+                        volUsedStr = `${Math.round(tank.volumeUsed)} ${tank.unitSize}`;
+                    } else if (tank.startPressure !== undefined && tank.startPressure !== null &&
+                        tank.endPressure !== undefined && tank.endPressure !== null &&
+                        tank.size !== undefined && tank.size !== null) {
+                        
+                        const pDiff = tank.startPressure - tank.endPressure;
+                        if (pDiff >= 0) {
+                            if (tank.unitPressure === "psi") {
+                                const cuftUsed = (pDiff / 3000) * tank.size;
+                                volUsedStr = `${cuftUsed.toFixed(1)} cu ft`;
+                            } else {
+                                const litersUsed = pDiff * tank.size;
+                                volUsedStr = `${Math.round(litersUsed)} L`;
+                            }
+                        }
+                    }
+                    
+                    tanksHtml += `
+                        <div class="tank-card">
+                            <div class="tank-header">
+                                <span class="tank-name">${tank.name}</span>
+                                <span class="gas-type-badge ${tank.o2 > 21.5 || tank.he > 0 ? 'nitrox' : 'air'}">${gasType}</span>
+                            </div>
+                            <div class="tank-details-row">
+                                <div class="tank-detail-subitem">
+                                    <span class="tank-sublabel">Pressure (Start/End)</span>
+                                    <span class="tank-subvalue">${pressureStr}</span>
+                                </div>
+                                <div class="tank-detail-subitem">
+                                    <span class="tank-sublabel">Tank Size</span>
+                                    <span class="tank-subvalue">${sizeStr}</span>
+                                </div>
+                                <div class="tank-detail-subitem">
+                                    <span class="tank-sublabel">Volume Used</span>
+                                    <span class="tank-subvalue highlighted-val">${volUsedStr}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                tanksHtml += `</div>`;
+                modalContentFancy.innerHTML += tanksHtml;
+            }
         } catch (err) {
             modalRawJson.textContent = `Error loading raw JSON: ${err.message}`;
         }
@@ -929,6 +1100,8 @@ document.addEventListener("DOMContentLoaded", () => {
     function openCredsModal() {
         credsModal.classList.remove("hidden");
         credsTestResults.classList.add("hidden");
+        document.getElementById("cred-garmin-pass").value = "";
+        document.getElementById("cred-divelogs-pass").value = "";
         fetch("/api/credentials/status")
             .then(r => r.json())
             .then(status => {

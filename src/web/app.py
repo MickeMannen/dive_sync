@@ -19,6 +19,17 @@ from src.core.sync_engine import SyncEngine
 logger = logging.getLogger("dive_sync.web")
 logger.setLevel(logging.INFO)
 
+def get_data_directories() -> List[str]:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+    test_data_dir = os.path.join(project_root, "tests", "data")
+    
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return [test_data_dir]
+        
+    primary = os.environ.get("DATA_DIR", "./data")
+    return [primary, test_data_dir]
+
 # SSE Queue for log streaming
 sse_log_queue = queue.Queue()
 
@@ -280,7 +291,7 @@ def get_cached_dives(garmin_username: Optional[str] = None, divelogs_username: O
     divelogs_dives = []
     
     # Check paths
-    base_dirs = ["./data", "./tests"]
+    base_dirs = get_data_directories()
     
     from src.core.config import ConfigManager
     try:
@@ -318,61 +329,69 @@ def get_cached_dives(garmin_username: Optional[str] = None, divelogs_username: O
             
     if garmin_dir:
         import json
-        for filename in os.listdir(garmin_dir):
-            if filename.endswith(".json") and filename != "sync_state.json" and not os.path.isdir(os.path.join(garmin_dir, filename)):
-                filepath = os.path.join(garmin_dir, filename)
-                try:
-                    with open(filepath, "r") as f:
-                        data = json.load(f)
+        files_to_process = []
+        for name in os.listdir(garmin_dir):
+            path_name = os.path.join(garmin_dir, name)
+            if os.path.isdir(path_name):
+                for subname in os.listdir(path_name):
+                    if subname.endswith(".json") and subname != "sync_state.json":
+                        files_to_process.append((subname, os.path.join(path_name, subname)))
+            elif name.endswith(".json") and name != "sync_state.json":
+                files_to_process.append((name, path_name))
+                
+        for filename, filepath in files_to_process:
+            try:
+                with open(filepath, "r") as f:
+                    data = json.load(f)
+                
+                summary = data.get("summary", {})
+                details = data.get("details") or {}
+                if not isinstance(details, dict):
+                    details = {}
+                
+                # Parse essential information
+                sum_dto = details.get("summaryDTO", {}) or summary.get("summaryDTO", {}) or {}
+                metadata = details.get("metadataDTO", {}) or summary.get("metadataDTO", {}) or {}
+                
+                dive_num = metadata.get("diveNumber") or filename.replace(".json", "")
+                date_time = sum_dto.get("startTimeLocal") or summary.get("startTimeLocal") or ""
+                duration = sum_dto.get("duration") or summary.get("duration") or 0
+                max_depth = sum_dto.get("maxDepth") or summary.get("maxDepth") or 0.0
+                location = details.get("activityName") or summary.get("activityName") or ""
+                notes = details.get("description") or summary.get("description") or ""
+                
+                info = details.get("diveInfo") or summary.get("diveInfo") or {}
+                weight = info.get("weight")
+                weight_unit = info.get("weightUnit", {}).get("unitKey") if isinstance(info.get("weightUnit"), dict) else ""
+                visibility = info.get("visibility")
+                visibility_unit = info.get("visibilityUnit", {}).get("unitKey") if isinstance(info.get("visibilityUnit"), dict) else ""
+                buddy = info.get("buddy") or ""
+                
+                weight_str = ""
+                if weight is not None:
+                    w_unit = "kg" if "kilogram" in str(weight_unit).lower() else "lbs"
+                    weight_str = f"{weight:g} {w_unit}"
                     
-                    summary = data.get("summary", {})
-                    details = data.get("details") or {}
-                    if not isinstance(details, dict):
-                        details = {}
-                    
-                    # Parse essential information
-                    sum_dto = details.get("summaryDTO", {}) or summary.get("summaryDTO", {}) or {}
-                    metadata = details.get("metadataDTO", {}) or summary.get("metadataDTO", {}) or {}
-                    
-                    dive_num = metadata.get("diveNumber") or filename.replace(".json", "")
-                    date_time = sum_dto.get("startTimeLocal") or summary.get("startTimeLocal") or ""
-                    duration = sum_dto.get("duration") or summary.get("duration") or 0
-                    max_depth = sum_dto.get("maxDepth") or summary.get("maxDepth") or 0.0
-                    location = details.get("activityName") or summary.get("activityName") or ""
-                    notes = details.get("description") or summary.get("description") or ""
-                    
-                    info = details.get("diveInfo") or summary.get("diveInfo") or {}
-                    weight = info.get("weight")
-                    weight_unit = info.get("weightUnit", {}).get("unitKey") if isinstance(info.get("weightUnit"), dict) else ""
-                    visibility = info.get("visibility")
-                    visibility_unit = info.get("visibilityUnit", {}).get("unitKey") if isinstance(info.get("visibilityUnit"), dict) else ""
-                    buddy = info.get("buddy") or ""
-                    
-                    weight_str = ""
-                    if weight is not None:
-                        w_unit = "kg" if "kilogram" in str(weight_unit).lower() else "lbs"
-                        weight_str = f"{weight:g} {w_unit}"
-                        
-                    visibility_str = ""
-                    if visibility is not None:
-                        v_unit = "m" if "meter" in str(visibility_unit).lower() else "ft"
-                        visibility_str = f"{visibility:g} {v_unit}"
- 
-                    garmin_dives.append({
-                        "id": str(summary.get("activityId") or ""),
-                        "dive_number": dive_num,
-                        "date_time": date_time,
-                        "duration": duration,
-                        "max_depth": max_depth,
-                        "location": location,
-                        "notes": notes,
-                        "weight": weight_str,
-                        "visibility": visibility_str,
-                        "buddy": buddy,
-                        "filename": filename
-                    })
-                except Exception as e:
-                    logger.warning("Failed to parse cached Garmin dive file %s: %s", filename, e)
+                visibility_str = ""
+                if visibility is not None:
+                    v_unit = "m" if "meter" in str(visibility_unit).lower() else "ft"
+                    visibility_str = f"{visibility:g} {v_unit}"
+
+                garmin_dives.append({
+                    "id": str(summary.get("activityId") or ""),
+                    "dive_number": dive_num,
+                    "date_time": date_time,
+                    "duration": duration,
+                    "max_depth": max_depth,
+                    "location": location,
+                    "notes": notes,
+                    "weight": weight_str,
+                    "visibility": visibility_str,
+                    "buddy": buddy,
+                    "filename": filename
+                })
+            except Exception as e:
+                logger.warning("Failed to parse cached Garmin dive file %s: %s", filename, e)
                     
     # 2. Divelogs
     divelogs_dir = None
@@ -389,55 +408,63 @@ def get_cached_dives(garmin_username: Optional[str] = None, divelogs_username: O
             
     if divelogs_dir:
         import json
-        for filename in os.listdir(divelogs_dir):
-            if filename.endswith(".json") and filename != "sync_state.json" and not os.path.isdir(os.path.join(divelogs_dir, filename)):
-                filepath = os.path.join(divelogs_dir, filename)
-                try:
-                    with open(filepath, "r") as f:
-                        data = json.load(f)
-                    
-                    dive_num = data.get("divenumber") or filename.replace(".json", "")
-                    date = data.get("date") or ""
-                    time = data.get("time") or "00:00:00"
-                    
-                    garmin_id = data.get("garmin_id") or ""
-                    
-                    # Essential information
-                    location_parts = []
-                    if data.get("location"):
-                        location_parts.append(str(data["location"]))
-                    if data.get("divesite"):
-                        location_parts.append(str(data["divesite"]))
-                    location = ", ".join(location_parts) if location_parts else ""
-                    
-                    weights_val = data.get("weights")
-                    weight_str = ""
-                    if weights_val not in [None, "", 0]:
-                        try:
-                            w_num = float(weights_val)
-                            weight_str = f"{w_num:g}"
-                        except (ValueError, TypeError):
-                            weight_str = str(weights_val)
-                            
-                    visibility_str = str(data.get("visibility") or "")
-                    buddy = data.get("buddy") or ""
- 
-                    divelogs_dives.append({
-                        "id": str(data.get("id") or ""),
-                        "dive_number": dive_num,
-                        "date_time": f"{date} {time}",
-                        "duration": data.get("duration") or 0,
-                        "max_depth": data.get("maxdepth") or 0.0,
-                        "location": location,
-                        "notes": data.get("notes") or "",
-                        "garmin_id": garmin_id,
-                        "weight": weight_str,
-                        "visibility": visibility_str,
-                        "buddy": buddy,
-                        "filename": filename
-                    })
-                except Exception as e:
-                    logger.warning("Failed to parse cached Divelogs dive file %s: %s", filename, e)
+        files_to_process = []
+        for name in os.listdir(divelogs_dir):
+            path_name = os.path.join(divelogs_dir, name)
+            if os.path.isdir(path_name):
+                for subname in os.listdir(path_name):
+                    if subname.endswith(".json") and subname != "sync_state.json":
+                        files_to_process.append((subname, os.path.join(path_name, subname)))
+            elif name.endswith(".json") and name != "sync_state.json":
+                files_to_process.append((name, path_name))
+                
+        for filename, filepath in files_to_process:
+            try:
+                with open(filepath, "r") as f:
+                    data = json.load(f)
+                
+                dive_num = data.get("divenumber") or filename.replace(".json", "")
+                date = data.get("date") or ""
+                time = data.get("time") or "00:00:00"
+                
+                garmin_id = data.get("garmin_id") or ""
+                
+                # Essential information
+                location_parts = []
+                if data.get("location"):
+                    location_parts.append(str(data["location"]))
+                if data.get("divesite"):
+                    location_parts.append(str(data["divesite"]))
+                location = ", ".join(location_parts) if location_parts else ""
+                
+                weights_val = data.get("weights")
+                weight_str = ""
+                if weights_val not in [None, "", 0]:
+                    try:
+                        w_num = float(weights_val)
+                        weight_str = f"{w_num:g}"
+                    except (ValueError, TypeError):
+                        weight_str = str(weights_val)
+                        
+                visibility_str = str(data.get("visibility") or "")
+                buddy = data.get("buddy") or ""
+
+                divelogs_dives.append({
+                    "id": str(data.get("id") or ""),
+                    "dive_number": dive_num,
+                    "date_time": f"{date} {time}",
+                    "duration": data.get("duration") or 0,
+                    "max_depth": data.get("maxdepth") or 0.0,
+                    "location": location,
+                    "notes": data.get("notes") or "",
+                    "garmin_id": garmin_id,
+                    "weight": weight_str,
+                    "visibility": visibility_str,
+                    "buddy": buddy,
+                    "filename": filename
+                })
+            except Exception as e:
+                logger.warning("Failed to parse cached Divelogs dive file %s: %s", filename, e)
                     
     # Sort dives by date descending
     garmin_dives.sort(key=lambda x: x["date_time"], reverse=True)
@@ -476,7 +503,7 @@ def download_raw_dives(overwrite: bool = Query(True), garmin_user: Optional[str]
     if is_sync_running or is_download_running:
         raise HTTPException(status_code=409, detail="A synchronization or download job is already in progress.")
         
-    base_dir = "./data" if os.path.exists("./data") else "./tests"
+    base_dir = os.environ.get("DATA_DIR", "./data")
     threading.Thread(target=run_download_thread, args=(overwrite, base_dir, garmin_user, divelogs_user), daemon=True).start()
     return {"status": "success", "message": "Raw data download started in background."}
  
@@ -491,24 +518,31 @@ def get_download_status():
 @app.get("/api/dives/raw")
 def get_raw_dive(service: str, filename: str, username: Optional[str] = None):
     import json
-    base_dirs = ["./data", "./tests"]
-    found_dir = None
+    base_dirs = get_data_directories()
+    filepath = None
     for d in base_dirs:
         if username:
-            path = os.path.join(d, service, username)
+            path = os.path.join(d, service, username, filename)
             if os.path.exists(path):
-                found_dir = path
+                filepath = path
                 break
-        path = os.path.join(d, service)
+        path = os.path.join(d, service, filename)
         if os.path.exists(path):
-            found_dir = path
+            filepath = path
             break
-            
-    if not found_dir:
-        raise HTTPException(status_code=404, detail="Service directory not found.")
-        
-    filepath = os.path.join(found_dir, filename)
-    if not os.path.exists(filepath):
+        service_dir = os.path.join(d, service)
+        if os.path.exists(service_dir) and os.path.isdir(service_dir):
+            for sub in os.listdir(service_dir):
+                sub_path = os.path.join(service_dir, sub)
+                if os.path.isdir(sub_path):
+                    path = os.path.join(sub_path, filename)
+                    if os.path.exists(path):
+                        filepath = path
+                        break
+            if filepath:
+                break
+                
+    if not filepath or not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Dive file not found.")
         
     try:
@@ -646,24 +680,31 @@ class UpdateDiveSchema(BaseModel):
 @app.post("/api/dives/update")
 def update_dive_endpoint(data: UpdateDiveSchema):
     import json
-    base_dirs = ["./data", "./tests"]
-    found_dir = None
+    base_dirs = get_data_directories()
+    filepath = None
     for d in base_dirs:
         if data.username:
-            path = os.path.join(d, data.service, data.username)
+            path = os.path.join(d, data.service, data.username, data.filename)
             if os.path.exists(path):
-                found_dir = path
+                filepath = path
                 break
-        path = os.path.join(d, data.service)
+        path = os.path.join(d, data.service, data.filename)
         if os.path.exists(path):
-            found_dir = path
+            filepath = path
             break
-            
-    if not found_dir:
-        raise HTTPException(status_code=404, detail="Service directory not found.")
-        
-    filepath = os.path.join(found_dir, data.filename)
-    if not os.path.exists(filepath):
+        service_dir = os.path.join(d, data.service)
+        if os.path.exists(service_dir) and os.path.isdir(service_dir):
+            for sub in os.listdir(service_dir):
+                sub_path = os.path.join(service_dir, sub)
+                if os.path.isdir(sub_path):
+                    path = os.path.join(sub_path, data.filename)
+                    if os.path.exists(path):
+                        filepath = path
+                        break
+            if filepath:
+                break
+                
+    if not filepath or not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Dive file not found.")
         
     try:

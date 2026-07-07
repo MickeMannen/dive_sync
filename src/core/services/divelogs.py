@@ -234,6 +234,8 @@ class DivelogsAdapter(BaseDiveAdapter):
             vol = tank.get("vol")
             vol = float(vol) if vol not in [None, ""] else None
 
+            t_name = tank.get("tankname") or tank.get("tank") or None
+
             if self.imperial_units:
                 # PSI to Bar
                 if start_p is not None:
@@ -250,7 +252,8 @@ class DivelogsAdapter(BaseDiveAdapter):
                     helium=helium,
                     start_pressure=start_p,
                     end_pressure=end_p,
-                    tank_volume=vol
+                    tank_volume=vol,
+                    tank_name=t_name
                 )
             )
 
@@ -434,7 +437,9 @@ class DivelogsAdapter(BaseDiveAdapter):
                 "he": gas.helium,
                 "start_pressure": start_p,
                 "end_pressure": end_p,
-                "vol": vol
+                "vol": vol,
+                "tankname": gas.tank_name or "",
+                "tank": gas.tank_name or ""
             })
 
         # Convert weight from Garmin to Divelogs unit preference

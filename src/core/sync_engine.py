@@ -8,7 +8,19 @@ from typing import List, Tuple, Dict, Any, Optional
 from src.core.config import ConfigManager, SettingsModel, CredentialsModel, GarminCredentials, DivelogsCredentials
 from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
-from src.core.models import UnifiedDive
+from src.core.models import UnifiedDive, GasMixture
+
+def are_gas_mixtures_different(list1: List[GasMixture], list2: List[GasMixture]) -> bool:
+    if len(list1) != len(list2):
+        return True
+    for gm1, gm2 in zip(list1, list2):
+        if gm1.oxygen != gm2.oxygen or gm1.helium != gm2.helium:
+            return True
+        if gm1.start_pressure != gm2.start_pressure or gm1.end_pressure != gm2.end_pressure:
+            return True
+        if gm1.tank_volume != gm2.tank_volume:
+            return True
+    return False
 
 logger = logging.getLogger("dive_sync.sync_engine")
 
@@ -347,6 +359,18 @@ class SyncEngine:
                     logger.info("  Dive profile samples differ (Garmin: %d samples, Divelogs: %d samples)", len(g_dive.samples), len(d_dive.samples))
                     d_dive.samples = g_dive.samples
                     has_diff = True
+                if self.settings.sync_filters.sync_gases and are_gas_mixtures_different(g_dive.gas_mixtures, d_dive.gas_mixtures):
+                    logger.info("  Gas mixtures differ (Garmin: %d mixtures, Divelogs: %d mixtures)", len(g_dive.gas_mixtures), len(d_dive.gas_mixtures))
+                    d_dive.gas_mixtures = [
+                        GasMixture(
+                            oxygen=gm.oxygen,
+                            helium=gm.helium,
+                            start_pressure=gm.start_pressure,
+                            end_pressure=gm.end_pressure,
+                            tank_volume=gm.tank_volume
+                        ) for gm in g_dive.gas_mixtures
+                    ]
+                    has_diff = True
                 if has_diff:
                     needs_divelogs_update = True
 
@@ -461,7 +485,47 @@ class SyncEngine:
         os.makedirs(garmin_dir, exist_ok=True)
         os.makedirs(divelogs_dir, exist_ok=True)
         
-        # 1. Garmin raw data
+        # 1. Divelogs raw data
+        if self.divelogs_username:
+            logger.info("Authenticating with Divelogs.org...")
+            if self.divelogs.login():
+                logger.info("Fetching detailed dive logs list from Divelogs.org...")
+                try:
+                    url = "https://divelogs.de/api/dives"
+                    response = self.divelogs.session.get(url, timeout=20)
+                    if response.status_code != 200:
+                        logger.error("Failed to query Divelogs dives (status: %d)", response.status_code)
+                        return False
+                    
+                    dives_list = response.json()
+                    if not isinstance(dives_list, list):
+                        logger.error("Invalid response format from Divelogs API.")
+                        return False
+                    
+                    total_divelogs = len(dives_list)
+                    logger.info("Retrieved %d dives from Divelogs.org. Saving raw JSONs...", total_divelogs)
+                    
+                    for index, item in enumerate(dives_list, 1):
+                        dive_number = item.get("divenumber")
+                        dive_id = item.get("id")
+                        
+                        filename = f"{dive_number}.json" if (dive_number is not None and str(dive_number).isdigit() and int(dive_number) > 0) else f"{dive_id}.json"
+                        filepath = os.path.join(divelogs_dir, filename)
+                        
+                        with open(filepath, "w") as f:
+                            json.dump(item, f, indent=2)
+                        logger.debug(" Saved %s", filepath)
+                        
+                except Exception as e:
+                    logger.error("Error fetching/saving Divelogs.org raw data: %s", e)
+                    return False
+            else:
+                logger.error("Failed to log in to Divelogs.org.")
+                return False
+        else:
+            logger.warning("Divelogs credentials not found, skipping Divelogs download.")
+        
+        # 2. Garmin raw data
         if self.garmin_username:
             logger.info("Authenticating with Garmin Connect...")
             if self.garmin.login():
@@ -552,46 +616,6 @@ class SyncEngine:
                 return False
         else:
             logger.warning("Garmin credentials not found, skipping Garmin download.")
-        
-        # 2. Divelogs raw data
-        if self.divelogs_username:
-            logger.info("Authenticating with Divelogs.org...")
-            if self.divelogs.login():
-                logger.info("Fetching detailed dive logs list from Divelogs.org...")
-                try:
-                    url = "https://divelogs.de/api/dives"
-                    response = self.divelogs.session.get(url, timeout=20)
-                    if response.status_code != 200:
-                        logger.error("Failed to query Divelogs dives (status: %d)", response.status_code)
-                        return False
-                    
-                    dives_list = response.json()
-                    if not isinstance(dives_list, list):
-                        logger.error("Invalid response format from Divelogs API.")
-                        return False
-                    
-                    total_divelogs = len(dives_list)
-                    logger.info("Retrieved %d dives from Divelogs.org. Saving raw JSONs...", total_divelogs)
-                    
-                    for index, item in enumerate(dives_list, 1):
-                        dive_number = item.get("divenumber")
-                        dive_id = item.get("id")
-                        
-                        filename = f"{dive_number}.json" if (dive_number is not None and str(dive_number).isdigit() and int(dive_number) > 0) else f"{dive_id}.json"
-                        filepath = os.path.join(divelogs_dir, filename)
-                        
-                        with open(filepath, "w") as f:
-                            json.dump(item, f, indent=2)
-                        logger.debug(" Saved %s", filepath)
-                        
-                except Exception as e:
-                    logger.error("Error fetching/saving Divelogs.org raw data: %s", e)
-                    return False
-            else:
-                logger.error("Failed to log in to Divelogs.org.")
-                return False
-        else:
-            logger.warning("Divelogs credentials not found, skipping Divelogs download.")
                 
         logger.info("Raw data download completed. Files saved under %s", mock_data_dir)
         return True

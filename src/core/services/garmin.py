@@ -174,7 +174,18 @@ class GarminAdapter(BaseDiveAdapter):
                 except Exception as detail_err:
                     logger.warning("Failed to fetch activity details (telemetry) for %s: %s", activity_id, detail_err)
 
-                mapped_dive = self._map_to_unified(activity, details, activity_details)
+                # Fetch the tank sensor telemetry detail
+                tanksensor = None
+                try:
+                    time.sleep(self.cooldown_seconds)
+                    tanksensor = self.client.connectapi(
+                        "/diving/v1/dive/detail/tanksensor",
+                        params={"connectActivityId": activity_id}
+                    )
+                except Exception as tank_err:
+                    logger.warning("Failed to fetch tank sensor details for %s: %s", activity_id, tank_err)
+
+                mapped_dive = self._map_to_unified(activity, details, activity_details, tanksensor)
                 unified_dives.append(mapped_dive)
             except Exception as e:
                 logger.error("Failed to fetch details for activity %s: %s", activity_id, e)
@@ -353,7 +364,9 @@ class GarminAdapter(BaseDiveAdapter):
                 continue
         return None
 
-    def _map_to_unified(self, summary: Dict[str, Any], details: Dict[str, Any], activity_details: Optional[Dict[str, Any]] = None) -> UnifiedDive:
+    def _map_to_unified(self, summary: Dict[str, Any], details: Dict[str, Any], 
+                        activity_details: Optional[Dict[str, Any]] = None,
+                        tanksensor: Optional[Dict[str, Any]] = None) -> UnifiedDive:
         info = details.get("diveInfo", {}) or summary.get("diveInfo", {}) or {}
         sum_dto = details.get("summaryDTO", {}) or summary.get("summaryDTO", {}) or {}
         metadata = details.get("metadataDTO", {}) or summary.get("metadataDTO", {}) or {}
@@ -384,19 +397,78 @@ class GarminAdapter(BaseDiveAdapter):
         if activity_id:
             external_ids["garmin"] = activity_id
 
-        # Mapped gases
+        # Mapped gases & tank telemetry
         gas_mixtures = []
         dive_gases = info.get("diveGases") or []
-        for gas in dive_gases:
+        
+        tank_sensors = []
+        if isinstance(tanksensor, dict):
+            tank_sensors = tanksensor.get("tankSensors") or []
+            
+        for idx, gas in enumerate(dive_gases):
+            gas_idx = gas.get("gasIndex", idx)
+            start_p = gas.get("tankStartingPressure")
+            end_p = gas.get("tankEndingPressure")
+            size = gas.get("tankSize")
+            t_name = None
+            
+            # Find matching tank sensor details from telemetry if available
+            sensor = None
+            for s in tank_sensors:
+                if s.get("tankIndex") == gas_idx or s.get("tankIndex") == idx:
+                    sensor = s
+                    break
+            
+            if sensor:
+                if sensor.get("startingPressure") is not None:
+                    start_p = sensor.get("startingPressure")
+                if sensor.get("endingPressure") is not None:
+                    end_p = sensor.get("endingPressure")
+                if sensor.get("name"):
+                    t_name = sensor.get("name")
+                
+                # Convert PSI to BAR if stored in PSI
+                p_unit = str(sensor.get("pressureUnit") or "BAR").upper()
+                if "PSI" in p_unit:
+                    if start_p is not None:
+                        start_p = start_p / 14.5038
+                    if end_p is not None:
+                        end_p = end_p / 14.5038
+            
             gas_mixtures.append(
                 GasMixture(
                     oxygen=float(gas.get("oxygenContent") or 21.0),
                     helium=float(gas.get("heliumContent") or 0.0),
-                    start_pressure=gas.get("tankStartingPressure"),
-                    end_pressure=gas.get("tankEndingPressure"),
-                    tank_volume=gas.get("tankSize")
+                    start_pressure=float(start_p) if start_p is not None else None,
+                    end_pressure=float(end_p) if end_p is not None else None,
+                    tank_volume=float(size) if size is not None else None,
+                    tank_name=t_name
                 )
             )
+            
+        if not gas_mixtures and tank_sensors:
+            for idx, sensor in enumerate(tank_sensors):
+                start_p = sensor.get("startingPressure")
+                end_p = sensor.get("endingPressure")
+                t_name = sensor.get("name")
+                
+                p_unit = str(sensor.get("pressureUnit") or "BAR").upper()
+                if "PSI" in p_unit:
+                    if start_p is not None:
+                        start_p = start_p / 14.5038
+                    if end_p is not None:
+                        end_p = end_p / 14.5038
+                        
+                gas_mixtures.append(
+                    GasMixture(
+                        oxygen=21.0,
+                        helium=0.0,
+                        start_pressure=float(start_p) if start_p is not None else None,
+                        end_pressure=float(end_p) if end_p is not None else None,
+                        tank_volume=None,
+                        tank_name=t_name
+                    )
+                )
 
         dive_number_val = metadata.get("diveNumber")
         dive_number = int(dive_number_val) if dive_number_val is not None and str(dive_number_val).isdigit() else None

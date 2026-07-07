@@ -11,8 +11,13 @@ from src.core.services.divelogs import DivelogsAdapter
 
 logger = logging.getLogger("dive_sync.mock_adapters")
 
+def get_default_mock_data_dir() -> str:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
+    return os.path.join(project_root, "tests", "data")
+
 class LocalMockGarminAdapter(BaseDiveAdapter):
-    def __init__(self, mock_data_dir: str = "./tests", username: Optional[str] = None):
+    def __init__(self, mock_data_dir: str = get_default_mock_data_dir(), username: Optional[str] = None):
         if username and os.path.exists(os.path.join(mock_data_dir, "garmin", username)):
             self.mock_dir = os.path.join(mock_data_dir, "garmin", username)
         else:
@@ -41,7 +46,7 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
                     summary = data.get("summary", {})
                     details = data.get("details", {})
                     activity_details = data.get("activityDetails")
-                    mapped = self.helper._map_to_unified(summary, details, activity_details)
+                    mapped = self.helper._map_to_unified(summary, details, activity_details, data.get("tanksensor"))
 
                     # Apply date filters
                     if date_from and mapped.date_time < date_from:
@@ -139,7 +144,7 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
         return True
 
 class LocalMockDivelogsAdapter(BaseDiveAdapter):
-    def __init__(self, mock_data_dir: str = "./tests", username: Optional[str] = None):
+    def __init__(self, mock_data_dir: str = get_default_mock_data_dir(), username: Optional[str] = None):
         if username and os.path.exists(os.path.join(mock_data_dir, "divelogs", username)):
             self.mock_dir = os.path.join(mock_data_dir, "divelogs", username)
         else:

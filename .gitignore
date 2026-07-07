@@ -2,8 +2,8 @@ credentials.json
 tokens/
 sync_state.json
 /credentials_real.json
-/tests/divelogs/
-/tests/garmin/
+/data/
+/tests/data/
 /initial_prompt.txt
 /docker.txt
 
@@ -16,3 +16,4 @@ __pycache__/
 .venv/
 *.egg-info/
 
+/todo_txt

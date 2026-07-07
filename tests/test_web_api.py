@@ -6,12 +6,13 @@ from fastapi.testclient import TestClient
 
 from src.web.app import app
 
+TEST_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+garmin_test_dir = os.path.join(TEST_DATA_DIR, "garmin")
+divelogs_test_dir = os.path.join(TEST_DATA_DIR, "divelogs")
+
 @pytest.fixture
 def mock_dirs():
-    # Set up directories inside tests for testing the API
-    garmin_test_dir = "./tests/garmin"
-    divelogs_test_dir = "./tests/divelogs"
-    
+    # Set up directories inside tests/data for testing the API
     # Ensure they are empty and exist
     if os.path.exists(garmin_test_dir):
         shutil.rmtree(garmin_test_dir)
@@ -116,7 +117,7 @@ def test_update_dive_garmin(mock_dirs, monkeypatch):
     assert response.json()["status"] == "success"
     
     # Read modified file and verify
-    with open("./tests/garmin/1.json", "r") as f:
+    with open(os.path.join(garmin_test_dir, "1.json"), "r") as f:
         data = json.load(f)
         
     assert data["summary"]["metadataDTO"]["diveNumber"] == "10"
@@ -124,7 +125,7 @@ def test_update_dive_garmin(mock_dirs, monkeypatch):
     assert data["details"]["diveInfo"]["buddy"] == "New Buddy"
     assert data["details"]["diveInfo"]["weight"] == 15.0
     assert data["details"]["diveInfo"]["visibility"] == 8.0
-    assert called == [("1.json", "./tests/garmin/1.json")]
+    assert called == [("1.json", os.path.join(garmin_test_dir, "1.json"))]
 
 def test_update_dive_divelogs(mock_dirs, monkeypatch):
     client = TestClient(app)
@@ -151,7 +152,7 @@ def test_update_dive_divelogs(mock_dirs, monkeypatch):
     assert response.json()["status"] == "success"
     
     # Read modified file and verify
-    with open("./tests/divelogs/1.json", "r") as f:
+    with open(os.path.join(divelogs_test_dir, "1.json"), "r") as f:
         data = json.load(f)
         
     assert data["location"] == "New Site"
@@ -160,7 +161,7 @@ def test_update_dive_divelogs(mock_dirs, monkeypatch):
     assert data["buddy"] == "Another Buddy"
     assert data["weights"] == "10"
     assert data["visibility"] == "4"
-    assert called == [("1.json", "./tests/divelogs/1.json")]
+    assert called == [("1.json", os.path.join(divelogs_test_dir, "1.json"))]
 
 def test_download_raw_dives(mock_dirs, monkeypatch):
     client = TestClient(app)
