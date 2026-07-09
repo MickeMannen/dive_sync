@@ -332,11 +332,16 @@ class SyncEngine:
             # If direction is to_divelogs or bidirectional, sync updates from Garmin to Divelogs
             if direction in ["to_divelogs", "bidirectional"]:
                 has_diff = False
-                if g_dive.buddy != d_dive.buddy:
+                g_buddy = "" if (g_dive.buddy is None or g_dive.buddy == "None") else g_dive.buddy.strip()
+                d_buddy = "" if (d_dive.buddy is None or d_dive.buddy == "None") else d_dive.buddy.strip()
+                if g_buddy != d_buddy:
                     logger.info("  Buddy differs (Garmin: '%s', Divelogs: '%s')", g_dive.buddy, d_dive.buddy)
                     d_dive.buddy = g_dive.buddy
                     has_diff = True
-                if g_dive.notes != d_dive.notes:
+                
+                g_notes = "" if (g_dive.notes is None or g_dive.notes == "None") else g_dive.notes.strip()
+                d_notes = "" if (d_dive.notes is None or d_dive.notes == "None") else d_dive.notes.strip()
+                if g_notes != d_notes:
                     logger.info("  Notes differ (Garmin: '%s', Divelogs: '%s')", g_dive.notes, d_dive.notes)
                     d_dive.notes = g_dive.notes
                     has_diff = True
@@ -377,11 +382,16 @@ class SyncEngine:
             # If direction is to_garmin or bidirectional, sync updates from Divelogs to Garmin
             if direction in ["to_garmin", "bidirectional"]:
                 has_diff = False
-                if d_dive.buddy != g_dive.buddy:
+                g_buddy = "" if (g_dive.buddy is None or g_dive.buddy == "None") else g_dive.buddy.strip()
+                d_buddy = "" if (d_dive.buddy is None or d_dive.buddy == "None") else d_dive.buddy.strip()
+                if d_buddy != g_buddy:
                     logger.info("  Buddy differs (Divelogs: '%s', Garmin: '%s')", d_dive.buddy, g_dive.buddy)
                     g_dive.buddy = d_dive.buddy
                     has_diff = True
-                if d_dive.notes != g_dive.notes:
+                
+                g_notes = "" if (g_dive.notes is None or g_dive.notes == "None") else g_dive.notes.strip()
+                d_notes = "" if (d_dive.notes is None or d_dive.notes == "None") else d_dive.notes.strip()
+                if d_notes != g_notes:
                     logger.info("  Notes differ (Divelogs: '%s', Garmin: '%s')", d_dive.notes, g_dive.notes)
                     g_dive.notes = d_dive.notes
                     has_diff = True
@@ -395,11 +405,13 @@ class SyncEngine:
                     g_dive.visibility = d_dive.visibility
                     g_dive.visibility_unit = d_dive.visibility_unit
                     has_diff = True
-                if d_dive.lat != g_dive.lat or d_dive.lng != g_dive.lng:
-                    logger.info("  GPS coordinates differ (Divelogs: %s, %s, Garmin: %s, %s)", d_dive.lat, d_dive.lng, g_dive.lat, g_dive.lng)
-                    g_dive.lat = d_dive.lat
-                    g_dive.lng = d_dive.lng
-                    has_diff = True
+                # Only update Garmin coordinates from Divelogs if Garmin currently has no coordinates
+                if g_dive.lat is None or g_dive.lng is None:
+                    if d_dive.lat != g_dive.lat or d_dive.lng != g_dive.lng:
+                        logger.info("  GPS coordinates differ (Divelogs: %s, %s, Garmin: %s, %s)", d_dive.lat, d_dive.lng, g_dive.lat, g_dive.lng)
+                        g_dive.lat = d_dive.lat
+                        g_dive.lng = d_dive.lng
+                        has_diff = True
                 if has_diff:
                     needs_garmin_update = True
 
@@ -446,13 +458,43 @@ class SyncEngine:
 
         for g_dive in garmin_list:
             match_found = False
+            g_id = g_dive.external_ids.get("garmin")
+            g_divelogs_id = g_dive.external_ids.get("divelogs")
+
             for idx, d_dive in enumerate(divelogs_list):
                 if idx in matched_divelogs_indices:
                     continue
                 
-                # Compare local naive timestamps
-                diff = abs((g_dive.date_time - d_dive.date_time).total_seconds())
-                if diff <= grace_seconds:
+                d_id = d_dive.external_ids.get("divelogs")
+                d_garmin_id = d_dive.external_ids.get("garmin")
+
+                # Tier 1: Match by explicit external ID links
+                id_matched = False
+                if g_divelogs_id and d_id and str(g_divelogs_id).strip() == str(d_id).strip():
+                    id_matched = True
+                elif g_id and d_garmin_id and str(g_id).strip() == str(d_garmin_id).strip():
+                    id_matched = True
+
+                # Tier 2: Match by dive number if present on both
+                number_matched = False
+                if not id_matched:
+                    if g_dive.dive_number is not None and d_dive.dive_number is not None:
+                        try:
+                            g_num = int(float(str(g_dive.dive_number).strip()))
+                            d_num = int(float(str(d_dive.dive_number).strip()))
+                            if g_num == d_num and g_num > 0:
+                                number_matched = True
+                        except ValueError:
+                            pass
+
+                # Tier 3: Match by local naive timestamps (grace window)
+                timestamp_matched = False
+                if not id_matched and not number_matched:
+                    diff = abs((g_dive.date_time - d_dive.date_time).total_seconds())
+                    if diff <= grace_seconds:
+                        timestamp_matched = True
+
+                if id_matched or number_matched or timestamp_matched:
                     matched_pairs.append((g_dive, d_dive))
                     matched_divelogs_indices.add(idx)
                     match_found = True

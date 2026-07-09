@@ -257,7 +257,10 @@ def test_cron_jobs_api(tmp_path, monkeypatch):
     client = TestClient(app)
     
     settings_file = str(tmp_path / "settings.json")
-    monkeypatch.setattr(src.core.config, "SETTINGS_FILE", settings_file)
+    original_load = src.core.config.ConfigManager.load_settings
+    original_save = src.core.config.ConfigManager.save_settings
+    monkeypatch.setattr(src.core.config.ConfigManager, "load_settings", lambda path=settings_file: original_load(settings_file))
+    monkeypatch.setattr(src.core.config.ConfigManager, "save_settings", lambda settings, path=settings_file: original_save(settings, settings_file))
     
     # 1. Get initial settings (defaults)
     res = client.get("/api/settings")

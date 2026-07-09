@@ -17,3 +17,4 @@ __pycache__/
 *.egg-info/
 
 /todo_txt
+/gui_prompt.txt

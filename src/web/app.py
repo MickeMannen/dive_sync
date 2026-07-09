@@ -3,6 +3,7 @@ import queue
 import logging
 import asyncio
 import threading
+import time
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
@@ -866,8 +867,9 @@ def update_dive_endpoint(data: UpdateDiveSchema):
                 summary["locationName"] = data.location
                 
             if data.notes is not None:
-                summary["description"] = data.notes
-                details["description"] = data.notes
+                val = None if (data.notes == "" or data.notes == "None") else data.notes
+                summary["description"] = val
+                details["description"] = val
                 
             if "diveInfo" not in summary or not isinstance(summary["diveInfo"], dict):
                 summary["diveInfo"] = {}
@@ -933,8 +935,9 @@ def update_dive_endpoint(data: UpdateDiveSchema):
                     details["diveInfo"]["visibilityUnit"] = None
                     
             if data.buddy is not None:
-                summary["diveInfo"]["buddy"] = data.buddy
-                details["diveInfo"]["buddy"] = data.buddy
+                val = None if (data.buddy == "" or data.buddy == "None") else data.buddy
+                summary["diveInfo"]["buddy"] = val
+                details["diveInfo"]["buddy"] = val
                 
         elif data.service == "divelogs":
             if data.date_time is not None:

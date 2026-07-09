@@ -1,9 +1,9 @@
 {
-  "directionality": "bidirectional",
+  "directionality": "to_garmin",
   "sync_filters": {
-    "date_from": "2026-01-01",
-    "date_to": "2026-12-31",
-    "only_new": true,
+    "date_from": null,
+    "date_to": null,
+    "only_new": false,
     "sync_gases": true,
     "sync_fit": false
   },

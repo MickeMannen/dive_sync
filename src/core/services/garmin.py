@@ -183,7 +183,11 @@ class GarminAdapter(BaseDiveAdapter):
                         params={"connectActivityId": activity_id}
                     )
                 except Exception as tank_err:
-                    logger.warning("Failed to fetch tank sensor details for %s: %s", activity_id, tank_err)
+                    err_msg = str(tank_err)
+                    if "404" in err_msg:
+                        logger.info("No tank sensor details found for Garmin activity %s (404).", activity_id)
+                    else:
+                        logger.warning("Failed to fetch tank sensor details for %s: %s", activity_id, tank_err)
 
                 mapped_dive = self._map_to_unified(activity, details, activity_details, tanksensor)
                 unified_dives.append(mapped_dive)
@@ -665,7 +669,7 @@ class GarminAdapter(BaseDiveAdapter):
                 }
 
         if dive.buddy is not None:
-            dive_info["buddy"] = dive.buddy
+            dive_info["buddy"] = None if (dive.buddy == "" or dive.buddy == "None") else dive.buddy
 
         summary_dto = {
             "startTimeLocal": dive.date_time.strftime("%Y-%m-%dT%H:%M:%S.0"),
@@ -694,7 +698,7 @@ class GarminAdapter(BaseDiveAdapter):
                 "unitKey": "UTC"
             },
             "activityName": dive.location or "Sync Dive",
-            "description": dive.notes or "",
+            "description": None if (dive.notes == "" or dive.notes == "None" or dive.notes is None) else dive.notes,
             "metadataDTO": {
                 "diveNumber": str(dive.dive_number) if dive.dive_number is not None else None,
                 "autoCalcCalories": True

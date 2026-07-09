@@ -1,190 +1,241 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full w-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dive Sync</title>
+    <title>▲ Dive Sync Command Center</title>
+    <!-- Tailwind v4 Statically Served -->
+    <script src="/static/tailwindcss-browser-4.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=1.0.2">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=1.0.4">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤿</text></svg>">
+    <style type="text/tailwindcss">
+        @theme {
+            --color-base-bg: #0B0F19;
+            --color-sidebar-bg: #121824;
+            --color-laser-cyan: #00F0FF;
+            --color-border-dark: #1D263B;
+        }
+        body {
+            background-color: #0B0F19;
+            color: #f8fafc;
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
 </head>
-<body>
-    <div class="glow-bg"></div>
-    <div class="container">
-        <!-- HEADER -->
-        <header>
-            <div class="logo-area">
-                <span class="logo-icon">▲</span>
-                <div class="logo-text">
-                    <h1>Dive Sync</h1>
-                    <p>Production Dive Sync Engine</p>
-                </div>
+<body class="h-screen w-screen overflow-hidden flex flex-col bg-base-bg select-none">
+
+    <!-- TOP TELEMETRY BAR -->
+    <header class="h-12 w-full border-b border-border-dark px-4 flex items-center justify-between shrink-0 bg-sidebar-bg z-10">
+        <div class="flex items-center gap-2">
+            <span class="text-laser-cyan font-bold text-lg">▲</span>
+            <span class="font-bold tracking-widest text-sm text-slate-100">DIVE SYNC</span>
+            <span class="text-[10px] font-mono border border-border-dark px-1.5 py-0.5 rounded text-laser-cyan bg-[#0B0F19]/60">COMMAND_CENTER</span>
+        </div>
+        
+        <div class="flex items-center gap-4 text-xs font-mono text-slate-400">
+            <div class="flex items-center gap-1.5">
+                STATUS: [ 
+                <span class="status-dot green animate-pulse"></span>
+                <span id="global-status-text" class="text-emerald-400">READY</span> ]
             </div>
-            <div class="header-status">
-                <div class="status-indicator">
-                    <span class="status-dot green"></span>
-                    <span id="global-status-text">System Ready</span>
-                </div>
+            <div class="hidden sm:block">
+                CACHED_DIVES: [ <span class="text-laser-cyan font-bold" id="header-total-dives">0</span> ]
             </div>
-        </header>
+            <div class="border-l border-border-dark pl-4 flex items-center gap-1.5">
+                TIME: <span id="header-clock" class="text-laser-cyan font-semibold">--:--:--</span>
+            </div>
+        </div>
+    </header>
 
-        <!-- TAB NAVIGATION -->
-        <nav class="tab-nav">
-            <button class="tab-btn active" data-tab="dashboard">Sync Dashboard</button>
-            <button class="tab-btn" data-tab="dives-explorer">Dives Explorer</button>
-            <button class="tab-btn" data-tab="spreadsheet-editor">Spreadsheet Editor</button>
-        </nav>
+    <!-- SPLIT CONTAINER -->
+    <div class="flex flex-1 overflow-hidden w-full">
+        
+        <!-- LEFT SIDEBAR -->
+        <aside class="w-[240px] shrink-0 border-r border-border-dark bg-sidebar-bg flex flex-col justify-between p-4">
+            
+            <!-- Side Navigation Links -->
+            <nav class="flex flex-col gap-1">
+                <span class="text-[10px] font-mono tracking-widest text-slate-500 uppercase px-3 mb-2">Navigation</span>
+                <button class="tab-btn active text-left py-2.5 px-3 rounded text-xs text-slate-400 font-medium" data-tab="dashboard">Sync Dashboard</button>
+                <button class="tab-btn text-left py-2.5 px-3 rounded text-xs text-slate-400 font-medium" data-tab="dives-explorer">Dives Explorer</button>
+                <button class="tab-btn text-left py-2.5 px-3 rounded text-xs text-slate-400 font-medium" data-tab="spreadsheet-editor">Spreadsheet Editor</button>
+            </nav>
 
-        <!-- DASHBOARD TAB CONTENT -->
-        <div id="dashboard-tab" class="tab-content">
-            <main class="grid-layout">
-                <!-- LEFT COLUMN: STATUS & SETTINGS -->
-                <section class="panel-left">
-                    <!-- CONNECTIONS STATUS CARD -->
-                    <div class="card glass">
-                        <h2>Platform Integration</h2>
-                        <div class="connection-status-list">
-                            <div class="connection-item" id="garmin-status">
-                                <div class="service-info">
-                                    <span class="service-logo">Garmin</span>
-                                    <div>
-                                        <p class="service-name">Garmin Connect</p>
-                                        <p class="service-state text-subtle">Checking status...</p>
-                                    </div>
-                                </div>
-                                <span class="badge red">Unconfigured</span>
-                            </div>
-                            <div class="connection-item" id="divelogs-status">
-                                <div class="service-info">
-                                    <span class="service-logo">Divelogs</span>
-                                    <div>
-                                        <p class="service-name">Divelogs.org</p>
-                                        <p class="service-state text-subtle">Checking status...</p>
-                                    </div>
-                                </div>
-                                <span class="badge red">Unconfigured</span>
-                            </div>
-                        </div>
-                        <button id="configure-creds-btn" class="btn secondary-btn" style="margin-top: 1rem;">Configure Credentials</button>
-                    </div>
-
-                    <!-- CONTROLS CARD -->
-                    <div class="card glass">
-                        <h2>Manual Execution</h2>
-                        <p class="text-subtle" style="margin-bottom: 1rem; font-size: 0.85rem;">Execute synchronization task immediately using the parameters configured below.</p>
-                        <div style="display: flex; gap: 1rem;">
-                            <button id="trigger-sync-btn" class="btn primary-btn" style="flex: 1;">
-                                <span class="btn-text">Run Sync Now</span>
-                                <span class="spinner hidden"></span>
-                            </button>
-                            <button id="trigger-dry-run-btn" class="btn secondary-btn" style="flex: 1;">
-                                <span class="btn-text">Dry Run Now</span>
-                                <span class="spinner hidden"></span>
-                            </button>
+            <!-- Status badges and Credentials configure button -->
+            <div class="border-t border-border-dark pt-4 flex flex-col gap-4">
+                <span class="text-[10px] font-mono tracking-widest text-slate-500 uppercase">Integration Status</span>
+                
+                <div class="flex flex-col gap-2">
+                    <div id="garmin-status" class="bg-[#0B0F19]/40 border border-border-dark/60 p-2.5 flex flex-col gap-1.5">
+                        <span class="text-[10px] text-slate-500 font-mono">GARMIN_CONNECT</span>
+                        <div class="flex items-center justify-between">
+                            <span class="badge text-[10px] font-mono text-rose-500 bg-rose-500/10 border border-rose-500/20 px-1 rounded">Unconfigured</span>
+                            <span class="service-state text-[9px] text-slate-400 truncate max-w-[100px]">Waiting...</span>
                         </div>
                     </div>
 
-                    <!-- CONFIGURATION FORM CARD -->
-                    <div class="card glass">
-                        <h2>Synchronization Engine Settings</h2>
-                        <form id="settings-form">
-                            <div class="form-group">
-                                <label for="directionality">Data Flow Directionality</label>
-                                <select id="directionality" name="directionality">
-                                    <option value="bidirectional">Bidirectional Synchronization</option>
-                                    <option value="to_divelogs">Garmin Connect ➔ Divelogs.org</option>
-                                    <option value="to_garmin">Divelogs.org ➔ Garmin Connect</option>
-                                </select>
-                            </div>
-
-                            <div class="form-group-row">
-                                <div class="form-group">
-                                    <label for="date_from">Sync Start Date</label>
-                                    <input type="date" id="date_from" name="date_from">
-                                </div>
-                                <div class="form-group">
-                                    <label for="date_to">Sync End Date</label>
-                                    <input type="date" id="date_to" name="date_to">
-                                </div>
-                            </div>
-
-                            <div class="checkbox-group">
-                                <label class="checkbox-container">
-                                    <input type="checkbox" id="only_new" name="only_new">
-                                    <span class="checkmark"></span>
-                                    Only new dives since last run (Incremental)
-                                </label>
-                                <label class="checkbox-container">
-                                    <input type="checkbox" id="sync_gases" name="sync_gases">
-                                    <span class="checkmark"></span>
-                                    Synchronize detailed gas mixtures
-                                </label>
-                                <label class="checkbox-container">
-                                    <input type="checkbox" id="sync_fit" name="sync_fit">
-                                    <span class="checkmark"></span>
-                                    Synchronize Garmin native .FIT files
-                                </label>
-                            </div>
-
-                            <div class="form-group-row">
-                                <div class="form-group">
-                                    <label for="grace_window_minutes">Grace Window (min)</label>
-                                    <input type="number" id="grace_window_minutes" name="grace_window_minutes" min="1" max="120">
-                                </div>
-                                <div class="form-group">
-                                    <label for="api_cooldown_seconds">API Cooldown (sec)</label>
-                                    <input type="number" id="api_cooldown_seconds" name="api_cooldown_seconds" step="0.1" min="0.1" max="10">
-                                </div>
-                            </div>
-
-                            <button type="submit" class="btn secondary-btn">Save Configuration</button>
-                        </form>
+                    <div id="divelogs-status" class="bg-[#0B0F19]/40 border border-border-dark/60 p-2.5 flex flex-col gap-1.5">
+                        <span class="text-[10px] text-slate-500 font-mono">DIVELOGS_ORG</span>
+                        <div class="flex items-center justify-between">
+                            <span class="badge text-[10px] font-mono text-rose-500 bg-rose-500/10 border border-rose-500/20 px-1 rounded">Unconfigured</span>
+                            <span class="service-state text-[9px] text-slate-400 truncate max-w-[100px]">Waiting...</span>
+                        </div>
                     </div>
-                </section>
+                </div>
 
-                <!-- RIGHT COLUMN: SCHEDULER -->
-                <section class="panel-right">
-                    <!-- SCHEDULER CARD -->
-                    <div class="card glass">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
-                            <h2>Cron Task Scheduler</h2>
-                            <button id="show-add-cron-btn" class="btn add-btn">+ Add Cron Job</button>
+                <button id="configure-creds-btn" class="w-full py-2 border border-border-dark hover:border-laser-cyan text-xs font-semibold tracking-wider transition-all uppercase cursor-pointer text-slate-300 hover:text-laser-cyan bg-[#0B0F19]/40">
+                    Configure Keys
+                </button>
+            </div>
+        </aside>
+
+        <!-- RIGHT CANVAS -->
+        <main class="flex-1 overflow-y-auto bg-base-bg p-6 select-text">
+
+            <!-- ================= SYNC DASHBOARD VIEW ================= -->
+            <div id="dashboard-tab" class="tab-content flex flex-col gap-6">
+                
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+                    
+                    <!-- LEFT COLUMN: SETTINGS & CONTROLS -->
+                    <div class="flex flex-col gap-6">
+                        
+                        <!-- CONTROLS CARD -->
+                        <div class="border border-border-dark bg-sidebar-bg p-5 flex flex-col gap-4">
+                            <h2 class="text-xs font-mono font-bold tracking-wider text-laser-cyan uppercase">
+                                [ MANUAL_EXECUTION ]
+                            </h2>
+                            <p class="text-xs text-slate-400">
+                                Run a manual sync with the options below. Let's start with Divelogs if downloading raw logs since it is faster.
+                            </p>
+                            <div class="flex gap-4">
+                                <button id="trigger-sync-btn" class="flex-1 py-2.5 border border-laser-cyan bg-laser-cyan/10 hover:bg-laser-cyan/20 text-laser-cyan text-xs font-semibold tracking-widest transition-all uppercase cursor-pointer flex items-center justify-center gap-2">
+                                    <span class="btn-text">Run Sync Now</span>
+                                    <span class="spinner hidden"></span>
+                                </button>
+                                <button id="trigger-dry-run-btn" class="flex-1 py-2.5 border border-border-dark hover:border-laser-cyan text-slate-300 hover:text-laser-cyan text-xs font-semibold tracking-widest transition-all uppercase cursor-pointer flex items-center justify-center gap-2">
+                                    <span class="btn-text">Dry Run Now</span>
+                                    <span class="spinner hidden"></span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- CONFIGURATION CARD -->
+                        <div class="border border-border-dark bg-sidebar-bg p-5 flex flex-col gap-4">
+                            <h2 class="text-xs font-mono font-bold tracking-wider text-laser-cyan uppercase">
+                                [ ENGINE_SETTINGS ]
+                            </h2>
+                            
+                            <form id="settings-form" class="flex flex-col gap-4">
+                                <div class="flex flex-col gap-1.5">
+                                    <label for="directionality" class="text-xs font-medium text-slate-400">Sync Flow Direction</label>
+                                    <div class="relative">
+                                        <select id="directionality" name="directionality" class="w-full bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan appearance-none cursor-pointer">
+                                            <option value="bidirectional">Bidirectional Sync</option>
+                                            <option value="to_divelogs">Garmin Connect ➔ Divelogs.org</option>
+                                            <option value="to_garmin">Divelogs.org ➔ Garmin Connect</option>
+                                        </select>
+                                        <span class="absolute right-3 top-2.5 pointer-events-none text-slate-500 text-xs">▼</span>
+                                    </div>
+                                </div>
+
+                                <div class="flex flex-col gap-1">
+                                    <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                        <input type="checkbox" id="sync_all_dates" name="sync_all_dates" class="accent-laser-cyan">
+                                        <span>Sync all available dates (ignore range limits)</span>
+                                    </label>
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-4" id="date-range-grid">
+                                    <div class="flex flex-col gap-1.5">
+                                        <label for="date_from" class="text-xs font-medium text-slate-400">Start Date</label>
+                                        <input type="date" id="date_from" name="date_from" class="w-full bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan disabled:opacity-40">
+                                    </div>
+                                    <div class="flex flex-col gap-1.5">
+                                        <label for="date_to" class="text-xs font-medium text-slate-400">End Date</label>
+                                        <input type="date" id="date_to" name="date_to" class="w-full bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan disabled:opacity-40">
+                                    </div>
+                                </div>
+
+                                <div class="border border-border-dark/60 bg-[#0B0F19]/40 p-3 flex flex-col gap-3">
+                                    <label class="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer">
+                                        <input type="checkbox" id="only_new" name="only_new" class="accent-laser-cyan">
+                                        <span>Incremental mode (sync only new dives)</span>
+                                    </label>
+                                    <label class="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer">
+                                        <input type="checkbox" id="sync_gases" name="sync_gases" class="accent-laser-cyan">
+                                        <span>Synchronize detailed gas mixtures & tanks</span>
+                                    </label>
+                                    <label class="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer">
+                                        <input type="checkbox" id="sync_fit" name="sync_fit" class="accent-laser-cyan">
+                                        <span>Download Garmin native .FIT logs</span>
+                                    </label>
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div class="flex flex-col gap-1.5">
+                                        <label for="grace_window_minutes" class="text-xs font-medium text-slate-400">Match Window (min)</label>
+                                        <input type="number" id="grace_window_minutes" name="grace_window_minutes" min="1" max="120" class="w-full bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
+                                    </div>
+                                    <div class="flex flex-col gap-1.5">
+                                        <label for="api_cooldown_seconds" class="text-xs font-medium text-slate-400">API Delay (sec)</label>
+                                        <input type="number" id="api_cooldown_seconds" name="api_cooldown_seconds" step="0.1" min="0.1" max="10" class="w-full bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
+                                    </div>
+                                </div>
+
+                                <button type="submit" class="w-full py-2.5 border border-border-dark hover:border-laser-cyan text-xs font-semibold tracking-wider transition-all uppercase cursor-pointer text-slate-300 hover:text-laser-cyan bg-[#0B0F19]/60">
+                                    Save Default Config
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT COLUMN: SCHEDULER -->
+                    <div class="border border-border-dark bg-sidebar-bg p-5 flex flex-col gap-4 self-stretch">
+                        <div class="flex justify-between items-center">
+                            <h2 class="text-xs font-mono font-bold tracking-wider text-laser-cyan uppercase">
+                                [ CRON_SCHEDULER ]
+                            </h2>
+                            <button id="show-add-cron-btn" class="border border-border-dark hover:border-laser-cyan text-slate-300 hover:text-laser-cyan px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition-all cursor-pointer">
+                                + Add Cron
+                            </button>
                         </div>
 
                         <!-- Add Cron Job Form Container (hidden by default) -->
                         <div id="add-cron-container" class="cron-form-container hidden">
-                            <form id="add-cron-form">
-                                <div class="form-group">
-                                    <label for="cron-job-id">Job Name / ID</label>
-                                    <input type="text" id="cron-job-id" placeholder="e.g. Daily Sync" required>
+                            <form id="add-cron-form" class="flex flex-col gap-3">
+                                <div class="flex flex-col gap-1">
+                                    <label for="cron-job-id" class="text-[10px] text-slate-400 font-medium">Job Name / ID</label>
+                                    <input type="text" id="cron-job-id" placeholder="e.g. Daily Nightly Sync" required class="bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
                                 </div>
-                                <div class="form-group-row">
-                                    <div class="form-group">
-                                        <label for="cron-direction">Direction</label>
-                                        <select id="cron-direction">
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div class="flex flex-col gap-1">
+                                        <label for="cron-direction" class="text-[10px] text-slate-400 font-medium">Direction</label>
+                                        <select id="cron-direction" class="bg-base-bg border border-border-dark px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
                                             <option value="bidirectional">Bidirectional</option>
-                                            <option value="to_divelogs">Garmin Connect ➔ Divelogs.org</option>
-                                            <option value="to_garmin">Divelogs.org ➔ Garmin Connect</option>
+                                            <option value="to_divelogs">Garmin ➔ Divelogs</option>
+                                            <option value="to_garmin">Divelogs ➔ Garmin</option>
                                         </select>
                                     </div>
-                                    <div class="form-group">
-                                        <label for="cron-frequency">Frequency</label>
-                                        <select id="cron-frequency">
+                                    <div class="flex flex-col gap-1">
+                                        <label for="cron-frequency" class="text-[10px] text-slate-400 font-medium">Frequency</label>
+                                        <select id="cron-frequency" class="bg-base-bg border border-border-dark px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
                                             <option value="hourly">Hourly</option>
                                             <option value="daily" selected>Daily</option>
                                             <option value="weekly">Weekly</option>
-                                            <option value="custom_minutes">Every X Minutes</option>
+                                            <option value="custom_minutes">Every X Min</option>
                                         </select>
                                     </div>
                                 </div>
 
                                 <!-- Dynamic Frequency Inputs -->
-                                <div class="form-group-row" id="cron-time-row">
-                                    <div class="form-group hidden" id="cron-dow-group">
-                                        <label for="cron-dow">Day of Week</label>
-                                        <select id="cron-dow">
+                                <div class="grid grid-cols-2 gap-3" id="cron-time-row">
+                                    <div class="flex flex-col gap-1 hidden" id="cron-dow-group">
+                                        <label for="cron-dow" class="text-[10px] text-slate-400 font-medium">Day of Week</label>
+                                        <select id="cron-dow" class="bg-base-bg border border-border-dark px-2 py-2 text-xs text-slate-200 focus:outline-none">
                                             <option value="0">Sunday</option>
                                             <option value="1">Monday</option>
                                             <option value="2">Tuesday</option>
@@ -194,261 +245,308 @@
                                             <option value="6">Saturday</option>
                                         </select>
                                     </div>
-                                    <div class="form-group" id="cron-time-group">
-                                        <label for="cron-time">Time</label>
-                                        <input type="time" id="cron-time" value="00:00">
+                                    <div class="flex flex-col gap-1" id="cron-time-group">
+                                        <label for="cron-time" class="text-[10px] text-slate-400 font-medium">Trigger Time</label>
+                                        <input type="time" id="cron-time" value="00:00" class="bg-base-bg border border-border-dark px-2 py-1.5 text-xs text-slate-200 focus:outline-none">
                                     </div>
-                                    <div class="form-group hidden" id="cron-hourly-group">
-                                        <label for="cron-minute-past">Minute Past Hour</label>
-                                        <input type="number" id="cron-minute-past" min="0" max="59" value="0">
+                                    <div class="flex flex-col gap-1 hidden" id="cron-hourly-group">
+                                        <label for="cron-minute-past" class="text-[10px] text-slate-400 font-medium">Minute of Hour</label>
+                                        <input type="number" id="cron-minute-past" min="0" max="59" value="0" class="bg-base-bg border border-border-dark px-2 py-1 text-xs text-slate-200 focus:outline-none">
                                     </div>
-                                    <div class="form-group hidden" id="cron-interval-group">
-                                        <label for="cron-interval">Interval (Minutes)</label>
-                                        <input type="number" id="cron-interval" min="1" value="60">
+                                    <div class="flex flex-col gap-1 hidden" id="cron-interval-group">
+                                        <label for="cron-interval" class="text-[10px] text-slate-400 font-medium">Interval (minutes)</label>
+                                        <input type="number" id="cron-interval" min="1" value="60" class="bg-base-bg border border-border-dark px-2 py-1 text-xs text-slate-200 focus:outline-none">
                                     </div>
                                 </div>
 
-                                <div class="checkbox-group">
-                                    <label class="checkbox-container">
-                                        <input type="checkbox" id="cron-only-new" checked>
-                                        <span class="checkmark"></span>
-                                        Only new dives (Incremental)
+                                <div class="grid grid-cols-2 gap-x-2 gap-y-1 py-1 border-t border-b border-border-dark/60 my-1">
+                                    <label class="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer">
+                                        <input type="checkbox" id="cron-only-new" checked class="accent-laser-cyan">
+                                        <span>Incremental</span>
                                     </label>
-                                    <label class="checkbox-container">
-                                        <input type="checkbox" id="cron-sync-gases" checked>
-                                        <span class="checkmark"></span>
-                                        Sync detailed gas mixtures
+                                    <label class="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer">
+                                        <input type="checkbox" id="cron-sync-gases" checked class="accent-laser-cyan">
+                                        <span>Sync Gases</span>
                                     </label>
-                                    <label class="checkbox-container">
-                                        <input type="checkbox" id="cron-sync-fit">
-                                        <span class="checkmark"></span>
-                                        Sync Garmin native .FIT files
+                                    <label class="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer">
+                                        <input type="checkbox" id="cron-sync-fit" class="accent-laser-cyan">
+                                        <span>Sync FIT</span>
                                     </label>
                                 </div>
 
-                                <div class="form-actions" style="display: flex; gap: 0.75rem; margin-top: 1rem;">
-                                    <button type="submit" class="btn primary-btn" style="flex: 1;">Add Job</button>
-                                    <button type="button" id="cancel-cron-btn" class="btn secondary-btn" style="flex: 1;">Cancel</button>
+                                <div class="flex gap-2">
+                                    <button type="submit" class="flex-1 py-1.5 border border-laser-cyan bg-laser-cyan/10 hover:bg-laser-cyan/20 text-laser-cyan text-[10px] font-semibold uppercase tracking-wider cursor-pointer">Add Job</button>
+                                    <button type="button" id="cancel-cron-btn" class="flex-1 py-1.5 border border-border-dark hover:border-laser-cyan text-slate-400 hover:text-laser-cyan text-[10px] font-semibold uppercase tracking-wider cursor-pointer">Cancel</button>
                                 </div>
                             </form>
-                            <div class="modal-section-divider" style="margin: 1.5rem 0;"></div>
                         </div>
 
-                        <div class="scheduler-controls">
-                            <ul class="schedule-slots-list" id="cron-jobs-list">
+                        <div class="flex-1 overflow-y-auto min-h-[250px] border border-border-dark/40 bg-[#0B0F19]/20">
+                            <ul class="divide-y divide-border-dark/40" id="cron-jobs-list">
                                 <!-- Populated dynamically -->
-                                <li class="empty-state text-subtle">No schedules configured.</li>
+                                <li class="empty-state text-slate-500 text-xs py-8 text-center">No cron schedules configured.</li>
                             </ul>
                         </div>
                     </div>
-                </section>
-            </main>
+                </div>
 
-            <!-- BOTTOM PANEL: LIVE LOG VIEWER -->
-            <section class="panel-bottom" style="margin-top: 2rem;">
-                <div class="card glass log-card">
-                    <div class="log-header">
-                        <h2>Live Synchronization Output Console</h2>
-                        <div class="log-actions">
-                            <label class="checkbox-container inline">
-                                <input type="checkbox" id="autoscroll-checkbox" checked>
-                                <span class="checkmark"></span>
-                                Autoscroll
+                <!-- LIVE LOG VIEWER CARD -->
+                <div class="border border-border-dark bg-sidebar-bg p-5 flex flex-col gap-4">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-xs font-mono font-bold tracking-wider text-laser-cyan uppercase">
+                            [ OUTPUT_LOG_STREAM ]
+                        </h2>
+                        <div class="flex items-center gap-4 text-xs">
+                            <label class="flex items-center gap-1.5 text-slate-400 cursor-pointer select-none">
+                                <input type="checkbox" id="autoscroll-checkbox" checked class="accent-laser-cyan">
+                                <span>Autoscroll</span>
                             </label>
-                            <button id="clear-log-btn" class="btn text-btn">Clear Log</button>
+                            <button id="clear-log-btn" class="text-slate-500 hover:text-laser-cyan uppercase font-mono tracking-wider cursor-pointer text-[10px] font-semibold">Clear Console</button>
                         </div>
                     </div>
-                    <div class="terminal" id="log-terminal">
-                        <div class="terminal-line system-msg">Console initialized. Awaiting logs...</div>
+                    
+                    <div class="terminal h-[500px] font-mono text-[11px] select-text" id="log-terminal">
+                        <div class="terminal-line system-msg">Console initialized. Awaiting system updates...</div>
                     </div>
                 </div>
-            </section>
-        </div>
+            </div>
 
-        <!-- DIVES EXPLORER TAB CONTENT -->
-        <div id="dives-explorer-tab" class="tab-content hidden">
-            <div class="explorer-layout">
-                <div class="explorer-header" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+            <!-- ================= DIVES EXPLORER VIEW ================= -->
+            <div id="dives-explorer-tab" class="tab-content hidden flex flex-col gap-6">
+                
+                <div class="flex justify-between items-center border-b border-border-dark pb-4">
                     <div>
-                        <h2>Cached Dives Explorer</h2>
-                        <p class="text-subtle">Explore local cached dives from Garmin Connect and Divelogs.org</p>
+                        <h2 class="text-sm font-semibold tracking-wider uppercase text-slate-100">Local Cache Explorer</h2>
+                        <p class="text-xs text-slate-400 mt-1">Review Garmin and Divelogs JSON files stored locally.</p>
                     </div>
-                    <div class="explorer-actions" style="display: flex; gap: 0.75rem;">
-                        <button id="download-raw-btn" class="btn secondary-btn">Download Raw Data</button>
-                        <button id="refresh-explorer-btn" class="btn secondary-btn">Refresh Dives</button>
+                    <div class="flex gap-3">
+                        <button id="download-raw-btn" class="py-2 px-4 border border-laser-cyan bg-laser-cyan/5 hover:bg-laser-cyan/10 text-laser-cyan text-xs font-semibold uppercase tracking-wider cursor-pointer">
+                            Download Raw Data
+                        </button>
+                        <button id="refresh-explorer-btn" class="py-2 px-4 border border-border-dark hover:border-laser-cyan text-slate-300 hover:text-laser-cyan text-xs font-semibold uppercase tracking-wider cursor-pointer">
+                            Refresh Cache
+                        </button>
                     </div>
                 </div>
-                <div class="explorer-grid">
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    
                     <!-- Garmin Column -->
-                    <div class="card glass explorer-column">
-                        <h2>Garmin Connect Dives <span class="badge count-badge" id="garmin-count">0</span></h2>
-                        <div class="dives-list" id="garmin-dives-list">
+                    <div class="border border-border-dark bg-sidebar-bg p-5 flex flex-col gap-4">
+                        <div class="flex justify-between items-center border-b border-border-dark/60 pb-2">
+                            <h3 class="text-xs font-mono font-bold tracking-wider text-laser-cyan uppercase">[ GARMIN_DIVES_CACHE ]</h3>
+                            <span class="font-mono text-xs text-laser-cyan font-semibold border border-laser-cyan/20 bg-laser-cyan/5 px-2 py-0.5" id="garmin-count">0</span>
+                        </div>
+                        <div class="overflow-y-auto max-h-[500px] flex flex-col gap-2 pr-1" id="garmin-dives-list">
                             <!-- Populated dynamically -->
-                            <div class="empty-state text-subtle">Loading Garmin dives...</div>
+                            <div class="empty-state text-slate-500 text-xs py-8 text-center">Loading Garmin data...</div>
                         </div>
                     </div>
+
                     <!-- Divelogs Column -->
-                    <div class="card glass explorer-column">
-                        <h2>Divelogs.org Dives <span class="badge count-badge" id="divelogs-count">0</span></h2>
-                        <div class="dives-list" id="divelogs-dives-list">
+                    <div class="border border-border-dark bg-sidebar-bg p-5 flex flex-col gap-4">
+                        <div class="flex justify-between items-center border-b border-border-dark/60 pb-2">
+                            <h3 class="text-xs font-mono font-bold tracking-wider text-laser-cyan uppercase">[ DIVELOGS_DIVES_CACHE ]</h3>
+                            <span class="font-mono text-xs text-laser-cyan font-semibold border border-laser-cyan/20 bg-laser-cyan/5 px-2 py-0.5" id="divelogs-count">0</span>
+                        </div>
+                        <div class="overflow-y-auto max-h-[500px] flex flex-col gap-2 pr-1" id="divelogs-dives-list">
                             <!-- Populated dynamically -->
-                            <div class="empty-state text-subtle">Loading Divelogs dives...</div>
+                            <div class="empty-state text-slate-500 text-xs py-8 text-center">Loading Divelogs data...</div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
-        
-        <!-- SPREADSHEET EDITOR TAB CONTENT -->
-        <div id="spreadsheet-editor-tab" class="tab-content hidden">
-            <div class="spreadsheet-layout">
-                <div class="explorer-header">
-                    <h2>Spreadsheet Dive Editor</h2>
-                    <p class="text-subtle">Directly edit dive parameters in the local cache. Changes are auto-saved on blur or Enter.</p>
-                </div>
+
+            <!-- ================= SPREADSHEET EDITOR VIEW ================= -->
+            <div id="spreadsheet-editor-tab" class="tab-content hidden flex flex-col gap-4">
                 
-                <div class="card glass spreadsheet-control-card">
-                    <div class="spreadsheet-actions">
-                        <div class="control-group">
-                            <label for="sheet-service-select">Data Source</label>
-                            <select id="sheet-service-select">
+                <div class="flex flex-col md:flex-row justify-between md:items-center gap-4 border-b border-border-dark pb-4">
+                    <div>
+                        <h2 class="text-sm font-semibold tracking-wider uppercase text-slate-100">Spreadsheet Dive Editor</h2>
+                        <p class="text-xs text-slate-400 mt-1">Directly edit dive parameters in local cache files. Changes auto-save on blur.</p>
+                    </div>
+                    
+                    <div class="flex flex-wrap items-center gap-4">
+                        <div class="flex items-center gap-2">
+                            <label for="sheet-service-select" class="text-[10px] font-mono text-slate-500 uppercase">Schema</label>
+                            <select id="sheet-service-select" class="bg-sidebar-bg border border-border-dark px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan cursor-pointer">
                                 <option value="garmin">Garmin Connect Schema</option>
                                 <option value="divelogs">Divelogs.org Schema</option>
                             </select>
                         </div>
                         
-                        <div class="control-group">
-                            <label for="sheet-size-select">Page Size</label>
-                            <select id="sheet-size-select">
-                                <option value="10">10 rows</option>
-                                <option value="20" selected>20 rows</option>
-                                <option value="30">30 rows</option>
-                                <option value="40">40 rows</option>
-                                <option value="50">50 rows</option>
+                        <div class="flex items-center gap-2">
+                            <label for="sheet-size-select" class="text-[10px] font-mono text-slate-500 uppercase">Rows</label>
+                            <select id="sheet-size-select" class="bg-sidebar-bg border border-border-dark px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan cursor-pointer">
+                                <option value="10">10</option>
+                                <option value="20" selected>20</option>
+                                <option value="30">30</option>
+                                <option value="50">50</option>
                             </select>
                         </div>
-                        
-                        <div class="search-box">
-                            <label for="sheet-search-input">Search Location/Notes/Buddy</label>
-                            <input type="text" id="sheet-search-input" placeholder="Type to filter...">
-                        </div>
-                        
-                        <div class="pagination-container">
-                            <button id="sheet-prev-btn" class="btn pagination-btn" disabled>&lt; Prev</button>
-                            <span id="sheet-page-info" class="page-info">Page 1 of 1</span>
-                            <button id="sheet-next-btn" class="btn pagination-btn" disabled>Next &gt;</button>
+
+                        <div class="flex items-center gap-2">
+                            <span id="sheet-saving-indicator" class="saving-indicator hidden">
+                                <span class="spinner-small"></span>
+                                <span class="text-[10px] font-mono text-laser-cyan uppercase">AUTO_SAVING</span>
+                            </span>
                         </div>
                     </div>
                 </div>
 
-                <div class="card glass spreadsheet-table-card">
-                    <div class="table-scroll-container">
-                        <table class="spreadsheet-table">
+                <!-- Table Filters and Pagination -->
+                <div class="flex flex-col sm:flex-row justify-between items-center gap-4 bg-sidebar-bg border border-border-dark p-3">
+                    <div class="relative w-full sm:max-w-xs">
+                        <input type="text" id="sheet-search-input" placeholder="Search site, buddy, notes..." class="w-full bg-base-bg border border-border-dark px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
+                    </div>
+                    
+                    <div class="flex items-center gap-3 text-xs">
+                        <span id="sheet-total-info" class="text-[10px] font-mono text-slate-500 uppercase">0-0 of 0 Dives</span>
+                        <div class="flex gap-2">
+                            <button id="sheet-prev-btn" class="py-1 px-3 border border-border-dark text-slate-400 hover:text-laser-cyan hover:border-laser-cyan disabled:opacity-40 disabled:pointer-events-none cursor-pointer uppercase text-[10px] font-semibold" disabled>&lt; Prev</button>
+                            <span id="sheet-page-info" class="font-mono text-xs font-bold text-laser-cyan flex items-center px-1">PAGE 1/1</span>
+                            <button id="sheet-next-btn" class="py-1 px-3 border border-border-dark text-slate-400 hover:text-laser-cyan hover:border-laser-cyan disabled:opacity-40 disabled:pointer-events-none cursor-pointer uppercase text-[10px] font-semibold" disabled>Next &gt;</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Spreadsheet Table -->
+                <div class="border border-border-dark bg-sidebar-bg overflow-hidden flex flex-col">
+                    <div class="overflow-x-auto overflow-y-auto max-h-[500px]">
+                        <table class="w-full text-left border-collapse text-xs">
                             <thead>
-                                <tr>
-                                    <th data-sort="dive_number" class="sortable">No. <span class="sort-icon"></span></th>
-                                    <th data-sort="date_time" class="sortable">Date/Time <span class="sort-icon"></span></th>
-                                    <th data-sort="duration" class="sortable">Duration (sec) <span class="sort-icon"></span></th>
-                                    <th data-sort="max_depth" class="sortable">Max Depth (m) <span class="sort-icon"></span></th>
-                                    <th data-sort="location" class="sortable">Location/Site <span class="sort-icon"></span></th>
-                                    <th data-sort="weight" class="sortable">Weight <span class="sort-icon"></span></th>
-                                    <th data-sort="visibility" class="sortable">Visibility <span class="sort-icon"></span></th>
-                                    <th data-sort="buddy" class="sortable">Buddy <span class="sort-icon"></span></th>
-                                    <th data-sort="notes" class="sortable">Notes <span class="sort-icon"></span></th>
+                                <tr class="bg-[#0B0F19] border-b border-border-dark text-[10px] font-mono tracking-wider text-slate-400 uppercase">
+                                    <th data-sort="dive_number" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">No. <span class="sort-icon text-[8px]"></span></th>
+                                    <th data-sort="date_time" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">Date/Time <span class="sort-icon text-[8px]"></span></th>
+                                    <th data-sort="duration" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">Duration <span class="sort-icon text-[8px]"></span></th>
+                                    <th data-sort="max_depth" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">Max Depth <span class="sort-icon text-[8px]"></span></th>
+                                    <th data-sort="location" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">Location/Site <span class="sort-icon text-[8px]"></span></th>
+                                    <th data-sort="weight" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">Weight <span class="sort-icon text-[8px]"></span></th>
+                                    <th data-sort="visibility" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">Visibility <span class="sort-icon text-[8px]"></span></th>
+                                    <th data-sort="buddy" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">Buddy <span class="sort-icon text-[8px]"></span></th>
+                                    <th data-sort="notes" class="sortable py-3 px-4 cursor-pointer hover:text-laser-cyan select-none">Notes <span class="sort-icon text-[8px]"></span></th>
                                 </tr>
                             </thead>
-                            <tbody id="spreadsheet-tbody">
+                            <tbody id="spreadsheet-tbody" class="divide-y divide-border-dark/60 font-sans">
                                 <!-- Populated dynamically -->
                                 <tr>
-                                    <td colspan="9" class="empty-state text-subtle">Loading spreadsheet data...</td>
+                                    <td colspan="9" class="empty-state text-slate-500 py-12 text-center">Loading spreadsheet data...</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
-                    <div class="spreadsheet-footer">
-                        <span id="sheet-total-info" class="text-subtle">Showing 0-0 of 0 dives</span>
-                        <div id="sheet-saving-indicator" class="saving-indicator hidden">
-                            <span class="spinner-small"></span>
-                            <span>Saving changes...</span>
-                        </div>
-                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- SYSTEM FOOTER -->
+    <footer class="h-8 w-full border-t border-border-dark px-4 flex items-center justify-between shrink-0 bg-sidebar-bg text-[10px] font-mono select-none">
+        <div class="flex items-center gap-2 text-slate-400">
+            <span class="text-laser-cyan">⚡ LOG_FEED:</span>
+            <span id="footer-log-ticker" class="text-slate-400 truncate max-w-[280px] sm:max-w-md md:max-w-lg lg:max-w-2xl">Console initialized. Awaiting updates...</span>
+        </div>
+        <div class="flex items-center gap-1.5 text-slate-500">
+            <span id="app-version-info" class="text-laser-cyan font-bold flex items-center gap-1">Checking version...</span>
+        </div>
+    </footer>
+
+
+    <!-- ================= DIVE DETAILS MODAL ================= -->
+    <div id="dive-details-modal" class="modal-backdrop hidden">
+        <div class="modal-content select-text">
+            <div class="modal-header border-b border-border-dark">
+                <h2 id="modal-dive-title" class="text-sm font-semibold tracking-wider uppercase text-slate-100">Dive Details</h2>
+                <button id="modal-close-btn" class="text-slate-400 hover:text-rose-500 text-lg cursor-pointer transition-colors">&times;</button>
+            </div>
+            
+            <div class="modal-tabs shrink-0">
+                <button id="modal-tab-fancy" class="modal-tab-btn active uppercase text-[10px] tracking-wider font-mono">Overview</button>
+                <button id="modal-tab-raw" class="modal-tab-btn uppercase text-[10px] tracking-wider font-mono">Raw JSON Data</button>
+            </div>
+            
+            <div class="modal-body bg-base-bg/60">
+                <!-- Fancy Tab Content -->
+                <div id="modal-content-fancy" class="modal-tab-content">
+                    <div class="modal-empty text-slate-500 text-xs py-8 text-center">No data loaded.</div>
+                </div>
+                
+                <!-- Raw JSON Tab Content -->
+                <div id="modal-content-raw" class="modal-tab-content hidden">
+                    <pre id="modal-raw-json" class="terminal select-text overflow-auto font-mono text-[11px] h-[350px] p-4 bg-[#05070c] border border-border-dark/80 text-cyan-300"></pre>
                 </div>
             </div>
         </div>
-        
-        <!-- DIVE DETAILS MODAL -->
-        <div id="dive-details-modal" class="modal-backdrop hidden">
-            <div class="modal-content glass">
-                <div class="modal-header">
-                    <h2 id="modal-dive-title">Dive Details</h2>
-                    <button id="modal-close-btn" class="modal-close-btn">&times;</button>
-                </div>
-                
-                <div class="modal-tabs">
-                    <button id="modal-tab-fancy" class="modal-tab-btn active">Overview</button>
-                    <button id="modal-tab-raw" class="modal-tab-btn">Raw JSON Data</button>
-                </div>
-                
-                <div class="modal-body">
-                    <!-- Fancy Tab Content -->
-                    <div id="modal-content-fancy" class="modal-tab-content">
-                        <div class="modal-empty text-subtle">No data loaded.</div>
+    </div>
+
+
+    <!-- ================= CREDENTIALS SETUP MODAL ================= -->
+    <div id="credentials-modal" class="modal-backdrop hidden">
+        <div class="modal-content max-w-[500px]">
+            <div class="modal-header border-b border-border-dark">
+                <h2 class="text-sm font-semibold tracking-wider uppercase text-slate-100">🔐 Platform Credentials</h2>
+                <button id="creds-modal-close-btn" class="text-slate-400 hover:text-rose-500 text-lg cursor-pointer transition-colors">&times;</button>
+            </div>
+            
+            <div class="modal-body flex flex-col gap-5 bg-base-bg/60">
+                <form id="credentials-form" class="flex flex-col gap-5">
+                    
+                    <!-- Garmin Section -->
+                    <div class="flex flex-col gap-3 border border-border-dark p-4 bg-sidebar-bg">
+                        <span class="text-[10px] font-mono tracking-widest text-laser-cyan uppercase">Garmin Connect</span>
+                        <div class="flex flex-col gap-1">
+                            <label for="cred-garmin-user" class="text-[10px] text-slate-400 font-medium">Username / Email</label>
+                            <input type="text" id="cred-garmin-user" name="garmin_username" placeholder="user@example.com" autocomplete="username" class="bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
+                        </div>
+                        <div class="flex flex-col gap-1">
+                            <label for="cred-garmin-pass" class="text-[10px] text-slate-400 font-medium">Password</label>
+                            <input type="password" id="cred-garmin-pass" name="garmin_password" placeholder="" autocomplete="current-password" class="bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
+                        </div>
+                    </div>
+
+                    <!-- Divelogs Section -->
+                    <div class="flex flex-col gap-3 border border-border-dark p-4 bg-sidebar-bg">
+                        <span class="text-[10px] font-mono tracking-widest text-laser-cyan uppercase">Divelogs.org</span>
+                        <div class="flex flex-col gap-1">
+                            <label for="cred-divelogs-user" class="text-[10px] text-slate-400 font-medium">Username</label>
+                            <input type="text" id="cred-divelogs-user" name="divelogs_username" placeholder="username" autocomplete="username" class="bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
+                        </div>
+                        <div class="flex flex-col gap-1">
+                            <label for="cred-divelogs-pass" class="text-[10px] text-slate-400 font-medium">Password</label>
+                            <input type="password" id="cred-divelogs-pass" name="divelogs_password" placeholder="" autocomplete="current-password" class="bg-base-bg border border-border-dark px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-laser-cyan">
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="flex gap-3">
+                        <button type="button" id="test-creds-btn" class="flex-1 py-2 border border-border-dark hover:border-laser-cyan text-xs font-semibold uppercase tracking-wider cursor-pointer text-slate-300 hover:text-laser-cyan bg-[#0B0F19]/40">
+                            Test Connections
+                        </button>
+                        <button type="submit" id="save-creds-btn" class="flex-1 py-2 border border-laser-cyan bg-laser-cyan/15 hover:bg-laser-cyan/25 text-laser-cyan text-xs font-semibold uppercase tracking-wider cursor-pointer">
+                            Save Keys
+                        </button>
                     </div>
                     
-                    <!-- Raw JSON Tab Content -->
-                    <div id="modal-content-raw" class="modal-tab-content hidden">
-                        <pre id="modal-raw-json" class="terminal modal-json-pre"></pre>
+                    <div id="creds-test-results" class="hidden text-xs font-mono border border-border-dark p-3 bg-[#05070c] max-h-[120px] overflow-y-auto">
+                        <!-- Connection test logs dynamically printed -->
                     </div>
-                </div>
+                </form>
             </div>
         </div>
-
-
-        <!-- CREDENTIALS SETUP MODAL -->
-        <div id="credentials-modal" class="modal-backdrop hidden">
-            <div class="modal-content glass" style="max-width: 560px;">
-                <div class="modal-header">
-                    <h2>🔐 Platform Credentials Setup</h2>
-                    <button id="creds-modal-close-btn" class="modal-close-btn">&times;</button>
-                </div>
-                <div class="modal-body">
-                    <form id="credentials-form">
-                        <div class="creds-section">
-                            <h3 class="creds-section-title">Garmin Connect</h3>
-                            <div class="form-group">
-                                <label for="cred-garmin-user">Username / Email</label>
-                                <input type="text" id="cred-garmin-user" name="garmin_username" placeholder="user@example.com" autocomplete="username">
-                            </div>
-                            <div class="form-group">
-                                <label for="cred-garmin-pass">Password</label>
-                                <input type="password" id="cred-garmin-pass" name="garmin_password" placeholder="••••••••" autocomplete="current-password">
-                            </div>
-                        </div>
-                        <div class="creds-section">
-                            <h3 class="creds-section-title">Divelogs.org</h3>
-                            <div class="form-group">
-                                <label for="cred-divelogs-user">Username</label>
-                                <input type="text" id="cred-divelogs-user" name="divelogs_username" placeholder="username" autocomplete="username">
-                            </div>
-                            <div class="form-group">
-                                <label for="cred-divelogs-pass">Password</label>
-                                <input type="password" id="cred-divelogs-pass" name="divelogs_password" placeholder="••••••••" autocomplete="current-password">
-                            </div>
-                        </div>
-                        <div class="creds-actions">
-                            <button type="button" id="test-creds-btn" class="btn secondary-btn">Test Connection</button>
-                            <button type="submit" id="save-creds-btn" class="btn primary-btn">Save Credentials</button>
-                        </div>
-                        <div id="creds-test-results" class="creds-test-results hidden"></div>
-                    </form>
-                </div>
-            </div>
-        </div>
-        <!-- FOOTER / VERSION INFO -->
-        <footer class="app-footer">
-            <span id="app-version-info" class="text-subtle">Version checking...</span>
-        </footer>
     </div>
-    <script src="/static/script.js?v=1.0.3"></script>
+
+    <!-- UI Helper Escape Function -->
+    <script>
+        function escapeHtml(text) {
+            if (!text) return "";
+            return String(text)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+    <script src="/static/script.js?v=1.0.4"></script>
 </body>
 </html>

@@ -10,6 +10,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const statusDot = document.querySelector(".status-dot");
     const garminStatusEl = document.getElementById("garmin-status");
     const divelogsStatusEl = document.getElementById("divelogs-status");
+    const syncAllDatesCheckbox = document.getElementById("sync_all_dates");
+    const dateFromInput = document.getElementById("date_from");
+    const dateToInput = document.getElementById("date_to");
     
     // Scheduler Elements
     const showAddCronBtn = document.getElementById("show-add-cron-btn");
@@ -37,8 +40,14 @@ document.addEventListener("DOMContentLoaded", () => {
             
             // Populate inputs
             document.getElementById("directionality").value = settings.directionality;
-            document.getElementById("date_from").value = settings.sync_filters.date_from || "";
-            document.getElementById("date_to").value = settings.sync_filters.date_to || "";
+            const hasNoDates = !settings.sync_filters.date_from && !settings.sync_filters.date_to;
+            if (syncAllDatesCheckbox) {
+                syncAllDatesCheckbox.checked = hasNoDates;
+            }
+            dateFromInput.value = settings.sync_filters.date_from || "";
+            dateToInput.value = settings.sync_filters.date_to || "";
+            dateFromInput.disabled = hasNoDates;
+            dateToInput.disabled = hasNoDates;
             document.getElementById("only_new").checked = settings.sync_filters.only_new;
             document.getElementById("sync_gases").checked = settings.sync_filters.sync_gases;
             document.getElementById("sync_fit").checked = settings.sync_filters.sync_fit;
@@ -295,8 +304,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const payload = {
             directionality: document.getElementById("directionality").value,
             sync_filters: {
-                date_from: document.getElementById("date_from").value || null,
-                date_to: document.getElementById("date_to").value || null,
+                date_from: (syncAllDatesCheckbox && syncAllDatesCheckbox.checked) ? null : (dateFromInput.value || null),
+                date_to: (syncAllDatesCheckbox && syncAllDatesCheckbox.checked) ? null : (dateToInput.value || null),
                 only_new: document.getElementById("only_new").checked,
                 sync_gases: document.getElementById("sync_gases").checked,
                 sync_fit: document.getElementById("sync_fit").checked
@@ -372,6 +381,22 @@ document.addEventListener("DOMContentLoaded", () => {
         if (autoscrollCheckbox.checked) {
             logTerminal.scrollTop = logTerminal.scrollHeight;
         }
+
+        // Update bottom footer telemetry ticker
+        const ticker = document.getElementById("footer-log-ticker");
+        if (ticker) {
+            ticker.textContent = text;
+            // Map types to classes
+            if (type === "error") {
+                ticker.className = "text-red-400 font-medium truncate";
+            } else if (type === "warning") {
+                ticker.className = "text-amber-400 font-medium truncate";
+            } else if (type === "system-msg") {
+                ticker.className = "text-laser-cyan italic truncate";
+            } else {
+                ticker.className = "text-[#94a3b8] truncate";
+            }
+        }
     }
 
     clearLogBtn.addEventListener("click", () => {
@@ -395,8 +420,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const payload = {
             dry_run: isDryRun,
             directionality: document.getElementById("directionality").value,
-            date_from: document.getElementById("date_from").value || null,
-            date_to: document.getElementById("date_to").value || null,
+            date_from: (syncAllDatesCheckbox && syncAllDatesCheckbox.checked) ? null : (dateFromInput.value || null),
+            date_to: (syncAllDatesCheckbox && syncAllDatesCheckbox.checked) ? null : (dateToInput.value || null),
             only_new: document.getElementById("only_new").checked,
             sync_gases: document.getElementById("sync_gases").checked,
             sync_fit: document.getElementById("sync_fit").checked
@@ -425,6 +450,18 @@ document.addEventListener("DOMContentLoaded", () => {
     triggerSyncBtn.addEventListener("click", () => executeSync(false));
     if (triggerDryRunBtn) {
         triggerDryRunBtn.addEventListener("click", () => executeSync(true));
+    }
+
+    if (syncAllDatesCheckbox) {
+        syncAllDatesCheckbox.addEventListener("change", () => {
+            const isChecked = syncAllDatesCheckbox.checked;
+            dateFromInput.disabled = isChecked;
+            dateToInput.disabled = isChecked;
+            if (isChecked) {
+                dateFromInput.value = "";
+                dateToInput.value = "";
+            }
+        });
     }
 
     async function pollSyncStatus() {
@@ -472,6 +509,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const divelogsCount = document.getElementById("divelogs-count");
 
         if (!garminList || !divelogsList) return;
+
+        // Update header telemetry total
+        const headerTotal = document.getElementById("header-total-dives");
+        if (headerTotal) {
+            headerTotal.textContent = data.garmin.length + data.divelogs.length;
+        }
 
         // Render Garmin
         garminList.innerHTML = "";
@@ -529,6 +572,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const maxDepthM = parseFloat(dive.max_depth || 0);
         const durationMin = Math.round(parseInt(dive.duration || 0) / 60);
 
+        const cleanNotes = (dive.notes && dive.notes !== "None") ? dive.notes : "";
+        const cleanWeight = (dive.weight && dive.weight !== "None") ? dive.weight : "";
+        const cleanVis = (dive.visibility && dive.visibility !== "None") ? dive.visibility : "";
+
         card.innerHTML = `
             <div class="dive-card-header">
                 <span class="dive-title">${dive.location || "Unknown Location"}</span>
@@ -538,10 +585,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 <span><span class="dive-detail-label">Dive:</span><span class="dive-detail-val">#${dive.dive_number}</span></span>
                 <span><span class="dive-detail-label">Depth:</span><span class="dive-detail-val">${maxDepthM.toFixed(1)}m</span></span>
                 <span><span class="dive-detail-label">Duration:</span><span class="dive-detail-val">${durationMin} min</span></span>
-                ${dive.weight ? `<span><span class="dive-detail-label">Weight:</span><span class="dive-detail-val">${dive.weight}</span></span>` : ""}
-                ${dive.visibility ? `<span><span class="dive-detail-label">Vis:</span><span class="dive-detail-val">${dive.visibility}</span></span>` : ""}
+                ${cleanWeight ? `<span><span class="dive-detail-label">Weight:</span><span class="dive-detail-val">${cleanWeight}</span></span>` : ""}
+                ${cleanVis ? `<span><span class="dive-detail-label">Vis:</span><span class="dive-detail-val">${cleanVis}</span></span>` : ""}
             </div>
-            ${dive.notes ? `<p class="dive-notes" title="${escapeHtml(dive.notes)}">${escapeHtml(dive.notes)}</p>` : ""}
+            ${cleanNotes ? `<p class="dive-notes" title="${escapeHtml(cleanNotes)}">${escapeHtml(cleanNotes)}</p>` : ""}
         `;
         return card;
     }
@@ -603,6 +650,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const durationMin = Math.round(parseInt(dive.duration || 0) / 60);
         const maxDepthM = parseFloat(dive.max_depth || 0).toFixed(1);
         
+        const cleanNotes = (dive.notes && dive.notes !== "None") ? dive.notes : "No description provided.";
+        const cleanBuddy = (dive.buddy && dive.buddy !== "None") ? dive.buddy : "None";
+        const cleanWeight = (dive.weight && dive.weight !== "None") ? dive.weight : "None";
+        const cleanVis = (dive.visibility && dive.visibility !== "None") ? dive.visibility : "None";
+
         modalContentFancy.innerHTML = `
             <div class="detail-grid">
                 <div class="detail-item">
@@ -631,19 +683,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
                 <div class="detail-item">
                     <span class="detail-label">Buddy</span>
-                    <span class="detail-value">${dive.buddy || 'None'}</span>
+                    <span class="detail-value">${cleanBuddy}</span>
                 </div>
                 <div class="detail-item">
                     <span class="detail-label">Weight</span>
-                    <span class="detail-value">${dive.weight || 'None'}</span>
+                    <span class="detail-value">${cleanWeight}</span>
                 </div>
                 <div class="detail-item">
                     <span class="detail-label">Visibility</span>
-                    <span class="detail-value">${dive.visibility || 'None'}</span>
+                    <span class="detail-value">${cleanVis}</span>
                 </div>
                 <div class="detail-item span-full">
                     <span class="detail-label">Notes</span>
-                    <span class="detail-value notes-val">${escapeHtml(dive.notes || 'No description provided.')}</span>
+                    <span class="detail-value notes-val">${escapeHtml(cleanNotes)}</span>
                 </div>
             </div>
         `;
@@ -723,7 +775,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     });
                 }
             } else if (service === "divelogs") {
-                const rawTanks = rawData.tanks || [];
+                const rawTanks = (rawData.tanks || []).filter(tank => {
+                    const hasVol = tank.vol !== undefined && tank.vol !== null && tank.vol !== "";
+                    const hasStartP = tank.start_pressure !== undefined && tank.start_pressure !== null && tank.start_pressure !== 0;
+                    const hasEndP = tank.end_pressure !== undefined && tank.end_pressure !== null && tank.end_pressure !== 0;
+                    const hasTank = tank.tank !== undefined && tank.tank !== null && tank.tank !== "";
+                    const hasTankName = tank.tankname !== undefined && tank.tankname !== null && tank.tankname !== "";
+                    return hasVol || hasStartP || hasEndP || hasTank || hasTankName;
+                });
                 tanks = rawTanks.map((tank, idx) => {
                     const o2 = tank.o2 || 21;
                     const he = tank.he || 0;
@@ -1013,19 +1072,19 @@ document.addEventListener("DOMContentLoaded", () => {
                     <input type="number" step="0.1" class="sheet-input" data-field="max_depth" value="${dive.max_depth || 0.0}">
                 </td>
                 <td>
-                    <input type="text" class="sheet-input" data-field="location" value="${escapeHtml(dive.location || '')}">
+                    <input type="text" class="sheet-input" data-field="location" value="${escapeHtml((dive.location && dive.location !== 'None') ? dive.location : '')}">
                 </td>
                 <td>
-                    <input type="text" class="sheet-input" data-field="weight" value="${escapeHtml(dive.weight || '')}">
+                    <input type="text" class="sheet-input" data-field="weight" value="${escapeHtml((dive.weight && dive.weight !== 'None') ? dive.weight : '')}">
                 </td>
                 <td>
-                    <input type="text" class="sheet-input" data-field="visibility" value="${escapeHtml(dive.visibility || '')}">
+                    <input type="text" class="sheet-input" data-field="visibility" value="${escapeHtml((dive.visibility && dive.visibility !== 'None') ? dive.visibility : '')}">
                 </td>
                 <td>
-                    <input type="text" class="sheet-input" data-field="buddy" value="${escapeHtml(dive.buddy || '')}">
+                    <input type="text" class="sheet-input" data-field="buddy" value="${escapeHtml((dive.buddy && dive.buddy !== 'None') ? dive.buddy : '')}">
                 </td>
                 <td>
-                    <input type="text" class="sheet-input" data-field="notes" value="${escapeHtml(dive.notes || '')}">
+                    <input type="text" class="sheet-input" data-field="notes" value="${escapeHtml((dive.notes && dive.notes !== 'None') ? dive.notes : '')}">
                 </td>
             `;
             
@@ -1049,6 +1108,8 @@ document.addEventListener("DOMContentLoaded", () => {
                         payload[field] = parseInt(newValue, 10) || 0;
                     } else if (field === "max_depth") {
                         payload[field] = parseFloat(newValue) || 0.0;
+                    } else if ((field === "buddy" || field === "notes" || field === "location" || field === "weight" || field === "visibility") && newValue.trim() === "") {
+                        payload[field] = sheetService === "garmin" ? "None" : "";
                     } else {
                         payload[field] = newValue;
                     }
@@ -1408,4 +1469,20 @@ document.addEventListener("DOMContentLoaded", () => {
             versionEl.textContent = "Version info unavailable";
         }
     }
+
+    // 10. Real-time Clock for Telemetry Bar
+    function startClock() {
+        const clockEl = document.getElementById("header-clock");
+        if (!clockEl) return;
+        
+        function updateTime() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString("en-US", { hour12: false });
+            clockEl.textContent = timeStr;
+        }
+        
+        updateTime();
+        setInterval(updateTime, 1000);
+    }
+    startClock();
 });
