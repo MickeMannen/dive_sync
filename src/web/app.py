@@ -895,6 +895,11 @@ def update_dive_endpoint(data: UpdateDiveSchema):
         logger.error("Failed to update dive: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/version")
+def get_app_version():
+    from src.core.version import get_version_info
+    return get_version_info()
+
 # Serve index.html statically
 @app.get("/")
 def read_root():

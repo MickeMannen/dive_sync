@@ -25,6 +25,8 @@ RUN mkdir -p /app/data
 EXPOSE 8000
 
 # Environment variables to support user configurations
+ARG APP_VERSION=unknown
+ENV APP_VERSION=${APP_VERSION}
 ENV DATA_DIR=/app/data
 ENV DIVE_SYNC_PORT=8000
 ENV DIVE_SYNC_HOST=0.0.0.0

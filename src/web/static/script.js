@@ -1085,6 +1085,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadSettings();
     loadCredentialsStatus();
     connectLogStream();
+    loadVersionInfo();
     
     // Periodically poll credentials status & active sync state
     setInterval(loadCredentialsStatus, 10000);
@@ -1206,4 +1207,25 @@ document.addEventListener("DOMContentLoaded", () => {
             saveBtn.textContent = "Save Credentials";
         }
     });
+
+    async function loadVersionInfo() {
+        const versionEl = document.getElementById("app-version-info");
+        if (!versionEl) return;
+        
+        try {
+            const res = await fetch("/api/version");
+            if (!res.ok) throw new Error("Status " + res.status);
+            const info = await res.json();
+            
+            let html = `<span>Running version: <strong style="color: var(--color-primary);">${info.current_version}</strong></span>`;
+            if (info.update_available) {
+                html += ` <a href="${info.release_url}" target="_blank" class="update-link">▲ Update available: ${info.latest_version}</a>`;
+            } else {
+                html += ` <span style="font-size: 0.7rem; padding: 0.15rem 0.4rem; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); color: var(--color-success); border-radius: var(--radius-full); margin-left: 0.5rem; font-weight: 700;">LATEST</span>`;
+            }
+            versionEl.innerHTML = html;
+        } catch (err) {
+            versionEl.textContent = "Version info unavailable";
+        }
+    }
 });

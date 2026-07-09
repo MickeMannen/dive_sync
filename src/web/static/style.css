@@ -1390,3 +1390,36 @@ input:checked + .slider:before {
     color: var(--color-primary);
     font-family: var(--font-mono);
 }
+
+/* App Footer / Version Styles */
+.app-footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    padding: 1.5rem 0;
+    margin-top: 2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 0.8rem;
+}
+
+#app-version-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.update-link {
+    color: var(--color-success);
+    text-decoration: none;
+    font-weight: 600;
+    background: rgba(16, 185, 129, 0.1);
+    padding: 0.15rem 0.5rem;
+    border-radius: var(--radius-full);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    transition: var(--transition-smooth);
+}
+
+.update-link:hover {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: rgba(16, 185, 129, 0.4);
+}
