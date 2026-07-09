@@ -17,12 +17,26 @@ class SyncScheduleSlot(BaseModel):
     hour: int = Field(..., ge=0, le=23)
     minute: int = Field(..., ge=0, le=59)
 
+class CronJobModel(BaseModel):
+    id: str = Field(..., description="Unique ID for this job")
+    directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
+    frequency: str = Field("daily", description="hourly, daily, weekly, custom_minutes")
+    hour: int = Field(0, ge=0, le=23)
+    minute: int = Field(0, ge=0, le=59)
+    day_of_week: int = Field(0, ge=0, le=6, description="0=Sunday, 6=Saturday for weekly")
+    interval_minutes: int = Field(60, ge=1, description="Interval in minutes if frequency is custom_minutes")
+    only_new: bool = Field(True, description="Sync only new dives since last run")
+    sync_gases: bool = Field(True, description="Sync detailed gas mixtures")
+    sync_fit: bool = Field(False, description="Sync FIT files")
+    enabled: bool = Field(True, description="Whether this job is active")
+
 class SettingsModel(BaseModel):
     directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
     sync_filters: SyncFilters = Field(default_factory=SyncFilters)
     grace_window_minutes: int = Field(15, description="Matching grace window in minutes")
     api_cooldown_seconds: float = Field(1.0, description="Cool-down delay in seconds between API requests")
     schedule: List[SyncScheduleSlot] = Field(default_factory=list, description="Cron-like multi-slot schedule")
+    cron_jobs: List[CronJobModel] = Field(default_factory=list, description="List of configured cron jobs")
 
 class GarminCredentials(BaseModel):
     username: str = ""

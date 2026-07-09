@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, CredentialsModel
+from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, CredentialsModel, CronJobModel
 from src.core.sync_engine import SyncEngine
 
 # Configure logger
@@ -54,15 +54,29 @@ is_sync_running = False
 last_sync_results: Dict[str, Any] = {}
 scheduler_task: Optional[asyncio.Task] = None
 
-def run_sync_thread(dry_run: bool):
+def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = None):
     global is_sync_running, last_sync_results
     is_sync_running = True
-    logger.info("Manual synchronization started (Dry Run: %s)", dry_run)
+    job_id = custom_settings.get("id") if custom_settings else "Manual"
+    logger.info("Synchronization started for job '%s' (Dry Run: %s)", job_id, dry_run)
     try:
         engine = SyncEngine()
+        if custom_settings:
+            engine.settings.directionality = custom_settings.get("directionality", engine.settings.directionality)
+            if "only_new" in custom_settings:
+                engine.settings.sync_filters.only_new = bool(custom_settings["only_new"])
+            if "sync_gases" in custom_settings:
+                engine.settings.sync_filters.sync_gases = bool(custom_settings["sync_gases"])
+            if "sync_fit" in custom_settings:
+                engine.settings.sync_filters.sync_fit = bool(custom_settings["sync_fit"])
+            if "date_from" in custom_settings:
+                engine.settings.sync_filters.date_from = custom_settings["date_from"]
+            if "date_to" in custom_settings:
+                engine.settings.sync_filters.date_to = custom_settings["date_to"]
+                
         results = engine.run_sync(dry_run=dry_run)
         last_sync_results = results
-        logger.info("Manual synchronization completed successfully.")
+        logger.info("Synchronization completed successfully.")
     except Exception as e:
         logger.error("Sync run encountered an error: %s", e)
         last_sync_results = {"error": str(e)}
@@ -74,20 +88,61 @@ async def scheduler_loop():
     logger.info("Background schedule watcher started.")
     last_checked_minute = None
     
+    # Track last run timestamp for custom minutes jobs
+    job_last_run: Dict[str, float] = {}
+    
     while True:
         try:
             now = datetime.now()
             current_minute = (now.hour, now.minute)
+            current_time = time.time()
             
             if current_minute != last_checked_minute:
                 settings = ConfigManager.load_settings()
-                for slot in settings.schedule:
+                
+                # Support old schedule slots (daily)
+                for slot in getattr(settings, "schedule", []):
                     if slot.hour == now.hour and slot.minute == now.minute:
-                        logger.info("Scheduled synchronization slot triggered for %02d:%02d", slot.hour, slot.minute)
+                        logger.info("Legacy scheduled slot triggered for %02d:%02d", slot.hour, slot.minute)
                         if not is_sync_running:
                             threading.Thread(target=run_sync_thread, args=(False,), daemon=True).start()
                         else:
                             logger.warning("Scheduled sync skipped: another synchronization is currently running.")
+                
+                # Support new custom cron jobs
+                for job in getattr(settings, "cron_jobs", []):
+                    if not job.enabled:
+                        continue
+                        
+                    should_trigger = False
+                    
+                    if job.frequency == "hourly":
+                        if now.minute == job.minute:
+                            should_trigger = True
+                    elif job.frequency == "daily":
+                        if now.hour == job.hour and now.minute == job.minute:
+                            should_trigger = True
+                    elif job.frequency == "weekly":
+                        mapped_weekday = (now.weekday() + 1) % 7
+                        if mapped_weekday == job.day_of_week and now.hour == job.hour and now.minute == job.minute:
+                            should_trigger = True
+                    elif job.frequency == "custom_minutes":
+                        if job.id not in job_last_run:
+                            job_last_run[job.id] = current_time
+                        elif current_time - job_last_run[job.id] >= job.interval_minutes * 60:
+                            should_trigger = True
+                            
+                    if should_trigger:
+                        logger.info("Cron job '%s' triggered (%s)", job.id, job.frequency)
+                        if job.frequency == "custom_minutes":
+                            job_last_run[job.id] = current_time
+                            
+                        if not is_sync_running:
+                            custom_set = job.model_dump()
+                            threading.Thread(target=run_sync_thread, args=(False, custom_set), daemon=True).start()
+                        else:
+                            logger.warning("Cron job '%s' skipped: another synchronization is currently running.", job.id)
+                            
                 last_checked_minute = current_minute
                 
             await asyncio.sleep(10)
@@ -123,12 +178,35 @@ class SyncFiltersSchema(BaseModel):
     sync_gases: bool = True
     sync_fit: bool = False
 
+class CronJobSchema(BaseModel):
+    id: str
+    directionality: str
+    frequency: str
+    hour: int
+    minute: int
+    day_of_week: int
+    interval_minutes: int
+    only_new: bool
+    sync_gases: bool
+    sync_fit: bool
+    enabled: bool
+
 class SettingsSchema(BaseModel):
     directionality: str
     sync_filters: SyncFiltersSchema
     grace_window_minutes: int
     api_cooldown_seconds: float
     schedule: List[Dict[str, int]]
+    cron_jobs: List[CronJobSchema] = []
+
+class SyncTriggerRequest(BaseModel):
+    dry_run: bool = False
+    directionality: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    only_new: Optional[bool] = None
+    sync_gases: Optional[bool] = None
+    sync_fit: Optional[bool] = None
 
 class CredentialsSchema(BaseModel):
     garmin_username: str = ""
@@ -149,6 +227,22 @@ def save_settings(data: SettingsSchema):
             SyncScheduleSlot(hour=slot["hour"], minute=slot["minute"]) 
             for slot in data.schedule
         ]
+        cron_jobs = [
+            CronJobModel(
+                id=job.id,
+                directionality=job.directionality,
+                frequency=job.frequency,
+                hour=job.hour,
+                minute=job.minute,
+                day_of_week=job.day_of_week,
+                interval_minutes=job.interval_minutes,
+                only_new=job.only_new,
+                sync_gases=job.sync_gases,
+                sync_fit=job.sync_fit,
+                enabled=job.enabled
+            )
+            for job in data.cron_jobs
+        ]
         settings = SettingsModel(
             directionality=data.directionality,
             sync_filters=SyncFilters(
@@ -160,7 +254,8 @@ def save_settings(data: SettingsSchema):
             ),
             grace_window_minutes=data.grace_window_minutes,
             api_cooldown_seconds=data.api_cooldown_seconds,
-            schedule=schedule_slots
+            schedule=schedule_slots,
+            cron_jobs=cron_jobs
         )
         ConfigManager.save_settings(settings)
         logger.info("Configuration updated successfully.")
@@ -241,12 +336,17 @@ def test_credentials(data: CredentialsSchema):
     return results
 
 @app.post("/api/sync/trigger")
-def trigger_sync(dry_run: bool = Query(False)):
+def trigger_sync(request: Optional[SyncTriggerRequest] = None, dry_run: bool = Query(False)):
     global is_sync_running
     if is_sync_running:
         raise HTTPException(status_code=409, detail="A synchronization run is already in progress.")
         
-    threading.Thread(target=run_sync_thread, args=(dry_run,), daemon=True).start()
+    custom_settings = None
+    if request:
+        dry_run = request.dry_run
+        custom_settings = request.model_dump(exclude_none=True)
+        
+    threading.Thread(target=run_sync_thread, args=(dry_run, custom_settings), daemon=True).start()
     return {"status": "success", "message": "Sync job triggered in background."}
 
 @app.get("/api/sync/status")

@@ -73,16 +73,14 @@
                     <!-- CONTROLS CARD -->
                     <div class="card glass">
                         <h2>Manual Execution</h2>
-                        <div class="manual-sync-actions">
-                            <div class="dry-run-toggle">
-                                <label class="switch">
-                                    <input type="checkbox" id="dry-run-checkbox" checked>
-                                    <span class="slider round"></span>
-                                </label>
-                                <span>Dry-run simulation mode</span>
-                            </div>
-                            <button id="trigger-sync-btn" class="btn primary-btn">
-                                <span class="btn-text">Trigger Manual Sync</span>
+                        <p class="text-subtle" style="margin-bottom: 1rem; font-size: 0.85rem;">Execute synchronization task immediately using the parameters configured below.</p>
+                        <div style="display: flex; gap: 1rem;">
+                            <button id="trigger-sync-btn" class="btn primary-btn" style="flex: 1;">
+                                <span class="btn-text">Run Sync Now</span>
+                                <span class="spinner hidden"></span>
+                            </button>
+                            <button id="trigger-dry-run-btn" class="btn secondary-btn" style="flex: 1;">
+                                <span class="btn-text">Dry Run Now</span>
                                 <span class="spinner hidden"></span>
                             </button>
                         </div>
@@ -146,42 +144,125 @@
                     </div>
                 </section>
 
-                <!-- RIGHT COLUMN: SCHEDULER & LOGS -->
+                <!-- RIGHT COLUMN: SCHEDULER -->
                 <section class="panel-right">
                     <!-- SCHEDULER CARD -->
                     <div class="card glass">
-                        <h2>Cron Task Scheduler (Multi-Slot)</h2>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
+                            <h2>Cron Task Scheduler</h2>
+                            <button id="show-add-cron-btn" class="btn add-btn">+ Add Cron Job</button>
+                        </div>
+
+                        <!-- Add Cron Job Form Container (hidden by default) -->
+                        <div id="add-cron-container" class="cron-form-container hidden">
+                            <form id="add-cron-form">
+                                <div class="form-group">
+                                    <label for="cron-job-id">Job Name / ID</label>
+                                    <input type="text" id="cron-job-id" placeholder="e.g. Daily Sync" required>
+                                </div>
+                                <div class="form-group-row">
+                                    <div class="form-group">
+                                        <label for="cron-direction">Direction</label>
+                                        <select id="cron-direction">
+                                            <option value="bidirectional">Bidirectional</option>
+                                            <option value="to_divelogs">Garmin Connect ➔ Divelogs.org</option>
+                                            <option value="to_garmin">Divelogs.org ➔ Garmin Connect</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="cron-frequency">Frequency</label>
+                                        <select id="cron-frequency">
+                                            <option value="hourly">Hourly</option>
+                                            <option value="daily" selected>Daily</option>
+                                            <option value="weekly">Weekly</option>
+                                            <option value="custom_minutes">Every X Minutes</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- Dynamic Frequency Inputs -->
+                                <div class="form-group-row" id="cron-time-row">
+                                    <div class="form-group hidden" id="cron-dow-group">
+                                        <label for="cron-dow">Day of Week</label>
+                                        <select id="cron-dow">
+                                            <option value="0">Sunday</option>
+                                            <option value="1">Monday</option>
+                                            <option value="2">Tuesday</option>
+                                            <option value="3">Wednesday</option>
+                                            <option value="4">Thursday</option>
+                                            <option value="5">Friday</option>
+                                            <option value="6">Saturday</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group" id="cron-time-group">
+                                        <label for="cron-time">Time</label>
+                                        <input type="time" id="cron-time" value="00:00">
+                                    </div>
+                                    <div class="form-group hidden" id="cron-hourly-group">
+                                        <label for="cron-minute-past">Minute Past Hour</label>
+                                        <input type="number" id="cron-minute-past" min="0" max="59" value="0">
+                                    </div>
+                                    <div class="form-group hidden" id="cron-interval-group">
+                                        <label for="cron-interval">Interval (Minutes)</label>
+                                        <input type="number" id="cron-interval" min="1" value="60">
+                                    </div>
+                                </div>
+
+                                <div class="checkbox-group">
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="cron-only-new" checked>
+                                        <span class="checkmark"></span>
+                                        Only new dives (Incremental)
+                                    </label>
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="cron-sync-gases" checked>
+                                        <span class="checkmark"></span>
+                                        Sync detailed gas mixtures
+                                    </label>
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="cron-sync-fit">
+                                        <span class="checkmark"></span>
+                                        Sync Garmin native .FIT files
+                                    </label>
+                                </div>
+
+                                <div class="form-actions" style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+                                    <button type="submit" class="btn primary-btn" style="flex: 1;">Add Job</button>
+                                    <button type="button" id="cancel-cron-btn" class="btn secondary-btn" style="flex: 1;">Cancel</button>
+                                </div>
+                            </form>
+                            <div class="modal-section-divider" style="margin: 1.5rem 0;"></div>
+                        </div>
+
                         <div class="scheduler-controls">
-                            <div class="add-slot-row">
-                                <input type="time" id="new-slot-time">
-                                <button id="add-slot-btn" class="btn add-btn">+ Add Slot</button>
-                            </div>
-                            <ul class="schedule-slots-list" id="schedule-slots-list">
+                            <ul class="schedule-slots-list" id="cron-jobs-list">
                                 <!-- Populated dynamically -->
                                 <li class="empty-state text-subtle">No schedules configured.</li>
                             </ul>
                         </div>
                     </div>
-
-                    <!-- LIVE LOG VIEWER CARD -->
-                    <div class="card glass log-card">
-                        <div class="log-header">
-                            <h2>Live Synchronization Output Console</h2>
-                            <div class="log-actions">
-                                <label class="checkbox-container inline">
-                                    <input type="checkbox" id="autoscroll-checkbox" checked>
-                                    <span class="checkmark"></span>
-                                    Autoscroll
-                                </label>
-                                <button id="clear-log-btn" class="btn text-btn">Clear</button>
-                            </div>
-                        </div>
-                        <div class="terminal" id="log-terminal">
-                            <div class="terminal-line system-msg">Console initialized. Awaiting logs...</div>
-                        </div>
-                    </div>
                 </section>
             </main>
+
+            <!-- BOTTOM PANEL: LIVE LOG VIEWER -->
+            <section class="panel-bottom" style="margin-top: 2rem;">
+                <div class="card glass log-card">
+                    <div class="log-header">
+                        <h2>Live Synchronization Output Console</h2>
+                        <div class="log-actions">
+                            <label class="checkbox-container inline">
+                                <input type="checkbox" id="autoscroll-checkbox" checked>
+                                <span class="checkmark"></span>
+                                Autoscroll
+                            </label>
+                            <button id="clear-log-btn" class="btn text-btn">Clear Log</button>
+                        </div>
+                    </div>
+                    <div class="terminal" id="log-terminal">
+                        <div class="terminal-line system-msg">Console initialized. Awaiting logs...</div>
+                    </div>
+                </div>
+            </section>
         </div>
 
         <!-- DIVES EXPLORER TAB CONTENT -->

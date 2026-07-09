@@ -2,7 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // DOM Elements
     const settingsForm = document.getElementById("settings-form");
     const triggerSyncBtn = document.getElementById("trigger-sync-btn");
-    const dryRunCheckbox = document.getElementById("dry-run-checkbox");
+    const triggerDryRunBtn = document.getElementById("trigger-dry-run-btn");
     const logTerminal = document.getElementById("log-terminal");
     const clearLogBtn = document.getElementById("clear-log-btn");
     const autoscrollCheckbox = document.getElementById("autoscroll-checkbox");
@@ -12,11 +12,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const divelogsStatusEl = document.getElementById("divelogs-status");
     
     // Scheduler Elements
-    const addSlotBtn = document.getElementById("add-slot-btn");
-    const newSlotTime = document.getElementById("new-slot-time");
-    const scheduleSlotsList = document.getElementById("schedule-slots-list");
+    const showAddCronBtn = document.getElementById("show-add-cron-btn");
+    const addCronContainer = document.getElementById("add-cron-container");
+    const addCronForm = document.getElementById("add-cron-form");
+    const cancelCronBtn = document.getElementById("cancel-cron-btn");
+    const cronJobsList = document.getElementById("cron-jobs-list");
+    const cronFrequencySelect = document.getElementById("cron-frequency");
+    
+    const cronDowGroup = document.getElementById("cron-dow-group");
+    const cronTimeGroup = document.getElementById("cron-time-group");
+    const cronHourlyGroup = document.getElementById("cron-hourly-group");
+    const cronIntervalGroup = document.getElementById("cron-interval-group");
 
-    let scheduleSlots = [];
+    let cronJobs = [];
+    let legacyScheduleSlots = [];
 
     // 1. Load Settings and Populate Form
     async function loadSettings() {
@@ -37,8 +46,9 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("api_cooldown_seconds").value = settings.api_cooldown_seconds;
             
             // Load schedules
-            scheduleSlots = settings.schedule || [];
-            renderScheduleSlots();
+            legacyScheduleSlots = settings.schedule || [];
+            cronJobs = settings.cron_jobs || [];
+            renderCronJobs();
         } catch (err) {
             appendLogLine(`[ERROR] Failed to load configurations: ${err.message}`, "error");
         }
@@ -89,64 +99,199 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // 3. Render Schedule Slots
-    function renderScheduleSlots() {
-        scheduleSlotsList.innerHTML = "";
-        if (scheduleSlots.length === 0) {
-            scheduleSlotsList.innerHTML = `<li class="empty-state text-subtle">No schedules configured.</li>`;
+    // 3. Render Cron Jobs
+    function renderCronJobs() {
+        cronJobsList.innerHTML = "";
+        if (cronJobs.length === 0) {
+            cronJobsList.innerHTML = `<li class="empty-state text-subtle">No schedules configured.</li>`;
             return;
         }
 
-        // Sort schedule slot times
-        scheduleSlots.sort((a, b) => {
-            if (a.hour !== b.hour) return a.hour - b.hour;
-            return a.minute - b.minute;
-        });
-
-        scheduleSlots.forEach((slot, index) => {
+        cronJobs.forEach((job) => {
             const li = document.createElement("li");
             li.className = "schedule-item";
-            
-            const timeStr = `${String(slot.hour).padStart(2, '0')}:${String(slot.minute).padStart(2, '0')}`;
+            li.style.display = "flex";
+            li.style.flexDirection = "column";
+            li.style.gap = "0.5rem";
+            li.style.padding = "1rem";
+            li.style.borderBottom = "1px solid rgba(255, 255, 255, 0.05)";
+
+            let freqText = "";
+            if (job.frequency === "hourly") {
+                freqText = `Hourly at :${String(job.minute).padStart(2, '0')}`;
+            } else if (job.frequency === "daily") {
+                freqText = `Daily at ${String(job.hour).padStart(2, '0')}:${String(job.minute).padStart(2, '0')}`;
+            } else if (job.frequency === "weekly") {
+                const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+                freqText = `Weekly on ${days[job.day_of_week]} at ${String(job.hour).padStart(2, '0')}:${String(job.minute).padStart(2, '0')}`;
+            } else if (job.frequency === "custom_minutes") {
+                freqText = `Every ${job.interval_minutes} minutes`;
+            }
+
+            let dirText = "Bidirectional";
+            if (job.directionality === "to_divelogs") dirText = "Garmin ➔ Divelogs";
+            if (job.directionality === "to_garmin") dirText = "Divelogs ➔ Garmin";
+
+            let badges = `<span style="font-size: 0.7rem; padding: 0.1rem 0.35rem; background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 4px; color: var(--color-primary); font-weight: 600;">${dirText}</span>`;
+            if (job.only_new) badges += ` <span style="font-size: 0.7rem; padding: 0.1rem 0.35rem; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: var(--color-text-subtle);">Incremental</span>`;
+            if (job.sync_gases) badges += ` <span style="font-size: 0.7rem; padding: 0.1rem 0.35rem; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: var(--color-text-subtle);">Gases</span>`;
+            if (job.sync_fit) badges += ` <span style="font-size: 0.7rem; padding: 0.1rem 0.35rem; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: var(--color-text-subtle);">FIT</span>`;
+
             li.innerHTML = `
-                <span>🕒 Sync at ${timeStr} daily</span>
-                <button class="delete-btn" data-index="${index}">&times;</button>
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+                    <div>
+                        <strong style="color: var(--color-text-main, #f8fafc); font-size: 0.95rem;">${escapeHtml(job.id)}</strong>
+                        <div style="color: var(--color-text-secondary); font-size: 0.85rem; margin-top: 0.25rem;">
+                            🕒 ${freqText}
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <label class="switch" style="transform: scale(0.85);">
+                            <input type="checkbox" class="job-toggle" ${job.enabled ? "checked" : ""}>
+                            <span class="slider round"></span>
+                        </label>
+                        <button class="delete-job-btn text-btn" style="color: var(--color-danger); font-size: 1.1rem; padding: 0 0.5rem; background: none; border: none; cursor: pointer;">&times;</button>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.5rem; margin-top: 0.25rem; flex-wrap: wrap;">
+                    ${badges}
+                </div>
             `;
-            
-            li.querySelector(".delete-btn").addEventListener("click", () => {
-                scheduleSlots.splice(index, 1);
-                renderScheduleSlots();
+
+            li.querySelector(".job-toggle").addEventListener("change", async (e) => {
+                job.enabled = e.target.checked;
+                const ok = await saveAllSettings();
+                if (!ok) {
+                    e.target.checked = !e.target.checked;
+                    job.enabled = !e.target.checked;
+                }
             });
-            
-            scheduleSlotsList.appendChild(li);
+
+            li.querySelector(".delete-job-btn").addEventListener("click", async () => {
+                if (confirm(`Are you sure you want to delete the cron job "${job.id}"?`)) {
+                    const index = cronJobs.indexOf(job);
+                    if (index > -1) {
+                        cronJobs.splice(index, 1);
+                        const ok = await saveAllSettings();
+                        if (ok) {
+                            renderCronJobs();
+                        } else {
+                            cronJobs.splice(index, 0, job);
+                        }
+                    }
+                }
+            });
+
+            cronJobsList.appendChild(li);
         });
     }
 
-    // Add new schedule slot
-    addSlotBtn.addEventListener("click", () => {
-        const timeVal = newSlotTime.value;
-        if (!timeVal) return;
-        
-        const [hourStr, minuteStr] = timeVal.split(":");
-        const hour = parseInt(hourStr);
-        const minute = parseInt(minuteStr);
-        
-        // Check for duplicates
-        const exists = scheduleSlots.some(slot => slot.hour === hour && slot.minute === minute);
-        if (exists) {
-            alert("This schedule slot already exists.");
+    // Toggle frequency specific fields
+    cronFrequencySelect.addEventListener("change", () => {
+        const val = cronFrequencySelect.value;
+        cronDowGroup.classList.add("hidden");
+        cronTimeGroup.classList.add("hidden");
+        cronHourlyGroup.classList.add("hidden");
+        cronIntervalGroup.classList.add("hidden");
+
+        if (val === "hourly") {
+            cronHourlyGroup.classList.remove("hidden");
+        } else if (val === "daily") {
+            cronTimeGroup.classList.remove("hidden");
+        } else if (val === "weekly") {
+            cronDowGroup.classList.remove("hidden");
+            cronTimeGroup.classList.remove("hidden");
+        } else if (val === "custom_minutes") {
+            cronIntervalGroup.classList.remove("hidden");
+        }
+    });
+
+    showAddCronBtn.addEventListener("click", () => {
+        addCronContainer.classList.remove("hidden");
+        showAddCronBtn.classList.add("hidden");
+        document.getElementById("cron-job-id").value = "";
+        document.getElementById("cron-direction").value = "bidirectional";
+        cronFrequencySelect.value = "daily";
+        cronFrequencySelect.dispatchEvent(new Event("change"));
+        document.getElementById("cron-time").value = "00:00";
+        document.getElementById("cron-minute-past").value = "0";
+        document.getElementById("cron-interval").value = "60";
+        document.getElementById("cron-only-new").checked = true;
+        document.getElementById("cron-sync-gases").checked = true;
+        document.getElementById("cron-sync-fit").checked = false;
+    });
+
+    cancelCronBtn.addEventListener("click", () => {
+        addCronContainer.classList.add("hidden");
+        showAddCronBtn.classList.remove("hidden");
+    });
+
+    addCronForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const jobId = document.getElementById("cron-job-id").value.trim();
+        if (!jobId) return;
+
+        if (cronJobs.some(j => j.id.toLowerCase() === jobId.toLowerCase())) {
+            alert(`A cron job with ID "${jobId}" already exists.`);
             return;
         }
 
-        scheduleSlots.push({ hour, minute });
-        renderScheduleSlots();
-        newSlotTime.value = "";
+        const frequency = cronFrequencySelect.value;
+        const directionality = document.getElementById("cron-direction").value;
+        
+        let hour = 0;
+        let minute = 0;
+        let dayOfWeek = 0;
+        let intervalMinutes = 60;
+
+        if (frequency === "hourly") {
+            minute = parseInt(document.getElementById("cron-minute-past").value) || 0;
+        } else if (frequency === "daily") {
+            const timeVal = document.getElementById("cron-time").value || "00:00";
+            const [h, m] = timeVal.split(":");
+            hour = parseInt(h) || 0;
+            minute = parseInt(m) || 0;
+        } else if (frequency === "weekly") {
+            dayOfWeek = parseInt(document.getElementById("cron-dow").value) || 0;
+            const timeVal = document.getElementById("cron-time").value || "00:00";
+            const [h, m] = timeVal.split(":");
+            hour = parseInt(h) || 0;
+            minute = parseInt(m) || 0;
+        } else if (frequency === "custom_minutes") {
+            intervalMinutes = parseInt(document.getElementById("cron-interval").value) || 60;
+        }
+
+        const onlyNew = document.getElementById("cron-only-new").checked;
+        const syncGases = document.getElementById("cron-sync-gases").checked;
+        const syncFit = document.getElementById("cron-sync-fit").checked;
+
+        const newJob = {
+            id: jobId,
+            directionality: directionality,
+            frequency: frequency,
+            hour: hour,
+            minute: minute,
+            day_of_week: dayOfWeek,
+            interval_minutes: intervalMinutes,
+            only_new: onlyNew,
+            sync_gases: syncGases,
+            sync_fit: syncFit,
+            enabled: true
+        };
+
+        cronJobs.push(newJob);
+        
+        const ok = await saveAllSettings();
+        if (ok) {
+            renderCronJobs();
+            addCronContainer.classList.add("hidden");
+            showAddCronBtn.classList.remove("hidden");
+        } else {
+            cronJobs.pop();
+        }
     });
 
-    // 4. Save Settings Form
-    settingsForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        
+    async function saveAllSettings() {
         const payload = {
             directionality: document.getElementById("directionality").value,
             sync_filters: {
@@ -156,9 +301,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 sync_gases: document.getElementById("sync_gases").checked,
                 sync_fit: document.getElementById("sync_fit").checked
             },
-            grace_window_minutes: parseInt(document.getElementById("grace_window_minutes").value),
-            api_cooldown_seconds: parseFloat(document.getElementById("api_cooldown_seconds").value),
-            schedule: scheduleSlots
+            grace_window_minutes: parseInt(document.getElementById("grace_window_minutes").value) || 15,
+            api_cooldown_seconds: parseFloat(document.getElementById("api_cooldown_seconds").value) || 1.0,
+            schedule: legacyScheduleSlots,
+            cron_jobs: cronJobs
         };
 
         try {
@@ -170,13 +316,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (response.ok) {
                 appendLogLine("[SYSTEM] Configuration updated successfully.", "system-msg");
-                alert("Settings saved successfully.");
+                return true;
             } else {
                 const errData = await response.json();
                 throw new Error(errData.detail || "Failed to save settings.");
             }
         } catch (err) {
             appendLogLine(`[ERROR] Failed to save settings: ${err.message}`, "error");
+            alert("Failed to save settings: " + err.message);
+            return false;
+        }
+    }
+
+    // 4. Save Settings Form
+    settingsForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const ok = await saveAllSettings();
+        if (ok) {
+            alert("Settings saved successfully.");
         }
     });
 
@@ -222,20 +379,34 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // 6. Manual Sync execution Trigger
-    triggerSyncBtn.addEventListener("click", async () => {
-        const dryRun = dryRunCheckbox.checked;
-        
-        // Disable buttons
+    async function executeSync(isDryRun) {
         triggerSyncBtn.disabled = true;
-        triggerSyncBtn.querySelector(".btn-text").textContent = "Sync Running...";
-        triggerSyncBtn.querySelector(".spinner").classList.remove("hidden");
+        if (triggerDryRunBtn) triggerDryRunBtn.disabled = true;
+        
+        const activeBtn = isDryRun ? triggerDryRunBtn : triggerSyncBtn;
+        if (activeBtn) {
+            activeBtn.querySelector(".btn-text").textContent = isDryRun ? "Running Dry Run..." : "Running Sync...";
+            activeBtn.querySelector(".spinner")?.classList.remove("hidden");
+        }
         
         statusDot.className = "status-dot orange";
-        globalStatusText.textContent = "Syncing...";
+        globalStatusText.textContent = isDryRun ? "Dry-running..." : "Syncing...";
+
+        const payload = {
+            dry_run: isDryRun,
+            directionality: document.getElementById("directionality").value,
+            date_from: document.getElementById("date_from").value || null,
+            date_to: document.getElementById("date_to").value || null,
+            only_new: document.getElementById("only_new").checked,
+            sync_gases: document.getElementById("sync_gases").checked,
+            sync_fit: document.getElementById("sync_fit").checked
+        };
 
         try {
-            const response = await fetch(`/api/sync/trigger?dry_run=${dryRun}`, {
-                method: "POST"
+            const response = await fetch("/api/sync/trigger", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
             });
             
             if (!response.ok) {
@@ -243,15 +414,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error(err.detail || "Failed to trigger sync.");
             }
             
-            appendLogLine(`[SYSTEM] Synchronization job triggered (Dry Run: ${dryRun}). Check output console below.`, "system-msg");
-            
-            // Poll for sync completion status
+            appendLogLine(`[SYSTEM] Synchronization job triggered (Dry Run: ${isDryRun}). Check output console below.`, "system-msg");
             pollSyncStatus();
         } catch (err) {
             appendLogLine(`[ERROR] ${err.message}`, "error");
-            resetSyncButton();
+            resetSyncButtons();
         }
-    });
+    }
+
+    triggerSyncBtn.addEventListener("click", () => executeSync(false));
+    if (triggerDryRunBtn) {
+        triggerDryRunBtn.addEventListener("click", () => executeSync(true));
+    }
 
     async function pollSyncStatus() {
         const interval = setInterval(async () => {
@@ -261,7 +435,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 if (!state.is_running) {
                     clearInterval(interval);
-                    resetSyncButton();
+                    resetSyncButtons();
                     
                     if (state.last_results.error) {
                         appendLogLine(`[ERROR] Sync Job failed: ${state.last_results.error}`, "error");
@@ -275,10 +449,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }, 1500);
     }
 
-    function resetSyncButton() {
+    function resetSyncButtons() {
         triggerSyncBtn.disabled = false;
-        triggerSyncBtn.querySelector(".btn-text").textContent = "Trigger Manual Sync";
-        triggerSyncBtn.querySelector(".spinner").classList.add("hidden");
+        triggerSyncBtn.querySelector(".btn-text").textContent = "Run Sync Now";
+        triggerSyncBtn.querySelector(".spinner")?.classList.add("hidden");
+        
+        if (triggerDryRunBtn) {
+            triggerDryRunBtn.disabled = false;
+            triggerDryRunBtn.querySelector(".btn-text").textContent = "Dry Run Now";
+            triggerDryRunBtn.querySelector(".spinner")?.classList.add("hidden");
+        }
         
         statusDot.className = "status-dot green";
         globalStatusText.textContent = "System Ready";

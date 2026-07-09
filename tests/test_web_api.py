@@ -252,3 +252,74 @@ def test_credentials_test_api(monkeypatch):
     assert res.json()["garmin"] is True
     assert res.json()["divelogs"] is True
 
+def test_cron_jobs_api(tmp_path, monkeypatch):
+    import src.core.config
+    client = TestClient(app)
+    
+    settings_file = str(tmp_path / "settings.json")
+    monkeypatch.setattr(src.core.config, "SETTINGS_FILE", settings_file)
+    
+    # 1. Get initial settings (defaults)
+    res = client.get("/api/settings")
+    assert res.status_code == 200
+    assert "cron_jobs" in res.json()
+    assert res.json()["cron_jobs"] == []
+    
+    # 2. Save settings with a cron job
+    save_payload = {
+        "directionality": "bidirectional",
+        "sync_filters": {
+            "date_from": "2026-01-01",
+            "date_to": "2026-12-31",
+            "only_new": True,
+            "sync_gases": True,
+            "sync_fit": False
+        },
+        "grace_window_minutes": 15,
+        "api_cooldown_seconds": 1.0,
+        "schedule": [],
+        "cron_jobs": [
+            {
+                "id": "my-custom-job",
+                "directionality": "to_divelogs",
+                "frequency": "daily",
+                "hour": 12,
+                "minute": 30,
+                "day_of_week": 0,
+                "interval_minutes": 60,
+                "only_new": True,
+                "sync_gases": False,
+                "sync_fit": True,
+                "enabled": True
+            }
+        ]
+    }
+    
+    res = client.post("/api/settings", json=save_payload)
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    
+    # 3. Verify it was saved
+    res = client.get("/api/settings")
+    assert res.status_code == 200
+    cron_jobs = res.json()["cron_jobs"]
+    assert len(cron_jobs) == 1
+    assert cron_jobs[0]["id"] == "my-custom-job"
+    assert cron_jobs[0]["directionality"] == "to_divelogs"
+    assert cron_jobs[0]["frequency"] == "daily"
+    assert cron_jobs[0]["hour"] == 12
+    assert cron_jobs[0]["minute"] == 30
+    assert cron_jobs[0]["sync_gases"] is False
+    assert cron_jobs[0]["sync_fit"] is True
+    assert cron_jobs[0]["enabled"] is True
+
+    # 4. Trigger sync with overrides
+    trigger_payload = {
+        "dry_run": True,
+        "directionality": "to_divelogs",
+        "only_new": False
+    }
+    res = client.post("/api/sync/trigger", json=trigger_payload)
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+

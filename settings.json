@@ -1,13 +1,28 @@
 {
-  "directionality": "to_divelogs",
+  "directionality": "bidirectional",
   "sync_filters": {
-    "date_from": null,
-    "date_to": null,
-    "only_new": false,
+    "date_from": "2026-01-01",
+    "date_to": "2026-12-31",
+    "only_new": true,
     "sync_gases": true,
     "sync_fit": false
   },
   "grace_window_minutes": 15,
   "api_cooldown_seconds": 1.0,
-  "schedule": []
+  "schedule": [],
+  "cron_jobs": [
+    {
+      "id": "my-custom-job",
+      "directionality": "to_divelogs",
+      "frequency": "daily",
+      "hour": 12,
+      "minute": 30,
+      "day_of_week": 0,
+      "interval_minutes": 60,
+      "only_new": true,
+      "sync_gases": false,
+      "sync_fit": true,
+      "enabled": true
+    }
+  ]
 }
