@@ -1,5 +1,5 @@
 {
-  "directionality": "to_garmin",
+  "directionality": "to_divelogs",
   "sync_filters": {
     "date_from": null,
     "date_to": null,
@@ -10,19 +10,5 @@
   "grace_window_minutes": 15,
   "api_cooldown_seconds": 1.0,
   "schedule": [],
-  "cron_jobs": [
-    {
-      "id": "my-custom-job",
-      "directionality": "to_divelogs",
-      "frequency": "daily",
-      "hour": 12,
-      "minute": 30,
-      "day_of_week": 0,
-      "interval_minutes": 60,
-      "only_new": true,
-      "sync_gases": false,
-      "sync_fit": true,
-      "enabled": true
-    }
-  ]
+  "cron_jobs": []
 }

@@ -143,6 +143,26 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
             json.dump(existing_data, f, indent=2)
         return True
 
+    def delete_dive(self, external_id: str) -> bool:
+        logger.info("[MOCK] Simulating delete Garmin dive Activity ID: %s", external_id)
+        if not os.path.exists(self.mock_dir):
+            return False
+        for filename in os.listdir(self.mock_dir):
+            if filename.endswith(".json"):
+                filepath = os.path.join(self.mock_dir, filename)
+                try:
+                    with open(filepath, "r") as f:
+                        data = json.load(f)
+                    summary = data.get("summary", {})
+                    act_id = summary.get("activityId")
+                    if act_id is not None and str(act_id) == str(external_id):
+                        os.remove(filepath)
+                        logger.info("[MOCK] Deleted Garmin mock file: %s", filepath)
+                        return True
+                except Exception as e:
+                    logger.error("[MOCK] Error reading Garmin mock file %s during deletion: %s", filename, e)
+        return False
+
 class LocalMockDivelogsAdapter(BaseDiveAdapter):
     def __init__(self, mock_data_dir: str = get_default_mock_data_dir(), username: Optional[str] = None):
         if username and os.path.exists(os.path.join(mock_data_dir, "divelogs", username)):
@@ -225,3 +245,22 @@ class LocalMockDivelogsAdapter(BaseDiveAdapter):
         with open(filepath, "w") as f:
             json.dump(existing_data, f, indent=2)
         return True
+
+    def delete_dive(self, external_id: str) -> bool:
+        logger.info("[MOCK] Simulating delete Divelogs dive ID: %s", external_id)
+        if not os.path.exists(self.mock_dir):
+            return False
+        for filename in os.listdir(self.mock_dir):
+            if filename.endswith(".json"):
+                filepath = os.path.join(self.mock_dir, filename)
+                try:
+                    with open(filepath, "r") as f:
+                        data = json.load(f)
+                    div_id = data.get("id")
+                    if div_id is not None and str(div_id) == str(external_id):
+                        os.remove(filepath)
+                        logger.info("[MOCK] Deleted Divelogs mock file: %s", filepath)
+                        return True
+                except Exception as e:
+                    logger.error("[MOCK] Error reading Divelogs mock file %s during deletion: %s", filename, e)
+        return False

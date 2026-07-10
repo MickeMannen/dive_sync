@@ -326,3 +326,59 @@ def test_cron_jobs_api(tmp_path, monkeypatch):
     assert res.status_code == 200
     assert res.json()["status"] == "success"
 
+
+def test_delete_dive_garmin(mock_dirs, monkeypatch):
+    client = TestClient(app)
+    
+    called = []
+    def mock_delete(filepath, activity_id):
+        called.append((filepath, activity_id))
+        
+    import src.web.app
+    monkeypatch.setattr(src.web.app, "delete_garmin_dive_background", mock_delete)
+    
+    # Verify file exists initially
+    response = client.get("/api/dives")
+    assert len(response.json()["garmin"]) == 1
+    
+    # Delete the Garmin dive
+    res = client.delete("/api/dives?service=garmin&filename=1.json")
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    
+    # Verify it is deleted from list
+    response = client.get("/api/dives")
+    assert len(response.json()["garmin"]) == 0
+    assert len(called) == 1
+
+
+def test_delete_dive_divelogs(mock_dirs, monkeypatch):
+    client = TestClient(app)
+    
+    called = []
+    def mock_delete(filepath, dive_id):
+        called.append((filepath, dive_id))
+        
+    import src.web.app
+    monkeypatch.setattr(src.web.app, "delete_divelogs_dive_background", mock_delete)
+    
+    # Verify file exists initially
+    response = client.get("/api/dives")
+    assert len(response.json()["divelogs"]) == 1
+    
+    # Delete the Divelogs dive
+    res = client.delete("/api/dives?service=divelogs&filename=1.json")
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    
+    # Verify it is deleted from list
+    response = client.get("/api/dives")
+    assert len(response.json()["divelogs"]) == 0
+    assert len(called) == 1
+
+
+def test_delete_dive_not_found(mock_dirs):
+    client = TestClient(app)
+    res = client.delete("/api/dives?service=garmin&filename=nonexistent.json")
+    assert res.status_code == 404
+

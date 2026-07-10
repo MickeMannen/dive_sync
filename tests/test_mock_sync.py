@@ -555,4 +555,52 @@ class TestSync:
         assert os.path.exists(os.path.join(mock_dir, "divelogs", "502.json"))
 
 
+def test_mock_adapters_delete_dive(tmp_path):
+    from src.core.services.mock_adapters import LocalMockGarminAdapter, LocalMockDivelogsAdapter
+    from src.core.models import UnifiedDive
+    from datetime import datetime
+
+    # Setup directories
+    garmin_mock_dir = os.path.join(tmp_path, "garmin")
+    divelogs_mock_dir = os.path.join(tmp_path, "divelogs")
+    os.makedirs(garmin_mock_dir, exist_ok=True)
+    os.makedirs(divelogs_mock_dir, exist_ok=True)
+
+    # 1. Garmin Mock
+    g_adapter = LocalMockGarminAdapter(mock_data_dir=tmp_path)
+    dive1 = UnifiedDive(
+        dive_number="101",
+        date_time=datetime.now(),
+        duration=1800,
+        max_depth=20.0
+    )
+    # Add dive
+    act_id = g_adapter.add_dive(dive1)
+    assert act_id is not None
+    assert os.path.exists(os.path.join(garmin_mock_dir, "101.json"))
+
+    # Delete dive
+    deleted = g_adapter.delete_dive(act_id)
+    assert deleted is True
+    assert not os.path.exists(os.path.join(garmin_mock_dir, "101.json"))
+
+    # 2. Divelogs Mock
+    d_adapter = LocalMockDivelogsAdapter(mock_data_dir=tmp_path)
+    dive2 = UnifiedDive(
+        dive_number="202",
+        date_time=datetime.now(),
+        duration=2400,
+        max_depth=30.0
+    )
+    # Add dive
+    dive_id = d_adapter.add_dive(dive2)
+    assert dive_id is not None
+    assert os.path.exists(os.path.join(divelogs_mock_dir, "202.json"))
+
+    # Delete dive
+    deleted = d_adapter.delete_dive(dive_id)
+    assert deleted is True
+    assert not os.path.exists(os.path.join(divelogs_mock_dir, "202.json"))
+
+
 

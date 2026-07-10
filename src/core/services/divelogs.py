@@ -178,6 +178,25 @@ class DivelogsAdapter(BaseDiveAdapter):
             logger.error("Error updating Divelogs.org Dive ID %s: %s", external_id, e)
         return False
 
+    def delete_dive(self, external_id: str) -> bool:
+        if not self.bearer_token and not self.login():
+            logger.error("Cannot delete dive: Not authenticated with Divelogs.org.")
+            return False
+
+        logger.info("Deleting Divelogs.org Dive ID %s...", external_id)
+        try:
+            url = f"https://divelogs.de/api/dive/{external_id}"
+            response = self.session.delete(url, timeout=20)
+            
+            if response.status_code == 200:
+                logger.info("Successfully deleted Divelogs.org Dive ID %s.", external_id)
+                time.sleep(self.cooldown_seconds)
+                return True
+            logger.error("Failed to delete Divelogs Dive ID %s. Response: %s", external_id, response.text)
+        except Exception as e:
+            logger.error("Error deleting Divelogs.org Dive ID %s: %s", external_id, e)
+        return False
+
     def _parse_datetime(self, dt_str: str) -> Optional[datetime]:
         try:
             return datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")

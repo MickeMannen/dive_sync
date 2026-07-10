@@ -603,9 +603,53 @@ document.addEventListener("DOMContentLoaded", () => {
     const modalContentRaw = document.getElementById("modal-content-raw");
     const modalRawJson = document.getElementById("modal-raw-json");
 
+    let currentDiveService = null;
+    let currentDive = null;
+
     if (modalCloseBtn) {
         modalCloseBtn.addEventListener("click", () => {
             detailsModal.classList.add("hidden");
+        });
+    }
+
+    const modalCloseFooterBtn = document.getElementById("modal-close-footer-btn");
+    if (modalCloseFooterBtn) {
+        modalCloseFooterBtn.addEventListener("click", () => {
+            detailsModal.classList.add("hidden");
+        });
+    }
+
+    const modalDeleteBtn = document.getElementById("modal-delete-btn");
+    if (modalDeleteBtn) {
+        modalDeleteBtn.addEventListener("click", async () => {
+            if (!currentDive || !currentDiveService) return;
+            
+            const confirmed = confirm(`Are you sure you want to delete Dive #${currentDive.dive_number} (${currentDiveService.toUpperCase()}) from local cache? This will remove the JSON file and cannot be undone.`);
+            if (!confirmed) return;
+            
+            modalDeleteBtn.disabled = true;
+            modalDeleteBtn.textContent = "Deleting...";
+            
+            try {
+                const url = `/api/dives?service=${encodeURIComponent(currentDiveService)}&filename=${encodeURIComponent(currentDive.filename)}`;
+                const response = await fetch(url, {
+                    method: "DELETE"
+                });
+                
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || "Failed to delete dive file.");
+                }
+                
+                detailsModal.classList.add("hidden");
+                await loadDives();
+                
+            } catch (err) {
+                alert(`Error deleting dive: ${err.message}`);
+            } finally {
+                modalDeleteBtn.disabled = false;
+                modalDeleteBtn.textContent = "Delete Dive";
+            }
         });
     }
 
@@ -637,6 +681,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function showDiveDetails(service, dive) {
         if (!detailsModal) return;
+        
+        currentDiveService = service;
+        currentDive = dive;
         
         detailsModal.classList.remove("hidden");
         

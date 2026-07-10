@@ -23,3 +23,8 @@ class BaseDiveAdapter(ABC):
     def update_dive(self, external_id: str, dive: UnifiedDive) -> bool:
         """Update an existing dive on the service."""
         pass
+
+    @abstractmethod
+    def delete_dive(self, external_id: str) -> bool:
+        """Delete an existing dive from the service."""
+        pass

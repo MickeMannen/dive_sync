@@ -653,6 +653,154 @@ def get_raw_dive(service: str, filename: str, username: Optional[str] = None):
         logger.error("Failed to read raw dive file %s: %s", filename, e)
         raise HTTPException(status_code=500, detail=str(e))
  
+@app.delete("/api/dives")
+def delete_dive(service: str, filename: str, username: Optional[str] = None):
+    import os
+    import json
+    base_dirs = get_data_directories()
+    filepath = None
+    for d in base_dirs:
+        if username:
+            path = os.path.join(d, service, username, filename)
+            if os.path.exists(path):
+                filepath = path
+                break
+        path = os.path.join(d, service, filename)
+        if os.path.exists(path):
+            filepath = path
+            break
+        service_dir = os.path.join(d, service)
+        if os.path.exists(service_dir) and os.path.isdir(service_dir):
+            for sub in os.listdir(service_dir):
+                sub_path = os.path.join(service_dir, sub)
+                if os.path.isdir(sub_path):
+                    path = os.path.join(sub_path, filename)
+                    if os.path.exists(path):
+                        filepath = path
+                        break
+            if filepath:
+                break
+                
+    if not filepath or not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Dive file not found.")
+        
+    try:
+        # Load external ID to delete remotely
+        with open(filepath, "r") as f:
+            dive_data = json.load(f)
+            
+        if service == "garmin":
+            summary = dive_data.get("summary", {})
+            activity_id = summary.get("activityId")
+            if activity_id:
+                threading.Thread(
+                    target=delete_garmin_dive_background,
+                    args=(filepath, str(activity_id)),
+                    daemon=True
+                ).start()
+        elif service == "divelogs":
+            dive_id = dive_data.get("id")
+            if dive_id:
+                threading.Thread(
+                    target=delete_divelogs_dive_background,
+                    args=(filepath, str(dive_id)),
+                    daemon=True
+                ).start()
+    except Exception as e:
+        logger.error("Failed to parse dive file %s to trigger remote deletion: %s", filename, e)
+
+    try:
+        os.remove(filepath)
+        logger.info("Deleted local cache file %s: %s", filename, filepath)
+        return {"status": "success", "message": f"Deleted local cache file: {filename}"}
+    except Exception as e:
+        logger.error("Failed to delete local cache file %s: %s", filename, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+def delete_garmin_dive_background(filepath: str, activity_id: str):
+    import time
+    try:
+        from src.core.config import ConfigManager
+        creds = ConfigManager.load_credentials()
+        
+        # Determine username from filepath (if nested)
+        username = None
+        parts = filepath.replace("\\", "/").split("/")
+        if len(parts) >= 3 and parts[-3] == "garmin":
+            username = parts[-2]
+            
+        garmin_accounts = creds.get_garmin_accounts()
+        if not username:
+            if len(garmin_accounts) == 1:
+                username = garmin_accounts[0].username
+            else:
+                logger.error("Multiple Garmin accounts configured but username could not be determined from path: %s", filepath)
+                return
+                
+        matching = [a for a in garmin_accounts if a.username == username]
+        if not matching:
+            logger.error("No Garmin credentials found for username: %s", username)
+            return
+        active_creds = matching[0]
+        
+        if not active_creds.username or not active_creds.password:
+            logger.warning("Garmin Connect credentials not found, skipping background remote delete.")
+            return
+            
+        from src.core.services.garmin import GarminAdapter
+        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=active_creds.token_dir)
+        
+        logger.info("Background thread deleting Garmin Connect Activity ID %s...", activity_id)
+        success = adapter.delete_dive(str(activity_id))
+        if success:
+            logger.info("Garmin Connect successfully deleted in background for Activity ID %s.", activity_id)
+        else:
+            logger.error("Garmin Connect background delete failed for Activity ID %s.", activity_id)
+    except Exception as e:
+        logger.error("Error in background Garmin remote delete for %s: %s", filepath, e)
+
+def delete_divelogs_dive_background(filepath: str, dive_id: str):
+    import time
+    try:
+        from src.core.config import ConfigManager
+        creds = ConfigManager.load_credentials()
+        
+        # Determine username from filepath (if nested)
+        username = None
+        parts = filepath.replace("\\", "/").split("/")
+        if len(parts) >= 3 and parts[-3] == "divelogs":
+            username = parts[-2]
+            
+        divelogs_accounts = creds.get_divelogs_accounts()
+        if not username:
+            if len(divelogs_accounts) == 1:
+                username = divelogs_accounts[0].username
+            else:
+                logger.error("Multiple Divelogs accounts configured but username could not be determined from path: %s", filepath)
+                return
+                
+        matching = [a for a in divelogs_accounts if a.username == username]
+        if not matching:
+            logger.error("No Divelogs credentials found for username: %s", username)
+            return
+        active_creds = matching[0]
+        
+        if not active_creds.username or not active_creds.password:
+            logger.warning("Divelogs.org credentials not found, skipping background remote delete.")
+            return
+            
+        from src.core.services.divelogs import DivelogsAdapter
+        adapter = DivelogsAdapter(active_creds.username, active_creds.password)
+        
+        logger.info("Background thread deleting Divelogs.org Dive ID %s...", dive_id)
+        success = adapter.delete_dive(str(dive_id))
+        if success:
+            logger.info("Divelogs.org successfully deleted in background for Dive ID %s.", dive_id)
+        else:
+            logger.error("Divelogs.org background delete failed for Dive ID %s.", dive_id)
+    except Exception as e:
+        logger.error("Error in background Divelogs remote delete for %s: %s", filepath, e)
+
 def push_garmin_update_background(filename: str, filepath: str):
     import json
     import time

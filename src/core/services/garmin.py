@@ -352,6 +352,21 @@ class GarminAdapter(BaseDiveAdapter):
             logger.error("Error updating Garmin Connect Activity ID %s: %s", external_id, e)
         return False
 
+    def delete_dive(self, external_id: str) -> bool:
+        if not self.logged_in and not self.login():
+            logger.error("Cannot delete dive: Not authenticated with Garmin Connect.")
+            return False
+
+        logger.info("Deleting Garmin Connect Activity ID %s...", external_id)
+        try:
+            self.client.delete_activity(external_id)
+            logger.info("Successfully deleted Garmin Connect Activity ID %s.", external_id)
+            time.sleep(self.cooldown_seconds)
+            return True
+        except Exception as e:
+            logger.error("Error deleting Garmin Connect Activity ID %s: %s", external_id, e)
+        return False
+
     def _parse_datetime(self, dt_str: str) -> Optional[datetime]:
         formats = [
             "%Y-%m-%d %H:%M:%S",
