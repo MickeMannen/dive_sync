@@ -4,14 +4,16 @@
 ## I have mainly tested Garmin sync to Divelogs and not the other direction - be careful and keep a backup!
 
 
-Dive Sync is a dive log synchronization engine and web dashboard that seamlessly matches and syncs your dive history between **Garmin Connect** and **Divelogs.org**. 
+Dive Sync is a dive log synchronization engine that seamlessly matches and syncs your dive history between **Garmin Connect** and **Divelogs.org**. 
 
 I started this project when i got back to diving and had to import all dives from logbooks to Garmin and to Divelogs.
 I managed to make the import but the stability of the code wasn't good enough for release. Because of lack of time I didnt continue but with Gemini I saw the opportunity to finalize the project.
 
 There are most likely a lot of bugs so please use it carefully, I will use the docker container myself and fix issues as I see them.
 
-It features bidirectional syncing, detailed telemetry parsing (depth/temperature graphs and gas mixture sensors), an interactive web-based spreadsheet editor, and multi-account support.
+It features bidirectional syncing, detailed telemetry parsing (depth/temperature graphs and gas mixture sensors), and multi-account support.
+
+**Project direction**: the Docker deployment is being narrowed to a scheduled-sync engine with a read-only status page (schedule/credential configuration only — no dive editing there). Interactive dive editing (metadata, and eventually telemetry graphs) is moving to a native desktop app (macOS/Windows/Linux, Briefcase+Toga) — see [rework.md](rework.md) for the in-progress redesign plan. Until that app ships, dive editing is unavailable.
 
 <p align="left">
   <a href="https://skillicons.dev">
@@ -25,10 +27,10 @@ It features bidirectional syncing, detailed telemetry parsing (depth/temperature
 
 * **Bidirectional Syncing**: Synchronizes dive logs in both directions, or unidirectionally (to Garmin or to Divelogs).
 * **Telemetry & Gas Mapping**: Maps complex dive metrics, temperature profiles, start/end tank pressures, gas mixtures (Nitrox/Trimix), and telemetry graph coordinates.
-* **Interactive Spreadsheet Editor**: Easily view, sort, and edit dive metadata (buddy, weights, visibility, location, notes, dates, and Garmin dive numbers) directly from the Web UI.
-* **Non-Blocking Upstream Sync**: Edits made in the spreadsheet editor are instantly saved to the local cache and pushed asynchronously to remote Garmin/Divelogs servers in the background.
+* **Scheduled Sync**: Configure one or more cron-like jobs (hourly/daily/weekly/custom interval, per-job direction and filters) that run unattended.
+* **Status Page**: A read-only web page showing whether a sync is running, the last result, the next scheduled run, and a live log tail — plus a small form for credentials and schedule configuration.
 * **Multi-Account Support**: Configure multiple Garmin and Divelogs credentials. Run the sync globally or target specific accounts using selection arguments.
-* **Docker Ready**: Package and run the dashboard with custom port routing and unified volume mapping to persist settings, credentials, session tokens, and data caches.
+* **Docker Ready**: Package and run the scheduler with custom port routing and unified volume mapping to persist settings, credentials, session tokens, and data caches.
 
 ---
 
@@ -144,7 +146,7 @@ docker run -d \
 ```
 
 The container exposes:
-- **Dashboard UI**: available at `http://localhost:8080`
+- **Status Page**: available at `http://localhost:8080` — sync status, live log tail, credentials, and schedule configuration
 - **Volume Mount**: `/app/data/` (contains `settings.json`, `credentials.json`, `tokens/`, `garmin/`, and `divelogs/`)
 
 ### 3. Automated Docker Hub Builds on Release (GitHub Actions)
@@ -160,18 +162,21 @@ The GitHub workflow automatically syncs [`DOCKERHUB.md`](DOCKERHUB.md) to your D
 
 ---
 
-## 🖥️ Web Dashboard
+## 🖥️ Status Page
 
-Start the web dashboard locally without Docker:
+Start the status page locally without Docker:
 ```bash
 python docker_run.py
 ```
-Open `http://localhost:8000` in your web browser. 
+Open `http://localhost:8000` in your web browser.
 
-The dashboard provides:
-1. **Dives Explorer Tab**: View and click on individual dives. Displays telemetry details, depth/temp profiles, and raw JSON metrics. Add new dives or trigger a sync.
-2. **Spreadsheet Editor Tab**: Edit locations, notes, buddies, weights, visibility, and Garmin dive numbers in an Excel-like grid. Upstream syncing is done asynchronously.
-3. **Download Raw Data**: Sync and download raw JSON payloads locally from both Garmin and Divelogs APIs.
+The status page provides:
+1. **Status**: whether a sync is currently running, the last result, the next scheduled run, and a manual "Sync now" trigger (with an optional dry-run toggle).
+2. **Live log**: a streamed tail of the scheduler's log output.
+3. **Credentials**: set/test Garmin and Divelogs.org credentials without editing `credentials.json` by hand.
+4. **Scheduled jobs**: add, edit, or remove cron-like sync jobs (direction, frequency, filters).
+
+There is no dive-editing UI here — that capability is moving to the planned desktop app (see [rework.md](rework.md)).
 
 ---
 

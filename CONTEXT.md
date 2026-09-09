@@ -10,7 +10,7 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 2. Normalize logs into a unified format.
 3. Match identical dives across services.
 4. Synchronize data differences (gases, weights, buddies, notes, GPS coordinates) and upload new dives.
-5. Manage cached files and run manual or scheduled sync jobs via a web interface or CLI.
+5. Run scheduled or CLI-triggered sync jobs, with a read-only status page for monitoring plus schedule/credential configuration.
 
 ---
 
@@ -33,15 +33,17 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 │   │   ├── config.py          # Settings and credentials management
 │   │   ├── mapping_helper.py  # Mapping Engine that applies JSONPath rules
 │   │   ├── models.py          # Unified Dive schemas (Pydantic)
-│   │   └── sync_engine.py     # Dive matching and synchronization engine
-│   └── web/                   # Web API & UI
-│       ├── static/            # Static assets (HTML, CSS, JS)
-│       └── app.py             # FastAPI Server & SSE logging setup
+│   │   ├── sync_engine.py     # Dive matching and synchronization engine
+│   │   └── scheduler.py       # Background schedule watcher + sync runner (used by web/app.py's lifespan)
+│   └── web/                   # Status page (Docker-facing) — no dive editing
+│       ├── static/            # Static assets (HTML, CSS, JS) for the status page
+│       └── app.py             # FastAPI app: status/logs, credentials, schedule config; SSE logging setup
 ├── tests/                     # Test suite
 │   ├── data/                  # Static test fixtures
 │   ├── test_sync.py           # Sync logic and engine tests
 │   ├── test_mock_sync.py      # Dry-run and offline sync tests
-│   └── test_web_api.py        # Web API endpoint integration tests
+│   ├── test_scheduler.py      # Scheduler extraction unit tests
+│   └── test_web_api.py        # Status page API endpoint integration tests
 ├── data/                      # Local JSON cache directory (auto-created)
 │   ├── garmin/                # Cached Garmin JSON dives
 │   └── divelogs/              # Cached Divelogs JSON dives
@@ -65,19 +67,18 @@ Dives are linked in [SyncEngine.match_dives](file:///Users/mikael/development/di
 2. **Tier 2: Dive Number Match**: Compares the dive sequence numbers if present.
 3. **Tier 3: Naive Timestamp Match**: Matches dives if their start times fall within the configured `grace_window_minutes` (default is 15 minutes).
 
-### 3. Deletion Flow
-When a dive is deleted through the Local Cache Explorer UI:
-1. The frontend sends a `DELETE` request to `/api/dives?service={service}&filename={filename}`.
-2. The backend reads the cached file to find the remote ID.
-3. The backend spawns a background thread to call the remote client's `delete_dive(external_id)` method.
-4. The local JSON cache file is removed from the filesystem.
+### 3. Scheduling
+`src/core/scheduler.py` holds `scheduler_loop()` (an asyncio loop started from `web/app.py`'s FastAPI `lifespan`), `run_sync_thread()`, and `get_next_scheduled_run()`. It reads `SettingsModel.schedule`/`cron_jobs` (via `ConfigManager.load_settings()`) every minute and spawns a background thread calling `SyncEngine.run_sync()` when a job is due. This module has no FastAPI dependency, so it can be reused by non-web entry points.
+
+### 4. Dive Editing (planned)
+The web dashboard's dive-editing UI (spreadsheet-style metadata edits, per-dive delete with remote push via `adapter.update_dive()`/`adapter.delete_dive()`) has been removed from `src/web/` as part of the desktop-app migration (see [rework.md](rework.md)) — it is not currently available anywhere. It will be rebuilt as a native Toga desktop app calling `BaseDiveAdapter` methods directly.
 
 ---
 
 ## 🚀 Key Commands
 
-### Running the Web Server
-Starts the FastAPI server with hot-reloading at `http://127.0.0.1:8000`:
+### Running the Status Page
+Starts the FastAPI status page with hot-reloading at `http://127.0.0.1:8000`:
 ```bash
 uvicorn src.web.app:app --reload
 ```

@@ -34,7 +34,9 @@ Welcome, AI Agent! This file outlines the instructions, constraints, and develop
 *   **API Cooldowns & Rate Limits**: 
     *   Always respect Garmin Connect login thresholds. Rate limiting (HTTP 429) is severe. Ensure cooldowns (`api_cooldown_seconds`) are respected during synchronization.
 *   **Deletion Safety**:
-    *   When deleting dives from the local cache explorer, ensure that BOTH the local JSON file is removed and the corresponding API delete request is sent in a background thread to the remote service (Garmin or Divelogs).
+    *   `src/web/` (the Docker-facing status page) no longer has any dive-editing or deletion UI — that's being rebuilt as a native desktop app (see [rework.md](rework.md)). If/when dive deletion is reintroduced anywhere, ensure that BOTH the local JSON file is removed and the corresponding API delete request is sent in a background thread to the remote service (Garmin or Divelogs), as the old web implementation did.
+*   **Scheduler vs. web coupling**:
+    *   `src/core/scheduler.py` (the background schedule watcher and sync runner) must stay free of FastAPI imports — `src/web/app.py` only wires its `lifespan` to `scheduler.scheduler_loop()`. Keep it this way so non-web entry points can reuse it.
 *   **File Paths & Local Storage**:
     *   Save all temporary files, scratch scripts, or data back-ups in the `.gemini/` app directory or [data/](file:///Users/mikael/development/dive_sync/data/) directory. Do not clutter the workspace root.
 

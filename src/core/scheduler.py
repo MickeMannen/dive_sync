@@ -1,0 +1,165 @@
+import logging
+import threading
+import time
+import asyncio
+from datetime import datetime, timedelta
+from typing import Dict, Any, Optional
+
+from src.core.config import ConfigManager
+from src.core.sync_engine import SyncEngine
+
+logger = logging.getLogger("dive_sync.scheduler")
+logger.setLevel(logging.INFO)
+
+is_sync_running = False
+last_sync_results: Dict[str, Any] = {}
+
+
+def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = None):
+    global is_sync_running, last_sync_results
+    is_sync_running = True
+    job_id = custom_settings.get("id") if custom_settings else "Manual"
+    logger.info("Synchronization started for job '%s' (Dry Run: %s)", job_id, dry_run)
+    try:
+        engine = SyncEngine()
+        if custom_settings:
+            engine.settings.directionality = custom_settings.get("directionality", engine.settings.directionality)
+            if "only_new" in custom_settings:
+                engine.settings.sync_filters.only_new = bool(custom_settings["only_new"])
+            if "sync_gases" in custom_settings:
+                engine.settings.sync_filters.sync_gases = bool(custom_settings["sync_gases"])
+            if "sync_fit" in custom_settings:
+                engine.settings.sync_filters.sync_fit = bool(custom_settings["sync_fit"])
+            if "date_from" in custom_settings:
+                engine.settings.sync_filters.date_from = custom_settings["date_from"]
+            if "date_to" in custom_settings:
+                engine.settings.sync_filters.date_to = custom_settings["date_to"]
+
+        results = engine.run_sync(dry_run=dry_run)
+        last_sync_results = results
+        logger.info("Synchronization completed successfully.")
+    except Exception as e:
+        logger.error("Sync run encountered an error: %s", e)
+        last_sync_results = {"error": str(e)}
+    finally:
+        is_sync_running = False
+
+
+def _next_daily_occurrence(now: datetime, hour: int, minute: int) -> datetime:
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _next_weekly_occurrence(now: datetime, day_of_week: int, hour: int, minute: int) -> datetime:
+    # day_of_week: 0=Sunday..6=Saturday (matches scheduler_loop's mapping below)
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    current_mapped = (now.weekday() + 1) % 7
+    days_ahead = (day_of_week - current_mapped) % 7
+    candidate += timedelta(days=days_ahead)
+    if candidate <= now:
+        candidate += timedelta(days=7)
+    return candidate
+
+
+def get_next_scheduled_run(settings=None) -> Optional[str]:
+    """Best-effort estimate of the next scheduled sync time, for status display."""
+    if settings is None:
+        settings = ConfigManager.load_settings()
+
+    now = datetime.now()
+    candidates = []
+
+    for slot in getattr(settings, "schedule", []):
+        candidates.append(_next_daily_occurrence(now, slot.hour, slot.minute))
+
+    for job in getattr(settings, "cron_jobs", []):
+        if not job.enabled:
+            continue
+        if job.frequency == "hourly":
+            candidate = now.replace(minute=job.minute, second=0, microsecond=0)
+            if candidate <= now:
+                candidate += timedelta(hours=1)
+            candidates.append(candidate)
+        elif job.frequency == "daily":
+            candidates.append(_next_daily_occurrence(now, job.hour, job.minute))
+        elif job.frequency == "weekly":
+            candidates.append(_next_weekly_occurrence(now, job.day_of_week, job.hour, job.minute))
+        elif job.frequency == "custom_minutes":
+            candidates.append(now + timedelta(minutes=job.interval_minutes))
+
+    if not candidates:
+        return None
+    return min(candidates).isoformat()
+
+
+async def scheduler_loop():
+    global is_sync_running
+    logger.info("Background schedule watcher started.")
+    last_checked_minute = None
+
+    # Track last run timestamp for custom minutes jobs
+    job_last_run: Dict[str, float] = {}
+
+    while True:
+        try:
+            now = datetime.now()
+            current_minute = (now.hour, now.minute)
+            current_time = time.time()
+
+            if current_minute != last_checked_minute:
+                settings = ConfigManager.load_settings()
+
+                # Support old schedule slots (daily)
+                for slot in getattr(settings, "schedule", []):
+                    if slot.hour == now.hour and slot.minute == now.minute:
+                        logger.info("Legacy scheduled slot triggered for %02d:%02d", slot.hour, slot.minute)
+                        if not is_sync_running:
+                            threading.Thread(target=run_sync_thread, args=(False,), daemon=True).start()
+                        else:
+                            logger.warning("Scheduled sync skipped: another synchronization is currently running.")
+
+                # Support new custom cron jobs
+                for job in getattr(settings, "cron_jobs", []):
+                    if not job.enabled:
+                        continue
+
+                    should_trigger = False
+
+                    if job.frequency == "hourly":
+                        if now.minute == job.minute:
+                            should_trigger = True
+                    elif job.frequency == "daily":
+                        if now.hour == job.hour and now.minute == job.minute:
+                            should_trigger = True
+                    elif job.frequency == "weekly":
+                        mapped_weekday = (now.weekday() + 1) % 7
+                        if mapped_weekday == job.day_of_week and now.hour == job.hour and now.minute == job.minute:
+                            should_trigger = True
+                    elif job.frequency == "custom_minutes":
+                        if job.id not in job_last_run:
+                            job_last_run[job.id] = current_time
+                        elif current_time - job_last_run[job.id] >= job.interval_minutes * 60:
+                            should_trigger = True
+
+                    if should_trigger:
+                        logger.info("Cron job '%s' triggered (%s)", job.id, job.frequency)
+                        if job.frequency == "custom_minutes":
+                            job_last_run[job.id] = current_time
+
+                        if not is_sync_running:
+                            custom_set = job.model_dump()
+                            threading.Thread(target=run_sync_thread, args=(False, custom_set), daemon=True).start()
+                        else:
+                            logger.warning("Cron job '%s' skipped: another synchronization is currently running.", job.id)
+
+                last_checked_minute = current_minute
+
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            logger.info("Background schedule watcher stopped.")
+            break
+        except Exception as e:
+            logger.error("Error in scheduler loop: %s", e)
+            await asyncio.sleep(30)
