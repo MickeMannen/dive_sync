@@ -18,3 +18,9 @@ __pycache__/
 
 /todo_txt
 /gui_prompt.txt
+
+# Briefcase (desktop app packaging)
+/build/
+/.briefcase/
+/dist/
+/*.dist-info/

@@ -1,0 +1,41 @@
+[tool.briefcase]
+project_name = "DiveSync"
+bundle = "com.mikaelchristersson"
+version = "0.1.0"
+license = "MIT"
+author = "Mikael Christersson"
+author_email = "mikael.christersson2@gmail.com"
+
+# Briefcase copies each `sources` entry by its basename (see
+# briefcase.commands.create.install_app_code), so a nested entry like
+# "src/core" would land at the bundle's top level as a flattened "core"
+# folder - breaking every `from src.core.X import ...` in that package. The
+# whole "src" tree has to be listed instead so "src/core" (and the harmless,
+# unused-by-desktop "src/web") stay nested exactly as they are in the repo.
+sources = [
+    "src",
+]
+requires = [
+    "pydantic>=2.0.0",
+    "requests>=2.28.0",
+    "garminconnect>=0.2.0",
+]
+
+# App key is "desktop" (matching the desktop/ package below) rather than
+# "dive_sync" - Briefcase requires one `sources` entry whose basename equals
+# the app's module name, and the importable package here is "desktop", not
+# "dive_sync" (that name belongs to the whole repo, not this subpackage).
+[tool.briefcase.app.desktop]
+formal_name = "DiveSync"
+description = "Dive log sync and editor for Garmin Connect and Divelogs.org"
+long_description = """\
+DiveSync syncs dive logs between Garmin Connect and Divelogs.org, and lets
+you edit dive metadata on either service. This is the desktop app - for
+scheduled/unattended sync, see the Docker image instead.
+"""
+sources = ["desktop"]
+requires = ["toga", "keyring", "platformdirs"]
+
+[tool.briefcase.app.desktop.macOS]
+universal_build = false
+requires = ["toga-cocoa"]

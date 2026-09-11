@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import base64
 import logging
@@ -18,17 +19,29 @@ from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
 logger = logging.getLogger("dive_sync.garmin")
 
+
+def safe_account_id(username: str) -> str:
+    """Filesystem/identifier-safe form of a Garmin username - factored out
+    so callers that need to locate/manage that account's token file from
+    outside the adapter (e.g. the desktop app's keychain-backed token
+    storage) can't drift from the adapter's own sanitization."""
+    return re.sub(r'[^a-zA-Z0-9_.-]', '_', username)
+
+
+def safe_token_filename(username: str) -> str:
+    """The token cache filename GarminAdapter uses for a given username."""
+    return f"garmin_tokens_{safe_account_id(username)}.json"
+
+
 class GarminAdapter(BaseDiveAdapter):
     def __init__(self, username: str, password: str, token_dir: str = "tokens/garmin", cooldown_seconds: float = 1.0):
         self.username = username
         self.password = password
         self.token_dir = token_dir
         self.cooldown_seconds = cooldown_seconds
-        
+
         os.makedirs(self.token_dir, exist_ok=True)
-        import re
-        safe_username = re.sub(r'[^a-zA-Z0-9_.-]', '_', self.username)
-        self.tokenstore_path = os.path.join(self.token_dir, f"garmin_tokens_{safe_username}.json")
+        self.tokenstore_path = os.path.join(self.token_dir, safe_token_filename(self.username))
         
         # Initialize garminconnect Garmin client
         # Uses curl_cffi under the hood to bypass SSO rate limits and emulate browser profiles

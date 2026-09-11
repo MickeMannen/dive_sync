@@ -29,6 +29,51 @@ def test_run_sync_thread_records_error(monkeypatch):
     assert scheduler.last_sync_results == {"error": "kaboom"}
 
 
+def test_run_download_thread_success(monkeypatch, tmp_path):
+    from src.core.sync_engine import SyncEngine
+
+    calls = []
+    monkeypatch.setattr(
+        SyncEngine, "download_and_save_raw_data",
+        lambda self, mock_data_dir, overwrite, include_garmin, include_divelogs:
+            calls.append((mock_data_dir, overwrite, include_garmin, include_divelogs)) or True,
+    )
+
+    scheduler.run_download_thread(overwrite=True, base_dir=str(tmp_path), include_garmin=True, include_divelogs=False)
+
+    assert scheduler.is_download_running is False
+    assert scheduler.last_download_results == {"success": True}
+    assert calls == [(str(tmp_path), True, True, False)]
+
+
+def test_run_download_thread_records_failure(monkeypatch, tmp_path):
+    from src.core.sync_engine import SyncEngine
+
+    monkeypatch.setattr(
+        SyncEngine, "download_and_save_raw_data",
+        lambda self, mock_data_dir, overwrite, include_garmin, include_divelogs: False,
+    )
+
+    scheduler.run_download_thread(base_dir=str(tmp_path))
+
+    assert scheduler.is_download_running is False
+    assert scheduler.last_download_results == {"success": False}
+
+
+def test_run_download_thread_records_error(monkeypatch, tmp_path):
+    from src.core.sync_engine import SyncEngine
+
+    def boom(self, mock_data_dir, overwrite, include_garmin, include_divelogs):
+        raise RuntimeError("network exploded")
+
+    monkeypatch.setattr(SyncEngine, "download_and_save_raw_data", boom)
+
+    scheduler.run_download_thread(base_dir=str(tmp_path))
+
+    assert scheduler.is_download_running is False
+    assert scheduler.last_download_results == {"error": "network exploded"}
+
+
 def test_get_next_scheduled_run_none_when_empty():
     settings = SettingsModel()
     assert scheduler.get_next_scheduled_run(settings) is None

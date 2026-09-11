@@ -268,6 +268,44 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
         assert data["id"] == "777001"
         assert data["location"] == "Mock Live Divelogs site"
 
+def test_download_and_save_raw_data_scoped_to_one_service(tmp_path, monkeypatch):
+    creds_data = {
+        "garmin": {"username": "test_user@garmin", "password": "password"},
+        "divelogs": {"username": "test_user_divelogs", "password": "password"},
+    }
+    creds_path = os.path.join(tmp_path, "credentials.json")
+    with open(creds_path, "w") as f:
+        json.dump(creds_data, f)
+    settings_path = os.path.join(tmp_path, "settings.json")
+    with open(settings_path, "w") as f:
+        json.dump({"schedule": []}, f)
+
+    engine = SyncEngine(settings_path=settings_path, credentials_path=creds_path, mock_data_dir=None)
+
+    garmin_login_calls = []
+    monkeypatch.setattr(engine.garmin, "login", lambda: garmin_login_calls.append(1) or True)
+
+    divelogs_login_calls = []
+    monkeypatch.setattr(engine.divelogs, "login", lambda: divelogs_login_calls.append(1) or True)
+
+    class MockResponse:
+        status_code = 200
+        def json(self):
+            return []
+    monkeypatch.setattr(engine.divelogs.session, "get", lambda url, timeout=None: MockResponse())
+
+    mock_data_dir = str(tmp_path)
+    success = engine.download_and_save_raw_data(
+        mock_data_dir=mock_data_dir, include_garmin=False, include_divelogs=True
+    )
+
+    assert success
+    assert garmin_login_calls == []
+    assert divelogs_login_calls == [1]
+    assert not os.path.exists(os.path.join(mock_data_dir, "garmin"))
+    assert os.path.exists(os.path.join(mock_data_dir, "divelogs"))
+
+
 def test_update_dive_preserves_other_fields(tmp_path):
     mock_data_dir = str(tmp_path)
     garmin_dir = os.path.join(mock_data_dir, "garmin")

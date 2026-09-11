@@ -1,3 +1,4 @@
+import os
 import logging
 import threading
 import time
@@ -13,6 +14,49 @@ logger.setLevel(logging.INFO)
 
 is_sync_running = False
 last_sync_results: Dict[str, Any] = {}
+
+is_download_running = False
+last_download_results: Dict[str, Any] = {}
+
+
+def run_download_thread(
+    overwrite: bool = False,
+    base_dir: Optional[str] = None,
+    include_garmin: bool = True,
+    include_divelogs: bool = True,
+):
+    """Fetches and caches raw dive JSON from Garmin/Divelogs to local disk -
+    this is the only thing that populates the per-dive cache files
+    dive_cache.py's list/read/update/delete functions operate on. A regular
+    sync run does not do this (it fetches into memory for matching/pushing
+    only), so this needs to run at least once before there's anything for a
+    dive editor UI to show. include_garmin/include_divelogs let a caller
+    (e.g. a per-tab "Refresh") scope this to just one service."""
+    global is_download_running, last_download_results
+    is_download_running = True
+    logger.info(
+        "Raw dive data download started (overwrite=%s, garmin=%s, divelogs=%s)...",
+        overwrite, include_garmin, include_divelogs,
+    )
+    try:
+        engine = SyncEngine()
+        resolved_base_dir = base_dir or os.environ.get("DATA_DIR", "./data")
+        success = engine.download_and_save_raw_data(
+            mock_data_dir=resolved_base_dir,
+            overwrite=overwrite,
+            include_garmin=include_garmin,
+            include_divelogs=include_divelogs,
+        )
+        last_download_results = {"success": success}
+        if success:
+            logger.info("Raw dive data download completed successfully.")
+        else:
+            logger.error("Raw dive data download completed with errors - see log above.")
+    except Exception as e:
+        logger.error("Raw dive data download encountered an error: %s", e)
+        last_download_results = {"error": str(e)}
+    finally:
+        is_download_running = False
 
 
 def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = None):

@@ -509,26 +509,38 @@ class SyncEngine:
 
         return matched_pairs, unique_garmin, unique_divelogs
 
-    def download_and_save_raw_data(self, mock_data_dir: str = "./data", overwrite: bool = False) -> bool:
-        """Download all raw data from Garmin and Divelogs and save to directory structure."""
-        logger.info("Starting raw data download...")
-        
+    def download_and_save_raw_data(
+        self,
+        mock_data_dir: str = "./data",
+        overwrite: bool = False,
+        include_garmin: bool = True,
+        include_divelogs: bool = True,
+    ) -> bool:
+        """Download raw data from Garmin and/or Divelogs and save to directory
+        structure. include_garmin/include_divelogs let a caller scope this to
+        just one service (e.g. a per-tab "Refresh" that shouldn't also hit
+        the other service's API)."""
+        logger.info("Starting raw data download (garmin=%s, divelogs=%s)...", include_garmin, include_divelogs)
+
         garmin_dir = os.path.join(mock_data_dir, self.garmin_dir_name)
         divelogs_dir = os.path.join(mock_data_dir, self.divelogs_dir_name)
-        
+
         if overwrite:
             import shutil
-            logger.info("Overwriting existing data. Clearing directories: %s and %s", garmin_dir, divelogs_dir)
-            if os.path.exists(garmin_dir):
+            if include_garmin and os.path.exists(garmin_dir):
+                logger.info("Overwriting existing data. Clearing directory: %s", garmin_dir)
                 shutil.rmtree(garmin_dir)
-            if os.path.exists(divelogs_dir):
+            if include_divelogs and os.path.exists(divelogs_dir):
+                logger.info("Overwriting existing data. Clearing directory: %s", divelogs_dir)
                 shutil.rmtree(divelogs_dir)
 
-        os.makedirs(garmin_dir, exist_ok=True)
-        os.makedirs(divelogs_dir, exist_ok=True)
-        
+        if include_garmin:
+            os.makedirs(garmin_dir, exist_ok=True)
+        if include_divelogs:
+            os.makedirs(divelogs_dir, exist_ok=True)
+
         # 1. Divelogs raw data
-        if self.divelogs_username:
+        if include_divelogs and self.divelogs_username:
             logger.info("Authenticating with Divelogs.org...")
             if self.divelogs.login():
                 logger.info("Fetching detailed dive logs list from Divelogs.org...")
@@ -564,11 +576,11 @@ class SyncEngine:
             else:
                 logger.error("Failed to log in to Divelogs.org.")
                 return False
-        else:
+        elif include_divelogs:
             logger.warning("Divelogs credentials not found, skipping Divelogs download.")
-        
+
         # 2. Garmin raw data
-        if self.garmin_username:
+        if include_garmin and self.garmin_username:
             logger.info("Authenticating with Garmin Connect...")
             if self.garmin.login():
                 logger.info("Fetching Garmin dive activities list...")
@@ -656,7 +668,7 @@ class SyncEngine:
             else:
                 logger.error("Failed to log in to Garmin Connect.")
                 return False
-        else:
+        elif include_garmin:
             logger.warning("Garmin credentials not found, skipping Garmin download.")
                 
         logger.info("Raw data download completed. Files saved under %s", mock_data_dir)
