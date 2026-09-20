@@ -1,7 +1,12 @@
 import os
 import json
-from typing import List, Optional
+import logging
+from typing import List, Optional, Union
 from pydantic import BaseModel, Field
+
+from src.core.fields import FieldLink, default_field_links
+
+logger = logging.getLogger("dive_sync.config")
 
 SETTINGS_FILE = os.path.join(os.environ.get("DATA_DIR", "."), "settings.json")
 CREDENTIALS_FILE = os.path.join(os.environ.get("DATA_DIR", "."), "credentials.json")
@@ -10,7 +15,7 @@ class SyncFilters(BaseModel):
     date_from: Optional[str] = Field(None, description="Sync start date, format YYYY-MM-DD")
     date_to: Optional[str] = Field(None, description="Sync end date, format YYYY-MM-DD")
     only_new: bool = Field(True, description="Sync only new dives since last run")
-    sync_gases: bool = Field(True, description="Sync detailed gas mixtures")
+    sync_gases: bool = Field(True, description="Sync detailed gas mixtures (alias for 'the tanks links are not off')")
     sync_fit: bool = Field(False, description="Sync FIT files")
 
 class SyncScheduleSlot(BaseModel):
@@ -29,6 +34,9 @@ class CronJobModel(BaseModel):
     sync_gases: bool = Field(True, description="Sync detailed gas mixtures")
     sync_fit: bool = Field(False, description="Sync FIT files")
     enabled: bool = Field(True, description="Whether this job is active")
+    field_links: Optional[List[FieldLink]] = Field(
+        None, description="Optional per-job mapping board; None means the global field_links apply"
+    )
 
 class SettingsModel(BaseModel):
     directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
@@ -37,6 +45,10 @@ class SettingsModel(BaseModel):
     api_cooldown_seconds: float = Field(1.0, description="Cool-down delay in seconds between API requests")
     schedule: List[SyncScheduleSlot] = Field(default_factory=list, description="Cron-like multi-slot schedule")
     cron_jobs: List[CronJobModel] = Field(default_factory=list, description="List of configured cron jobs")
+    field_links: List[FieldLink] = Field(
+        default_factory=default_field_links,
+        description="The mapping board: which field feeds which, in what direction, with what conflict policy",
+    )
 
 class GarminCredentials(BaseModel):
     username: str = ""
@@ -46,8 +58,6 @@ class GarminCredentials(BaseModel):
 class DivelogsCredentials(BaseModel):
     username: str = ""
     password: str = ""
-
-from typing import Union
 
 class CredentialsModel(BaseModel):
     garmin: Union[List[GarminCredentials], GarminCredentials] = Field(default_factory=GarminCredentials)
@@ -78,7 +88,8 @@ class ConfigManager:
             try:
                 data = json.load(f)
                 return SettingsModel.model_validate(data)
-            except Exception:
+            except Exception as e:
+                logger.warning("Settings file %s could not be read (%s); using defaults for this run.", path, e)
                 return SettingsModel()
 
     @staticmethod
@@ -96,7 +107,8 @@ class ConfigManager:
             try:
                 data = json.load(f)
                 return CredentialsModel.model_validate(data)
-            except Exception:
+            except Exception as e:
+                logger.warning("Credentials file %s could not be read (%s); using empty credentials.", path, e)
                 return CredentialsModel()
 
     @staticmethod

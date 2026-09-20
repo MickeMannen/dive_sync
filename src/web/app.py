@@ -11,6 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, CredentialsModel, CronJobModel
+from src.core.fields import FieldLink, build_catalog, validate_field_links
+from src.core.services.garmin import GarminAdapter
+from src.core.services.divelogs import DivelogsAdapter
 import src.core.scheduler as scheduler
 
 # Configure logger
@@ -73,6 +76,7 @@ class CronJobSchema(BaseModel):
     sync_gases: bool
     sync_fit: bool
     enabled: bool
+    field_links: Optional[List[FieldLink]] = None
 
 class SettingsSchema(BaseModel):
     directionality: str
@@ -81,6 +85,9 @@ class SettingsSchema(BaseModel):
     api_cooldown_seconds: float
     schedule: List[Dict[str, int]]
     cron_jobs: List[CronJobSchema] = []
+    # Omitted (None) keeps the board currently on disk, so a settings form
+    # that does not know about links cannot wipe them.
+    field_links: Optional[List[FieldLink]] = None
 
 class SyncTriggerRequest(BaseModel):
     dry_run: bool = False
@@ -122,10 +129,22 @@ def save_settings(data: SettingsSchema):
                 only_new=job.only_new,
                 sync_gases=job.sync_gases,
                 sync_fit=job.sync_fit,
-                enabled=job.enabled
+                enabled=job.enabled,
+                field_links=job.field_links,
             )
             for job in data.cron_jobs
         ]
+        current = ConfigManager.load_settings()
+        field_links = data.field_links if data.field_links is not None else current.field_links
+
+        catalog = _pair_catalog()
+        problems = validate_field_links(field_links, catalog)
+        for job in cron_jobs:
+            if job.field_links:
+                problems.extend(f"Job '{job.id}': {p}" for p in validate_field_links(job.field_links, catalog))
+        if problems:
+            raise HTTPException(status_code=400, detail={"message": "Field links are invalid.", "errors": problems})
+
         settings = SettingsModel(
             directionality=data.directionality,
             sync_filters=SyncFilters(
@@ -138,14 +157,43 @@ def save_settings(data: SettingsSchema):
             grace_window_minutes=data.grace_window_minutes,
             api_cooldown_seconds=data.api_cooldown_seconds,
             schedule=schedule_slots,
-            cron_jobs=cron_jobs
+            cron_jobs=cron_jobs,
+            field_links=field_links,
         )
         ConfigManager.save_settings(settings)
         logger.info("Schedule configuration updated successfully.")
         return {"status": "success", "message": "Settings updated."}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to update settings: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# The only pair this build syncs. Track F turns this into a list of pairs.
+SYNC_PAIRS = [(GarminAdapter, DivelogsAdapter)]
+
+
+def _pair_catalog(source=GarminAdapter, target=DivelogsAdapter):
+    return build_catalog(source.field_catalog(), target.field_catalog())
+
+
+@app.get("/api/fields")
+def get_fields():
+    """Field catalogues per sync pair, for the mapping board. Needs no login."""
+    pairs = []
+    for source, target in SYNC_PAIRS:
+        pairs.append({
+            "source": source.service_id,
+            "target": target.service_id,
+            "source_name": source.display_name,
+            "target_name": target.display_name,
+            "fields": {
+                source.service_id: [f.model_dump() for f in source.field_catalog()],
+                target.service_id: [f.model_dump() for f in target.field_catalog()],
+            },
+        })
+    return {"pairs": pairs}
 
 @app.get("/api/credentials/status")
 def get_credentials_status():

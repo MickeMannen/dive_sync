@@ -3,76 +3,171 @@ import json
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Set
 
 from src.core.config import ConfigManager, SettingsModel, CredentialsModel, GarminCredentials, DivelogsCredentials
-from src.core.services.garmin import GarminAdapter
-from src.core.services.divelogs import DivelogsAdapter
+from src.core.adapter import BaseDiveAdapter
+from src.core.fields import (
+    FieldLink,
+    FieldSpec,
+    are_gas_mixtures_different,  # noqa: F401  (re-exported; older code imported it from here)
+    build_catalog,
+    convert_value,
+    copy_value,
+    get_field,
+    is_empty,
+    match_key_equal,
+    set_field,
+    validate_field_links,
+    values_equal,
+)
 from src.core.models import UnifiedDive, GasMixture
-
-def are_gas_mixtures_different(list1: List[GasMixture], list2: List[GasMixture]) -> bool:
-    if len(list1) != len(list2):
-        return True
-    for gm1, gm2 in zip(list1, list2):
-        if gm1.oxygen != gm2.oxygen or gm1.helium != gm2.helium:
-            return True
-        if gm1.start_pressure != gm2.start_pressure or gm1.end_pressure != gm2.end_pressure:
-            return True
-        if gm1.tank_volume != gm2.tank_volume:
-            return True
-    return False
 
 logger = logging.getLogger("dive_sync.sync_engine")
 
 STATE_FILE = "sync_state.json"
 
+# Global directionality values that are not tied to a service name.
+_GENERIC_DIRECTIONS = {"bidirectional", "to_target", "to_source"}
+
+
 class SyncEngine:
-    def __init__(self, settings_path: Optional[str] = None, credentials_path: Optional[str] = None, 
-                 mock_data_dir: Optional[str] = None, garmin_username: Optional[str] = None, 
-                 divelogs_username: Optional[str] = None):
+    """Synchronises dives between two adapters, ``source`` (side A) and
+    ``target`` (side B).
+
+    The pair defaults to Garmin Connect -> Divelogs.org, built from the
+    credentials file (or from local mock data when ``mock_data_dir`` is
+    given). Any two ``BaseDiveAdapter`` instances can be passed instead via
+    ``source_adapter`` / ``target_adapter``; each side is then addressed by
+    its ``service_id`` in ``external_ids``, result keys
+    (``uploaded_to_<id>``, ``updated_on_<id>``) and catalogue keys.
+    ``engine.garmin`` / ``engine.divelogs`` remain as aliases for whichever
+    side carries that service id.
+
+    What happens on a matched pair is driven entirely by the settings'
+    ``field_links`` (see ``src/core/fields.py``): every active link reads its
+    source and target fields, compares them, and if they differ decides who
+    wins from the global ``directionality`` (which sides may be written at
+    all) and the link's ``conflict`` policy."""
+
+    def __init__(self, settings_path: Optional[str] = None, credentials_path: Optional[str] = None,
+                 mock_data_dir: Optional[str] = None, garmin_username: Optional[str] = None,
+                 divelogs_username: Optional[str] = None, *,
+                 source_adapter: Optional[BaseDiveAdapter] = None,
+                 target_adapter: Optional[BaseDiveAdapter] = None):
         from src.core.config import SETTINGS_FILE, CREDENTIALS_FILE
         self.settings_path = settings_path or SETTINGS_FILE
         self.credentials_path = credentials_path or CREDENTIALS_FILE
         self.settings = ConfigManager.load_settings(self.settings_path)
         self.credentials = ConfigManager.load_credentials(self.credentials_path)
-        
+
         self._garmin_username_override = garmin_username
         self._divelogs_username_override = divelogs_username
-        
-        # Determine sync state file location
-        if mock_data_dir:
+
+        state_dir = os.path.dirname(self.settings_path) or "."
+
+        if source_adapter is not None or target_adapter is not None:
+            if source_adapter is None or target_adapter is None:
+                raise ValueError("Both source_adapter and target_adapter are required for a custom pair.")
+            self.source: BaseDiveAdapter = source_adapter
+            self.target: BaseDiveAdapter = target_adapter
+            self.source_id = self._require_service_id(self.source)
+            self.target_id = self._require_service_id(self.target)
+            if (self.source_id, self.target_id) == ("garmin", "divelogs"):
+                self.state_file = os.path.join(state_dir, STATE_FILE)
+            else:
+                self.state_file = os.path.join(state_dir, f"sync_state_{self.source_id}_{self.target_id}.json")
+        elif mock_data_dir:
             # If subdirectories with username exist under mock_data_dir, use segmented state file
             g_path = os.path.join(mock_data_dir, "garmin", self.garmin_username) if self.garmin_username else None
             if g_path and os.path.exists(g_path):
                 self.state_file = os.path.join(mock_data_dir, f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
             else:
-                self.state_file = os.path.join(mock_data_dir, "sync_state.json")
-            
+                self.state_file = os.path.join(mock_data_dir, STATE_FILE)
+
             from src.core.services.mock_adapters import LocalMockGarminAdapter, LocalMockDivelogsAdapter
             logger.info("Initializing SyncEngine in OFFLINE/MOCK mode using data from: %s", mock_data_dir)
-            self.garmin = LocalMockGarminAdapter(mock_data_dir=mock_data_dir, username=self.garmin_username)
-            self.divelogs = LocalMockDivelogsAdapter(mock_data_dir=mock_data_dir, username=self.divelogs_username)
+            self.source = LocalMockGarminAdapter(mock_data_dir=mock_data_dir, username=self.garmin_username)
+            self.target = LocalMockDivelogsAdapter(mock_data_dir=mock_data_dir, username=self.divelogs_username)
+            self.source_id = self._require_service_id(self.source)
+            self.target_id = self._require_service_id(self.target)
         else:
+            from src.core.services.garmin import GarminAdapter
+            from src.core.services.divelogs import DivelogsAdapter
             if self.garmin_username and self.divelogs_username and (len(self.credentials.get_garmin_accounts()) > 1 or len(self.credentials.get_divelogs_accounts()) > 1):
-                self.state_file = os.path.join(os.path.dirname(self.settings_path) or ".", f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
+                self.state_file = os.path.join(state_dir, f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
             else:
-                self.state_file = os.path.join(os.path.dirname(self.settings_path) or ".", "sync_state.json")
-                
+                self.state_file = os.path.join(state_dir, STATE_FILE)
+
             token_dir = self.garmin_creds.token_dir
             if not os.path.isabs(token_dir):
                 token_dir = os.path.join(os.environ.get("DATA_DIR", "."), token_dir)
-                
-            self.garmin = GarminAdapter(
+
+            self.source = GarminAdapter(
                 username=self.garmin_creds.username,
                 password=self.garmin_creds.password,
                 token_dir=token_dir,
                 cooldown_seconds=self.settings.api_cooldown_seconds
             )
-            self.divelogs = DivelogsAdapter(
+            self.target = DivelogsAdapter(
                 username=self.divelogs_creds.username,
                 password=self.divelogs_creds.password,
                 cooldown_seconds=self.settings.api_cooldown_seconds
             )
+            self.source_id = self._require_service_id(self.source)
+            self.target_id = self._require_service_id(self.target)
+
+        if self.source_id == self.target_id:
+            raise ValueError(f"Cannot sync a service with itself ({self.source_id}).")
+
+        # Names and catalogue are captured now so that tests (and callers)
+        # may later swap in duck-typed adapters without service metadata.
+        self.source_name = getattr(self.source, "display_name", "") or self.source_id
+        self.target_name = getattr(self.target, "display_name", "") or self.target_id
+        self._slots = {self.source_id: "source", self.target_id: "target"}
+        self.catalog: Dict[str, FieldSpec] = build_catalog(self.source.field_catalog(), self.target.field_catalog())
+
+    # ------------------------------------------------------------------
+    # Pair / adapter access
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _require_service_id(adapter: Any) -> str:
+        service_id = getattr(adapter, "service_id", "")
+        if not service_id:
+            raise ValueError(f"Adapter {type(adapter).__name__} declares no service_id.")
+        return service_id
+
+    def adapter_for(self, service_id: str) -> BaseDiveAdapter:
+        """The adapter on the side that carries ``service_id``."""
+        slot = self._slots.get(service_id)
+        if slot is None:
+            raise AttributeError(f"This engine syncs {self.source_id} <-> {self.target_id}; it has no '{service_id}' side.")
+        return getattr(self, slot)
+
+    def _set_adapter_for(self, service_id: str, adapter: Any) -> None:
+        slot = self._slots.get(service_id)
+        if slot is None:
+            raise AttributeError(f"This engine syncs {self.source_id} <-> {self.target_id}; it has no '{service_id}' side.")
+        setattr(self, slot, adapter)
+
+    @property
+    def garmin(self) -> BaseDiveAdapter:
+        """Alias for the side that is Garmin Connect (kept for callers and tests)."""
+        return self.adapter_for("garmin")
+
+    @garmin.setter
+    def garmin(self, adapter: Any) -> None:
+        self._set_adapter_for("garmin", adapter)
+
+    @property
+    def divelogs(self) -> BaseDiveAdapter:
+        """Alias for the side that is Divelogs.org (kept for callers and tests)."""
+        return self.adapter_for("divelogs")
+
+    @divelogs.setter
+    def divelogs(self, adapter: Any) -> None:
+        self._set_adapter_for("divelogs", adapter)
 
     @property
     def garmin_creds(self) -> GarminCredentials:
@@ -123,6 +218,10 @@ class SyncEngine:
         if self.divelogs_username:
             return os.path.join("divelogs", self.divelogs_username)
         return "divelogs"
+
+    # ------------------------------------------------------------------
+    # Sync state
+    # ------------------------------------------------------------------
 
     def load_last_sync_time(self) -> Optional[datetime]:
         if os.path.exists(self.state_file):
@@ -186,14 +285,182 @@ class SyncEngine:
         
         return True
 
-    def run_sync(self, dry_run: bool = False, date_from_override: Optional[str] = None, date_to_override: Optional[str] = None, only_new_override: Optional[bool] = None, direction_override: Optional[str] = None) -> Dict[str, Any]:
-        """Perform bidirectional or directional synchronization."""
+    # ------------------------------------------------------------------
+    # Field links
+    # ------------------------------------------------------------------
+
+    def writable_sides(self) -> Set[str]:
+        """Service ids the current ``directionality`` allows writing to.
+        ``to_<service_id>`` (``to_divelogs``, ``to_garmin``) names the side;
+        ``to_target`` / ``to_source`` are the pair-neutral spellings."""
+        direction = self.settings.directionality
+        if direction == "bidirectional":
+            return {self.source_id, self.target_id}
+        if direction in ("to_target", f"to_{self.target_id}"):
+            return {self.target_id}
+        if direction in ("to_source", f"to_{self.source_id}"):
+            return {self.source_id}
+        logger.warning(
+            "Unknown directionality %r for pair %s -> %s (expected bidirectional, to_%s or to_%s); nothing will be written.",
+            direction, self.source_id, self.target_id, self.source_id, self.target_id,
+        )
+        return set()
+
+    def _checked_links(self) -> List[Tuple[FieldLink, FieldSpec, FieldSpec]]:
+        """The settings' links that are valid against this pair's catalogue,
+        each with its resolved (first) source spec and target spec. Invalid
+        links are logged and skipped so one bad edit cannot stop a sync."""
+        links = list(self.settings.field_links)
+        problems = validate_field_links(links, self.catalog)
+        bad_ids = set()
+        for problem in problems:
+            logger.warning("Ignoring field link: %s", problem)
+            if problem.startswith("Link '"):
+                bad_ids.add(problem.split("'", 2)[1])
+        resolved = []
+        for link in links:
+            if link.id in bad_ids:
+                continue
+            resolved.append((link, self.catalog[link.source[0]], self.catalog[link.target]))
+        return resolved
+
+    def active_links(self) -> List[Tuple[FieldLink, FieldSpec, FieldSpec]]:
+        """Links applied to matched dives this run: valid, not off, not
+        composite (templates arrive with C18) and not a tanks link while
+        ``sync_gases`` is off."""
+        active = []
+        for link, src_spec, tgt_spec in self._checked_links():
+            if link.direction == "off":
+                continue
+            if link.is_composite:
+                logger.warning("Link '%s' is a composite; templates are not rendered yet, skipping.", link.id)
+                continue
+            if not self.settings.sync_filters.sync_gases and "tanks" in (src_spec.type, tgt_spec.type):
+                continue
+            active.append((link, src_spec, tgt_spec))
+        return active
+
+    def match_key_links(self) -> List[Tuple[FieldLink, FieldSpec, FieldSpec]]:
+        """Links flagged as match keys, in ``match_order``, resolved so the
+        first spec is on this engine's source side and the second on its
+        target side (a link may be drawn in either direction)."""
+        keyed = []
+        for link, src_spec, tgt_spec in self._checked_links():
+            if link.match_order is None:
+                continue
+            if src_spec.service_id == self.source_id and tgt_spec.service_id == self.target_id:
+                keyed.append((link.match_order, link, src_spec, tgt_spec))
+            elif src_spec.service_id == self.target_id and tgt_spec.service_id == self.source_id:
+                keyed.append((link.match_order, link, tgt_spec, src_spec))
+        keyed.sort(key=lambda item: item[0])
+        return [(link, a_spec, b_spec) for _, link, a_spec, b_spec in keyed]
+
+    def _dive_for(self, service_id: str, a_dive: UnifiedDive, b_dive: UnifiedDive) -> UnifiedDive:
+        return a_dive if service_id == self.source_id else b_dive
+
+    @staticmethod
+    def _brief(field_type: str, value: Any) -> Any:
+        if field_type in ("samples", "tanks", "list") and value is not None:
+            return f"{len(value)} items"
+        return value
+
+    def _apply_link(self, link: FieldLink, src_spec: FieldSpec, tgt_spec: FieldSpec,
+                    a_dive: UnifiedDive, b_dive: UnifiedDive, writable: Set[str]) -> Optional[str]:
+        """Apply one link to one matched pair in memory. Returns the service id
+        whose dive was modified, or None.
+
+        Rules: if the two values already agree, nothing happens. Otherwise the
+        sides this link *and* the global directionality allow writing decide:
+        with exactly one writable side the other side is the origin and is
+        copied over (``prefer_non_empty`` / ``manual`` copy only into a blank
+        field); with both sides writable the link's ``conflict`` policy picks
+        the winner (``source_wins`` / ``target_wins`` always copy, the other
+        two only fill blanks and leave a real conflict alone)."""
+        src_dive = self._dive_for(src_spec.service_id, a_dive, b_dive)
+        tgt_dive = self._dive_for(tgt_spec.service_id, a_dive, b_dive)
+        src_val = get_field(src_dive, src_spec)
+        tgt_val = get_field(tgt_dive, tgt_spec)
+        src_as_tgt = convert_value(src_val, src_spec.type, tgt_spec.type, link.separator)
+        if values_equal(tgt_spec.type, src_as_tgt, tgt_val):
+            return None
+
+        can_write_tgt = link.direction in ("bidirectional", "to_target") and tgt_spec.service_id in writable
+        can_write_src = link.direction in ("bidirectional", "to_source") and src_spec.service_id in writable
+        if not (can_write_tgt or can_write_src):
+            return None
+
+        src_empty = is_empty(src_spec.type, src_val)
+        tgt_empty = is_empty(tgt_spec.type, tgt_val)
+        policy = link.conflict
+        fill_only = policy in ("prefer_non_empty", "manual")
+
+        winner: Optional[str]
+        if can_write_tgt and can_write_src:
+            if policy == "source_wins":
+                winner = "source"
+            elif policy == "target_wins":
+                winner = "target"
+            elif tgt_empty and not src_empty:
+                winner = "source"
+            elif src_empty and not tgt_empty:
+                winner = "target"
+            else:
+                winner = None
+        else:
+            origin = "source" if can_write_tgt else "target"
+            if not fill_only:
+                winner = origin
+            else:
+                dest_empty = tgt_empty if origin == "source" else src_empty
+                origin_empty = src_empty if origin == "source" else tgt_empty
+                winner = origin if (dest_empty and not origin_empty) else None
+
+        src_shown = self._brief(src_spec.type, src_val)
+        tgt_shown = self._brief(tgt_spec.type, tgt_val)
+        if winner is None:
+            if policy == "manual" and not src_empty and not tgt_empty:
+                # C4 will record this to conflicts.json; until then it is only logged.
+                logger.warning("  %s: conflict left for manual resolution (%s=%r, %s=%r) [link %s]",
+                               tgt_spec.label, src_spec.key, src_shown, tgt_spec.key, tgt_shown, link.id)
+            else:
+                logger.info("  %s differs (%s=%r, %s=%r) -> kept, %s [link %s]",
+                            tgt_spec.label, src_spec.key, src_shown, tgt_spec.key, tgt_shown, policy, link.id)
+            return None
+
+        if winner == "source":
+            logger.info("  %s differs (%s=%r, %s=%r) -> %s := %s [link %s, %s]",
+                        tgt_spec.label, src_spec.key, src_shown, tgt_spec.key, tgt_shown,
+                        tgt_spec.key, src_spec.key, link.id, policy)
+            set_field(tgt_dive, tgt_spec, copy_value(tgt_spec.type, src_as_tgt))
+            return tgt_spec.service_id
+
+        tgt_as_src = convert_value(tgt_val, tgt_spec.type, src_spec.type, link.separator)
+        logger.info("  %s differs (%s=%r, %s=%r) -> %s := %s [link %s, %s]",
+                    src_spec.label, src_spec.key, src_shown, tgt_spec.key, tgt_shown,
+                    src_spec.key, tgt_spec.key, link.id, policy)
+        set_field(src_dive, src_spec, copy_value(src_spec.type, tgt_as_src))
+        return src_spec.service_id
+
+    # ------------------------------------------------------------------
+    # Sync run
+    # ------------------------------------------------------------------
+
+    def run_sync(self, dry_run: bool = False, date_from_override: Optional[str] = None,
+                 date_to_override: Optional[str] = None, only_new_override: Optional[bool] = None,
+                 direction_override: Optional[str] = None, sync_gases_override: Optional[bool] = None,
+                 sync_fit_override: Optional[bool] = None,
+                 field_links_override: Optional[List[FieldLink]] = None) -> Dict[str, Any]:
+        """Perform bidirectional or directional synchronization.
+
+        Settings are re-read from disk at the start of every run; per-run
+        overrides (CLI flags, cron-job fields) are passed in explicitly so
+        they survive that reload."""
         logger.info("Initializing Sync Run (Dry Run: %s)...", dry_run)
-        
+
         # Reload settings to ensure we have the latest config
         self.settings = ConfigManager.load_settings(self.settings_path)
-        
-        # Apply command-line parameter overrides
+
+        # Apply command-line / job parameter overrides
         if date_from_override is not None:
             self.settings.sync_filters.date_from = date_from_override
         if date_to_override is not None:
@@ -202,12 +469,18 @@ class SyncEngine:
             self.settings.sync_filters.only_new = only_new_override
         if direction_override is not None:
             self.settings.directionality = direction_override
-        
+        if sync_gases_override is not None:
+            self.settings.sync_filters.sync_gases = sync_gases_override
+        if sync_fit_override is not None:
+            self.settings.sync_filters.sync_fit = sync_fit_override
+        if field_links_override is not None:
+            self.settings.field_links = list(field_links_override)
+
         # Login
-        if not self.garmin.login():
-            raise RuntimeError("Failed to authenticate with Garmin Connect.")
-        if not self.divelogs.login():
-            raise RuntimeError("Failed to authenticate with Divelogs.org.")
+        if not self.source.login():
+            raise RuntimeError(f"Failed to authenticate with {self.source_name}.")
+        if not self.target.login():
+            raise RuntimeError(f"Failed to authenticate with {self.target_name}.")
 
         # Determine datetime filters
         date_from: Optional[datetime] = None
@@ -218,7 +491,7 @@ class SyncEngine:
                 date_from = datetime.strptime(self.settings.sync_filters.date_from, "%Y-%m-%d")
             except ValueError:
                 logger.warning("Invalid sync_filters.date_from format. Use YYYY-MM-DD.")
-        
+
         if self.settings.sync_filters.date_to:
             try:
                 date_to = datetime.strptime(self.settings.sync_filters.date_to, "%Y-%m-%d")
@@ -236,208 +509,120 @@ class SyncEngine:
                     logger.info("Incremental Sync Active. Fetching dives starting from: %s", date_from)
 
         # Fetch dives
-        garmin_dives = self.garmin.fetch_dives(date_from=date_from, date_to=date_to)
-        divelogs_dives = self.divelogs.fetch_dives(date_from=date_from, date_to=date_to)
+        source_dives = self.source.fetch_dives(date_from=date_from, date_to=date_to)
+        target_dives = self.target.fetch_dives(date_from=date_from, date_to=date_to)
 
         # Match dives
-        matched_pairs, unique_garmin, unique_divelogs = self.match_dives(garmin_dives, divelogs_dives)
+        matched_pairs, unique_source, unique_target = self.match_dives(source_dives, target_dives)
 
-        logger.info("Match results: %d matched pairs, %d only in Garmin, %d only in Divelogs",
-                    len(matched_pairs), len(unique_garmin), len(unique_divelogs))
+        logger.info("Match results: %d matched pairs, %d only in %s, %d only in %s",
+                    len(matched_pairs), len(unique_source), self.source_name, len(unique_target), self.target_name)
 
-        sync_results = {
+        src, tgt = self.source_id, self.target_id
+        sync_results: Dict[str, Any] = {
             "dry_run": dry_run,
             "directionality": self.settings.directionality,
+            "source": src,
+            "target": tgt,
             "matched_count": len(matched_pairs),
-            "uploaded_to_divelogs": [],
-            "uploaded_to_garmin": [],
-            "updated_on_divelogs": [],
-            "updated_on_garmin": [],
+            f"uploaded_to_{tgt}": [],
+            f"uploaded_to_{src}": [],
+            f"updated_on_{tgt}": [],
+            f"updated_on_{src}": [],
             "skipped": []
         }
 
         # Filter out gas mixtures if disabled in settings
         if not self.settings.sync_filters.sync_gases:
-            for d in unique_garmin + unique_divelogs:
+            for d in unique_source + unique_target:
                 d.gas_mixtures = []
-            for g, d in matched_pairs:
-                g.gas_mixtures = []
-                d.gas_mixtures = []
+            for a, b in matched_pairs:
+                a.gas_mixtures = []
+                b.gas_mixtures = []
 
-        direction = self.settings.directionality
+        writable = self.writable_sides()
 
-        # 1. Garmin -> Divelogs (if bidirectional or to_divelogs)
-        if direction in ["bidirectional", "to_divelogs"]:
-            for dive in unique_garmin:
-                logger.info("Sync action: Upload Garmin dive at %s to Divelogs.org", dive.date_time)
+        # 1. Upload dives only the source has to the target
+        if tgt in writable:
+            for dive in unique_source:
+                logger.info("Sync action: Upload %s dive at %s to %s", self.source_name, dive.date_time, self.target_name)
+                entry = {
+                    "time": str(dive.date_time),
+                    f"{src}_id": dive.external_ids.get(src),
+                    "source_id": dive.external_ids.get(src),
+                }
                 if not dry_run:
-                    new_id = self.divelogs.add_dive(dive)
+                    new_id = self.target.add_dive(dive)
                     if new_id:
-                        sync_results["uploaded_to_divelogs"].append({
-                            "time": str(dive.date_time),
-                            "new_divelogs_id": new_id,
-                            "garmin_id": dive.external_ids.get("garmin")
-                        })
+                        entry[f"new_{tgt}_id"] = new_id
+                        entry["new_id"] = new_id
+                        sync_results[f"uploaded_to_{tgt}"].append(entry)
                 else:
-                    sync_results["uploaded_to_divelogs"].append({
-                        "time": str(dive.date_time),
-                        "garmin_id": dive.external_ids.get("garmin"),
-                        "dry_run": True
-                    })
+                    entry["dry_run"] = True
+                    sync_results[f"uploaded_to_{tgt}"].append(entry)
 
-        # 2. Divelogs -> Garmin (if bidirectional or to_garmin)
-        if direction in ["bidirectional", "to_garmin"]:
-            for dive in unique_divelogs:
-                logger.info("Sync action: Upload Divelogs dive at %s to Garmin Connect", dive.date_time)
-                
-                # Fetch FIT file if it exists/requested? Divelogs dives do not contain fit files,
-                # but if we upload to Garmin, Garmin expects a Garmin JSON format
+        # 2. Upload dives only the target has to the source
+        if src in writable:
+            for dive in unique_target:
+                logger.info("Sync action: Upload %s dive at %s to %s", self.target_name, dive.date_time, self.source_name)
+                entry = {
+                    "time": str(dive.date_time),
+                    f"{tgt}_id": dive.external_ids.get(tgt),
+                    "source_id": dive.external_ids.get(tgt),
+                }
                 if not dry_run:
-                    new_id = self.garmin.add_dive(dive)
+                    new_id = self.source.add_dive(dive)
                     if new_id:
-                        sync_results["uploaded_to_garmin"].append({
-                            "time": str(dive.date_time),
-                            "new_garmin_id": new_id,
-                            "divelogs_id": dive.external_ids.get("divelogs")
-                        })
+                        entry[f"new_{src}_id"] = new_id
+                        entry["new_id"] = new_id
+                        sync_results[f"uploaded_to_{src}"].append(entry)
                 else:
-                    sync_results["uploaded_to_garmin"].append({
-                        "time": str(dive.date_time),
-                        "divelogs_id": dive.external_ids.get("divelogs"),
-                        "dry_run": True
-                    })
+                    entry["dry_run"] = True
+                    sync_results[f"uploaded_to_{src}"].append(entry)
 
-        # 3. Synchronize cross-references for matched dives (linking IDs if missing)
-        # That is, if Garmin is missing 'divelogs' external ID, or Divelogs is missing 'garmin' ID, we update them.
-        for g_dive, d_dive in matched_pairs:
-            g_id = g_dive.external_ids.get("garmin")
-            d_id = d_dive.external_ids.get("divelogs")
+        # 3. Matched dives: cross-link IDs, then apply every active field link
+        links = self.active_links()
+        for a_dive, b_dive in matched_pairs:
+            a_id = a_dive.external_ids.get(src)
+            b_id = b_dive.external_ids.get(tgt)
 
-            # Check if links need updating
-            needs_garmin_update = False
-            needs_divelogs_update = False
-            is_linking_garmin = False
-            is_linking_divelogs = False
+            needs_update = {src: False, tgt: False}
+            is_linking = {src: False, tgt: False}
 
-            if g_id and "divelogs" not in g_dive.external_ids:
-                g_dive.external_ids["divelogs"] = d_id
-                needs_garmin_update = True
-                is_linking_garmin = True
-            
-            if d_id and "garmin" not in d_dive.external_ids:
-                d_dive.external_ids["garmin"] = g_id
-                needs_divelogs_update = True
-                is_linking_divelogs = True
+            if a_id and tgt not in a_dive.external_ids:
+                a_dive.external_ids[tgt] = b_id
+                needs_update[src] = True
+                is_linking[src] = True
 
-            # If direction is to_divelogs or bidirectional, sync updates from Garmin to Divelogs
-            if direction in ["to_divelogs", "bidirectional"]:
-                has_diff = False
-                g_buddy = "" if (g_dive.buddy is None or g_dive.buddy == "None") else g_dive.buddy.strip()
-                d_buddy = "" if (d_dive.buddy is None or d_dive.buddy == "None") else d_dive.buddy.strip()
-                if g_buddy != d_buddy:
-                    logger.info("  Buddy differs (Garmin: '%s', Divelogs: '%s')", g_dive.buddy, d_dive.buddy)
-                    d_dive.buddy = g_dive.buddy
-                    has_diff = True
-                
-                g_notes = "" if (g_dive.notes is None or g_dive.notes == "None") else g_dive.notes.strip()
-                d_notes = "" if (d_dive.notes is None or d_dive.notes == "None") else d_dive.notes.strip()
-                if g_notes != d_notes:
-                    logger.info("  Notes differ (Garmin: '%s', Divelogs: '%s')", g_dive.notes, d_dive.notes)
-                    d_dive.notes = g_dive.notes
-                    has_diff = True
-                if g_dive.weight != d_dive.weight or g_dive.weight_unit != d_dive.weight_unit:
-                    logger.info("  Weight differs (Garmin: %s %s, Divelogs: %s %s)", g_dive.weight, g_dive.weight_unit, d_dive.weight, d_dive.weight_unit)
-                    d_dive.weight = g_dive.weight
-                    d_dive.weight_unit = g_dive.weight_unit
-                    has_diff = True
-                if g_dive.visibility != d_dive.visibility or g_dive.visibility_unit != d_dive.visibility_unit:
-                    logger.info("  Visibility differs (Garmin: %s %s, Divelogs: %s %s)", g_dive.visibility, g_dive.visibility_unit, d_dive.visibility, d_dive.visibility_unit)
-                    d_dive.visibility = g_dive.visibility
-                    d_dive.visibility_unit = g_dive.visibility_unit
-                    has_diff = True
-                if g_dive.lat != d_dive.lat or g_dive.lng != d_dive.lng:
-                    logger.info("  GPS coordinates differ (Garmin: %s, %s, Divelogs: %s, %s)", g_dive.lat, g_dive.lng, d_dive.lat, d_dive.lng)
-                    d_dive.lat = g_dive.lat
-                    d_dive.lng = g_dive.lng
-                    has_diff = True
-                if g_dive.samples != d_dive.samples:
-                    logger.info("  Dive profile samples differ (Garmin: %d samples, Divelogs: %d samples)", len(g_dive.samples), len(d_dive.samples))
-                    d_dive.samples = g_dive.samples
-                    has_diff = True
-                if self.settings.sync_filters.sync_gases and are_gas_mixtures_different(g_dive.gas_mixtures, d_dive.gas_mixtures):
-                    logger.info("  Gas mixtures differ (Garmin: %d mixtures, Divelogs: %d mixtures)", len(g_dive.gas_mixtures), len(d_dive.gas_mixtures))
-                    d_dive.gas_mixtures = [
-                        GasMixture(
-                            oxygen=gm.oxygen,
-                            helium=gm.helium,
-                            start_pressure=gm.start_pressure,
-                            end_pressure=gm.end_pressure,
-                            tank_volume=gm.tank_volume
-                        ) for gm in g_dive.gas_mixtures
-                    ]
-                    has_diff = True
-                if has_diff:
-                    needs_divelogs_update = True
+            if b_id and src not in b_dive.external_ids:
+                b_dive.external_ids[src] = a_id
+                needs_update[tgt] = True
+                is_linking[tgt] = True
 
-            # If direction is to_garmin or bidirectional, sync updates from Divelogs to Garmin
-            if direction in ["to_garmin", "bidirectional"]:
-                has_diff = False
-                g_buddy = "" if (g_dive.buddy is None or g_dive.buddy == "None") else g_dive.buddy.strip()
-                d_buddy = "" if (d_dive.buddy is None or d_dive.buddy == "None") else d_dive.buddy.strip()
-                if d_buddy != g_buddy:
-                    logger.info("  Buddy differs (Divelogs: '%s', Garmin: '%s')", d_dive.buddy, g_dive.buddy)
-                    g_dive.buddy = d_dive.buddy
-                    has_diff = True
-                
-                g_notes = "" if (g_dive.notes is None or g_dive.notes == "None") else g_dive.notes.strip()
-                d_notes = "" if (d_dive.notes is None or d_dive.notes == "None") else d_dive.notes.strip()
-                if d_notes != g_notes:
-                    logger.info("  Notes differ (Divelogs: '%s', Garmin: '%s')", d_dive.notes, g_dive.notes)
-                    g_dive.notes = d_dive.notes
-                    has_diff = True
-                if d_dive.weight != g_dive.weight or d_dive.weight_unit != g_dive.weight_unit:
-                    logger.info("  Weight differs (Divelogs: %s %s, Garmin: %s %s)", d_dive.weight, d_dive.weight_unit, g_dive.weight, g_dive.weight_unit)
-                    g_dive.weight = d_dive.weight
-                    g_dive.weight_unit = d_dive.weight_unit
-                    has_diff = True
-                if d_dive.visibility != g_dive.visibility or d_dive.visibility_unit != g_dive.visibility_unit:
-                    logger.info("  Visibility differs (Divelogs: %s %s, Garmin: %s %s)", d_dive.visibility, d_dive.visibility_unit, g_dive.visibility, g_dive.visibility_unit)
-                    g_dive.visibility = d_dive.visibility
-                    g_dive.visibility_unit = d_dive.visibility_unit
-                    has_diff = True
-                # Only update Garmin coordinates from Divelogs if Garmin currently has no coordinates
-                if g_dive.lat is None or g_dive.lng is None:
-                    if d_dive.lat != g_dive.lat or d_dive.lng != g_dive.lng:
-                        logger.info("  GPS coordinates differ (Divelogs: %s, %s, Garmin: %s, %s)", d_dive.lat, d_dive.lng, g_dive.lat, g_dive.lng)
-                        g_dive.lat = d_dive.lat
-                        g_dive.lng = d_dive.lng
-                        has_diff = True
-                if has_diff:
-                    needs_garmin_update = True
+            for link, src_spec, tgt_spec in links:
+                modified = self._apply_link(link, src_spec, tgt_spec, a_dive, b_dive, writable)
+                if modified:
+                    needs_update[modified] = True
 
-            if needs_garmin_update and direction in ["bidirectional", "to_garmin"]:
-                if is_linking_garmin:
-                    logger.info("Sync action: Link Divelogs ID %s and update fields in Garmin Activity ID %s", d_id, g_id)
+            sides = (
+                (src, self.source, a_dive, a_id, tgt, b_id, self.source_name, self.target_name),
+                (tgt, self.target, b_dive, b_id, src, a_id, self.target_name, self.source_name),
+            )
+            for sid, adapter, dive, ext_id, other_sid, other_id, name, other_name in sides:
+                if not (needs_update[sid] and sid in writable):
+                    continue
+                if is_linking[sid]:
+                    logger.info("Sync action: Link %s ID %s and update fields in %s ID %s", other_name, other_id, name, ext_id)
                 else:
-                    logger.info("Sync action: Update fields in Garmin Activity ID %s from Divelogs", g_id)
-                
+                    logger.info("Sync action: Update fields in %s ID %s from %s", name, ext_id, other_name)
+
+                entry = {"id": ext_id, f"linked_{other_sid}": other_id, "linked_id": other_id, "time": str(dive.date_time)}
                 if not dry_run:
-                    self.garmin.update_dive(g_id, g_dive)
-                    sync_results["updated_on_garmin"].append({"id": g_id, "linked_divelogs": d_id, "time": str(g_dive.date_time)})
+                    adapter.update_dive(ext_id, dive)
+                    sync_results[f"updated_on_{sid}"].append(entry)
                 else:
-                    sync_results["updated_on_garmin"].append({"id": g_id, "linked_divelogs": d_id, "time": str(g_dive.date_time), "dry_run": True})
-
-            if needs_divelogs_update and direction in ["bidirectional", "to_divelogs"]:
-                if is_linking_divelogs:
-                    logger.info("Sync action: Link Garmin ID %s and update fields in Divelogs Dive ID %s", g_id, d_id)
-                else:
-                    logger.info("Sync action: Update fields in Divelogs Dive ID %s from Garmin", d_id)
-                
-                if not dry_run:
-                    self.divelogs.update_dive(d_id, d_dive)
-                    sync_results["updated_on_divelogs"].append({"id": d_id, "linked_garmin": g_id, "time": str(d_dive.date_time)})
-                else:
-                    sync_results["updated_on_divelogs"].append({"id": d_id, "linked_garmin": g_id, "time": str(d_dive.date_time), "dry_run": True})
+                    entry["dry_run"] = True
+                    sync_results[f"updated_on_{sid}"].append(entry)
 
         # Update last sync time if not dry run
         if not dry_run:
@@ -446,68 +631,72 @@ class SyncEngine:
         logger.info("Sync Completed.")
         return sync_results
 
-    def match_dives(self, garmin_list: List[UnifiedDive], divelogs_list: List[UnifiedDive]) -> Tuple[List[Tuple[UnifiedDive, UnifiedDive]], List[UnifiedDive], List[UnifiedDive]]:
+    def match_dives(self, source_list: List[UnifiedDive], target_list: List[UnifiedDive]) -> Tuple[List[Tuple[UnifiedDive, UnifiedDive]], List[UnifiedDive], List[UnifiedDive]]:
+        """Pair up dives from the two sides.
+
+        Tier 1: explicit external-ID links (each side storing the other's id).
+        Tier 2: the links flagged as match keys on the board, in ``match_order``
+                (the default board flags the dive-number link).
+        Tier 3: start times within ``grace_window_minutes`` of each other."""
         matched_pairs: List[Tuple[UnifiedDive, UnifiedDive]] = []
-        unique_garmin: List[UnifiedDive] = []
-        unique_divelogs: List[UnifiedDive] = []
+        unique_source: List[UnifiedDive] = []
+        unique_target: List[UnifiedDive] = []
 
         grace_seconds = self.settings.grace_window_minutes * 60
+        src, tgt = self.source_id, self.target_id
+        match_keys = self.match_key_links()
 
         # Keep track of matched indices
-        matched_divelogs_indices = set()
+        matched_target_indices = set()
 
-        for g_dive in garmin_list:
+        for a_dive in source_list:
             match_found = False
-            g_id = g_dive.external_ids.get("garmin")
-            g_divelogs_id = g_dive.external_ids.get("divelogs")
+            a_id = a_dive.external_ids.get(src)
+            a_link_id = a_dive.external_ids.get(tgt)
 
-            for idx, d_dive in enumerate(divelogs_list):
-                if idx in matched_divelogs_indices:
+            for idx, b_dive in enumerate(target_list):
+                if idx in matched_target_indices:
                     continue
-                
-                d_id = d_dive.external_ids.get("divelogs")
-                d_garmin_id = d_dive.external_ids.get("garmin")
+
+                b_id = b_dive.external_ids.get(tgt)
+                b_link_id = b_dive.external_ids.get(src)
 
                 # Tier 1: Match by explicit external ID links
                 id_matched = False
-                if g_divelogs_id and d_id and str(g_divelogs_id).strip() == str(d_id).strip():
+                if a_link_id and b_id and str(a_link_id).strip() == str(b_id).strip():
                     id_matched = True
-                elif g_id and d_garmin_id and str(g_id).strip() == str(d_garmin_id).strip():
+                elif a_id and b_link_id and str(a_id).strip() == str(b_link_id).strip():
                     id_matched = True
 
-                # Tier 2: Match by dive number if present on both
-                number_matched = False
+                # Tier 2: Match keys from the board
+                key_matched = False
                 if not id_matched:
-                    if g_dive.dive_number is not None and d_dive.dive_number is not None:
-                        try:
-                            g_num = int(float(str(g_dive.dive_number).strip()))
-                            d_num = int(float(str(d_dive.dive_number).strip()))
-                            if g_num == d_num and g_num > 0:
-                                number_matched = True
-                        except ValueError:
-                            pass
+                    for _link, a_spec, b_spec in match_keys:
+                        if match_key_equal(a_spec.type, get_field(a_dive, a_spec), get_field(b_dive, b_spec)):
+                            key_matched = True
+                            break
 
                 # Tier 3: Match by local naive timestamps (grace window)
                 timestamp_matched = False
-                if not id_matched and not number_matched:
-                    diff = abs((g_dive.date_time - d_dive.date_time).total_seconds())
+                if not id_matched and not key_matched:
+                    diff = abs((a_dive.date_time - b_dive.date_time).total_seconds())
                     if diff <= grace_seconds:
                         timestamp_matched = True
 
-                if id_matched or number_matched or timestamp_matched:
-                    matched_pairs.append((g_dive, d_dive))
-                    matched_divelogs_indices.add(idx)
+                if id_matched or key_matched or timestamp_matched:
+                    matched_pairs.append((a_dive, b_dive))
+                    matched_target_indices.add(idx)
                     match_found = True
                     break
-            
+
             if not match_found:
-                unique_garmin.append(g_dive)
+                unique_source.append(a_dive)
 
-        for idx, d_dive in enumerate(divelogs_list):
-            if idx not in matched_divelogs_indices:
-                unique_divelogs.append(d_dive)
+        for idx, b_dive in enumerate(target_list):
+            if idx not in matched_target_indices:
+                unique_target.append(b_dive)
 
-        return matched_pairs, unique_garmin, unique_divelogs
+        return matched_pairs, unique_source, unique_target
 
     def download_and_save_raw_data(
         self,

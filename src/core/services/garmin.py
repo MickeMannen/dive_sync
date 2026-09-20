@@ -15,6 +15,7 @@ from garminconnect import (
 )
 
 from src.core.adapter import BaseDiveAdapter
+from src.core.fields import FieldSpec
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
 logger = logging.getLogger("dive_sync.garmin")
@@ -34,6 +35,35 @@ def safe_token_filename(username: str) -> str:
 
 
 class GarminAdapter(BaseDiveAdapter):
+    service_id = "garmin"
+    display_name = "Garmin Connect"
+
+    @classmethod
+    def field_catalog(cls) -> List[FieldSpec]:
+        """What _map_to_unified reads and what update_dive can push. Garmin's
+        update endpoint accepts name, description, dive number, buddy, weight,
+        visibility and coordinates; profile samples and gases are read-only
+        here (gas writes are Track E, step E4)."""
+        return [
+            FieldSpec(key="garmin.date_time", label="Start time", type="datetime", unified="date_time", writable=False),
+            FieldSpec(key="garmin.duration", label="Duration", type="number", unified="duration", unit="s", writable=False),
+            FieldSpec(key="garmin.max_depth", label="Max depth", type="number", unified="max_depth", unit="m", writable=False),
+            FieldSpec(key="garmin.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m", writable=False),
+            FieldSpec(key="garmin.temp_min", label="Min temperature", type="number", unified="temp_min", unit="°C", writable=False),
+            FieldSpec(key="garmin.temp_max", label="Max temperature", type="number", unified="temp_max", unit="°C", writable=False),
+            FieldSpec(key="garmin.temp_avg", label="Average temperature", type="number", unified="temp_avg", unit="°C", writable=False),
+            FieldSpec(key="garmin.dive_number", label="Dive number", type="number", unified="dive_number"),
+            FieldSpec(key="garmin.activityName", label="Activity name", type="text"),
+            FieldSpec(key="garmin.locationName", label="Location name", type="text"),
+            FieldSpec(key="garmin.notes", label="Description", type="text", unified="notes"),
+            FieldSpec(key="garmin.buddy", label="Buddy", type="text", unified="buddy"),
+            FieldSpec(key="garmin.weight", label="Weight", type="number", unified="weight"),
+            FieldSpec(key="garmin.visibility", label="Visibility", type="number", unified="visibility"),
+            FieldSpec(key="garmin.gps", label="GPS position", type="gps", unified="gps"),
+            FieldSpec(key="garmin.tanks", label="Tanks / gases", type="tanks", unified="tanks", writable=False),
+            FieldSpec(key="garmin.samples", label="Dive profile", type="samples", unified="samples", writable=False),
+        ]
+
     def __init__(self, username: str, password: str, token_dir: str = "tokens/garmin", cooldown_seconds: float = 1.0):
         self.username = username
         self.password = password
@@ -264,10 +294,19 @@ class GarminAdapter(BaseDiveAdapter):
                 "activityId": int(external_id) if str(external_id).isdigit() else external_id
             }
             
-            # Compare and add changed fields
-            if dive.location != current_dive.location:
+            # Compare and add changed fields. The native name fields live in
+            # service_fields when the dive came through _map_to_unified (or a
+            # link wrote them); a dive built elsewhere falls back to .location.
+            if "activityName" in dive.service_fields:
+                if dive.service_fields["activityName"] != current_dive.service_fields.get("activityName"):
+                    payload["activityName"] = dive.service_fields["activityName"] or "Sync Dive"
+            elif dive.location != current_dive.location:
                 payload["activityName"] = dive.location or "Sync Dive"
-                
+
+            if "locationName" in dive.service_fields:
+                if dive.service_fields["locationName"] != current_dive.service_fields.get("locationName"):
+                    payload["locationName"] = dive.service_fields["locationName"]
+
             if dive.notes != current_dive.notes:
                 payload["description"] = dive.notes or ""
                 
@@ -505,7 +544,11 @@ class GarminAdapter(BaseDiveAdapter):
         dive_number_val = metadata.get("diveNumber")
         dive_number = int(dive_number_val) if dive_number_val is not None and str(dive_number_val).isdigit() else None
 
-        location = details.get("activityName") or summary.get("activityName") or details.get("locationName") or summary.get("locationName")
+        activity_name = details.get("activityName") or summary.get("activityName")
+        location_name = details.get("locationName") or summary.get("locationName")
+        # Unified site name keeps the historical collapse so uploads to the
+        # other service keep working; the native fields travel separately.
+        location = activity_name or location_name
         notes = details.get("description") or summary.get("description")
 
         weight = info.get("weight")
@@ -615,7 +658,8 @@ class GarminAdapter(BaseDiveAdapter):
             buddy=buddy,
             lat=lat,
             lng=lng,
-            samples=samples
+            samples=samples,
+            service_fields={"activityName": activity_name, "locationName": location_name},
         )
 
         try:
@@ -725,7 +769,7 @@ class GarminAdapter(BaseDiveAdapter):
             "timeZoneUnitDTO": {
                 "unitKey": "UTC"
             },
-            "activityName": dive.location or "Sync Dive",
+            "activityName": dive.service_fields.get("activityName") or dive.location or "Sync Dive",
             "description": None if (dive.notes == "" or dive.notes == "None" or dive.notes is None) else dive.notes,
             "metadataDTO": {
                 "diveNumber": str(dive.dive_number) if dive.dive_number is not None else None,

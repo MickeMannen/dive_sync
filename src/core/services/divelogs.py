@@ -7,11 +7,38 @@ from typing import List, Optional, Dict, Any
 import requests
 
 from src.core.adapter import BaseDiveAdapter
+from src.core.fields import FieldSpec
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
 logger = logging.getLogger("dive_sync.divelogs")
 
 class DivelogsAdapter(BaseDiveAdapter):
+    service_id = "divelogs"
+    display_name = "Divelogs.org"
+
+    @classmethod
+    def field_catalog(cls) -> List[FieldSpec]:
+        """What _map_to_unified reads. update_dive PUTs the whole payload, so
+        every field here is writable. Numbers follow the account's
+        metric/imperial preference at write time, not per link."""
+        return [
+            FieldSpec(key="divelogs.date_time", label="Start time", type="datetime", unified="date_time"),
+            FieldSpec(key="divelogs.duration", label="Duration", type="number", unified="duration", unit="s"),
+            FieldSpec(key="divelogs.max_depth", label="Max depth", type="number", unified="max_depth", unit="m"),
+            FieldSpec(key="divelogs.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m"),
+            FieldSpec(key="divelogs.temp_min", label="Water temperature", type="number", unified="temp_min", unit="°C"),
+            FieldSpec(key="divelogs.dive_number", label="Dive number", type="number", unified="dive_number"),
+            FieldSpec(key="divelogs.location", label="Location", type="text"),
+            FieldSpec(key="divelogs.divesite", label="Dive site", type="text"),
+            FieldSpec(key="divelogs.notes", label="Notes", type="text", unified="notes"),
+            FieldSpec(key="divelogs.buddy", label="Buddy", type="text", unified="buddy"),
+            FieldSpec(key="divelogs.weight", label="Weight", type="number", unified="weight"),
+            FieldSpec(key="divelogs.visibility", label="Visibility", type="number", unified="visibility"),
+            FieldSpec(key="divelogs.gps", label="GPS position", type="gps", unified="gps"),
+            FieldSpec(key="divelogs.tanks", label="Tanks / gases", type="tanks", unified="tanks"),
+            FieldSpec(key="divelogs.samples", label="Dive profile", type="samples", unified="samples"),
+        ]
+
     def __init__(self, username: str, password: str, cooldown_seconds: float = 1.0):
         self.username = username
         self.password = password
@@ -279,12 +306,16 @@ class DivelogsAdapter(BaseDiveAdapter):
         dive_number_val = data.get("divenumber")
         dive_number = int(dive_number_val) if dive_number_val is not None and str(dive_number_val).isdigit() else None
 
-        # Build location description
+        # Build the unified site name (historical "location, divesite" join,
+        # kept so uploads to the other service keep working); the two native
+        # fields also travel separately in service_fields.
+        raw_location = data.get("location")
+        raw_divesite = data.get("divesite")
         location_parts = []
-        if data.get("location"):
-            location_parts.append(str(data["location"]))
-        if data.get("divesite"):
-            location_parts.append(str(data["divesite"]))
+        if raw_location:
+            location_parts.append(str(raw_location))
+        if raw_divesite:
+            location_parts.append(str(raw_divesite))
         location = ", ".join(location_parts) if location_parts else None
 
         notes = data.get("notes")
@@ -401,7 +432,8 @@ class DivelogsAdapter(BaseDiveAdapter):
             buddy=buddy,
             lat=lat,
             lng=lng,
-            samples=samples
+            samples=samples,
+            service_fields={"location": raw_location, "divesite": raw_divesite},
         )
 
         try:
@@ -427,13 +459,21 @@ class DivelogsAdapter(BaseDiveAdapter):
             if temp_val is not None:
                 temp_val = (temp_val * 9 / 5) + 32
 
-        # Location splitting if location contains a comma
-        location = ""
-        divesite = dive.location or "Site"
-        if dive.location and "," in dive.location:
-            parts = dive.location.split(",", 1)
-            location = parts[0].strip()
-            divesite = parts[1].strip()
+        # Native location/divesite win when the dive carries them for this
+        # service (a Divelogs dive being updated, or a link that wrote them);
+        # otherwise split the unified site name on its first comma as before.
+        if "location" in dive.service_fields or "divesite" in dive.service_fields:
+            location = dive.service_fields.get("location") or ""
+            divesite = dive.service_fields.get("divesite") or ""
+            if not location and not divesite:
+                divesite = dive.location or "Site"
+        else:
+            location = ""
+            divesite = dive.location or "Site"
+            if dive.location and "," in dive.location:
+                parts = dive.location.split(",", 1)
+                location = parts[0].strip()
+                divesite = parts[1].strip()
 
         tanks = []
         for idx, gas in enumerate(dive.gas_mixtures):

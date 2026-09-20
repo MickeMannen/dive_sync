@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 class GasMixture(BaseModel):
@@ -37,3 +37,12 @@ class UnifiedDive(BaseModel):
     lat: Optional[float] = Field(None, description="Latitude coordinate")
     lng: Optional[float] = Field(None, description="Longitude coordinate")
     samples: List[UnifiedSample] = Field(default_factory=list, description="Time-series dive profile samples")
+    service_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Service-specific scalars that have no unified attribute, keyed by their native name "
+            "(Garmin: activityName, locationName; Divelogs: location, divesite). Filled by the adapter's "
+            "to_unified mapping, pushed back by its update_dive, addressed on the mapping board as "
+            "<service_id>.<name>."
+        ),
+    )

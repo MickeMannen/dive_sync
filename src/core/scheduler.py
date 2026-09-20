@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
 from src.core.config import ConfigManager
+from src.core.fields import FieldLink
 from src.core.sync_engine import SyncEngine
 
 logger = logging.getLogger("dive_sync.scheduler")
@@ -67,19 +68,30 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
     try:
         engine = SyncEngine()
         if custom_settings:
-            engine.settings.directionality = custom_settings.get("directionality", engine.settings.directionality)
-            if "only_new" in custom_settings:
-                engine.settings.sync_filters.only_new = bool(custom_settings["only_new"])
-            if "sync_gases" in custom_settings:
-                engine.settings.sync_filters.sync_gases = bool(custom_settings["sync_gases"])
-            if "sync_fit" in custom_settings:
-                engine.settings.sync_filters.sync_fit = bool(custom_settings["sync_fit"])
+            # run_sync re-reads settings.json before every run, so per-job
+            # values must go in as explicit overrides rather than by editing
+            # engine.settings here (which the reload would discard).
+            overrides: Dict[str, Any] = {}
+            if custom_settings.get("directionality"):
+                overrides["direction_override"] = custom_settings["directionality"]
+            if "only_new" in custom_settings and custom_settings["only_new"] is not None:
+                overrides["only_new_override"] = bool(custom_settings["only_new"])
+            if "sync_gases" in custom_settings and custom_settings["sync_gases"] is not None:
+                overrides["sync_gases_override"] = bool(custom_settings["sync_gases"])
+            if "sync_fit" in custom_settings and custom_settings["sync_fit"] is not None:
+                overrides["sync_fit_override"] = bool(custom_settings["sync_fit"])
             if "date_from" in custom_settings:
-                engine.settings.sync_filters.date_from = custom_settings["date_from"]
+                overrides["date_from_override"] = custom_settings["date_from"]
             if "date_to" in custom_settings:
-                engine.settings.sync_filters.date_to = custom_settings["date_to"]
-
-        results = engine.run_sync(dry_run=dry_run)
+                overrides["date_to_override"] = custom_settings["date_to"]
+            if custom_settings.get("field_links"):
+                overrides["field_links_override"] = [
+                    link if isinstance(link, FieldLink) else FieldLink.model_validate(link)
+                    for link in custom_settings["field_links"]
+                ]
+            results = engine.run_sync(dry_run=dry_run, **overrides)
+        else:
+            results = engine.run_sync(dry_run=dry_run)
         last_sync_results = results
         logger.info("Synchronization completed successfully.")
     except Exception as e:
