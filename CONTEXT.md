@@ -30,8 +30,10 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 │   │   ├── services/          # API Adapters (Garmin, Divelogs, Mocks)
 │   │   ├── mapping/           # Declarative JSONPath mapping files
 │   │   ├── adapter.py         # BaseDiveAdapter abstract base class
-│   │   ├── config.py          # Settings and credentials management (field_links live here)
+│   │   ├── config.py          # Settings and credentials management (field_links live here; sync profile export/import)
 │   │   ├── fields.py          # Field catalogue (FieldSpec), field links (FieldLink), value access, defaults, validation
+│   │   ├── templates.py       # {key} templates for composite links: render, validate, loop detection, preview
+│   │   ├── conflicts.py       # conflicts.json queue for links with the 'manual' policy
 │   │   ├── mapping_helper.py  # Mapping Engine that applies JSONPath rules
 │   │   ├── models.py          # Unified Dive schemas (Pydantic)
 │   │   ├── sync_engine.py     # Dive matching and link-driven synchronization engine (any source/target adapter pair)
@@ -69,7 +71,7 @@ Dives are linked in [SyncEngine.match_dives](file:///Users/mikael/development/di
 3. **Tier 3: Naive Timestamp Match**: Matches dives if their start times fall within the configured `grace_window_minutes` (default is 15 minutes).
 
 ### 2b. Field catalogue and field links (what happens on a matched pair)
-Every adapter declares a `service_id` and a `field_catalog()` of `FieldSpec`s (key `<service_id>.<name>`, type, writability). The user's mapping is `SettingsModel.field_links`, a list of `FieldLink`s (source field(s) → target field, direction, conflict policy, optional template). `SyncEngine._apply_link` runs every active link on every matched pair: read both ends, compare, and if they differ decide who wins from the global `directionality` (which sides may be written) and the link's `conflict` policy. The shipped default board (`fields.default_field_links()`) reproduces the pre-Track-C behaviour exactly. Fields with no `UnifiedDive` attribute (Garmin `activityName`/`locationName`, Divelogs `location`/`divesite`) live in `UnifiedDive.service_fields`. Design and open steps: [rework.md](rework.md) Track C.
+Every adapter declares a `service_id` and a `field_catalog()` of `FieldSpec`s (key `<service_id>.<name>`, type, writability). The user's mapping is `SettingsModel.field_links`, a list of `FieldLink`s (source field(s) → target field, direction, conflict policy, optional template). `SyncEngine._apply_link` runs every active link on every matched pair: read both ends, compare, and if they differ decide who wins from the global `directionality` (which sides may be written) and the link's `conflict` policy. The shipped default board (`fields.default_field_links()`) reproduces the pre-Track-C behaviour exactly. Fields with no `UnifiedDive` attribute (Garmin `activityName`/`locationName`, Divelogs `location`/`divesite`) live in `UnifiedDive.service_fields`. A link with several sources renders its target from a `{key}` template (`templates.py`); links also run on uploads of new dives (`SyncEngine.prepare_upload`). A link with policy `manual` records real conflicts to `conflicts.json` (`conflicts.py`) instead of overwriting; `SyncEngine.resolve_conflict` pushes the chosen side. `SyncEngine.test_mapping` rehearses a board read-only on the newest dives. The whole configuration travels as a versioned *sync profile* (`config.export_profile` / `import_profile`). Design and open steps: [rework.md](rework.md) Track C.
 
 ### 3. Scheduling
 `src/core/scheduler.py` holds `scheduler_loop()` (an asyncio loop started from `web/app.py`'s FastAPI `lifespan`), `run_sync_thread()`, and `get_next_scheduled_run()`. It reads `SettingsModel.schedule`/`cron_jobs` (via `ConfigManager.load_settings()`) every minute and spawns a background thread calling `SyncEngine.run_sync()` when a job is due. This module has no FastAPI dependency, so it can be reused by non-web entry points.

@@ -250,3 +250,22 @@ def test_settings_api_carries_field_links(tmp_path, monkeypatch):
     res = client.post("/api/settings", json=payload)
     assert res.status_code == 400
     assert res.json()["detail"]["errors"][0].startswith("Job 'job':")
+
+
+def test_fields_preview_api_and_template_validation_on_save(tmp_path, monkeypatch):
+    client = TestClient(app)
+    link = {"id": "site", "source": ["divelogs.location", "divelogs.divesite"], "target": "garmin.activityName",
+            "direction": "to_target", "template": "{divelogs.divesite} ({divelogs.location})"}
+    res = client.post("/api/fields/preview", json={"link": link})
+    assert res.status_code == 200 and res.json()["ok"] and res.json()["text"] == "Zenobia (Larnaca)"
+    bad = dict(link, template="{nope}")
+    res = client.post("/api/fields/preview", json={"link": bad})
+    assert res.status_code == 200 and not res.json()["ok"] and "unknown field {nope}" in res.json()["problems"][0]
+
+    _isolated_settings(tmp_path, monkeypatch)
+    payload = _base_settings_payload()
+    payload["field_links"] = [bad]
+    res = client.post("/api/settings", json=payload)
+    assert res.status_code == 400 and "unknown field {nope}" in res.json()["detail"]["errors"][0]
+    payload["field_links"] = [link]
+    assert client.post("/api/settings", json=payload).status_code == 200

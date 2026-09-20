@@ -124,6 +124,27 @@ python sync.py --backup --garmin-path my_garmin.json --divelogs-path my_divelogs
 * `--direction`: Choose sync flow direction (`bidirectional`, `to_garmin`, `to_divelogs`).
 * `--overwrite`: Clear local mock caches before running a raw data download.
 
+### Mapping, conflicts and profiles
+
+Which field feeds which, in what direction and who wins a conflict is defined by the *mapping board*: the `field_links` list in `settings.json`. The shipped defaults reproduce the classic behaviour (Garmin wins, gases and profiles go to Divelogs only). A graphical editor is coming; until then these commands work with the board:
+
+```bash
+# Show the board as a table (and any problems with it)
+python sync.py --show-mapping
+
+# Rehearse the board read-only against the newest 10 dives per side
+python sync.py --test-mapping
+
+# Links with conflict policy "manual" queue conflicts instead of overwriting
+python sync.py --list-conflicts
+python sync.py --resolve <conflict-id> source     # or: target
+
+# Move the whole sync configuration (never credentials) between machines
+python sync.py --export-profile dive_sync_profile.json
+python sync.py --validate-profile dive_sync_profile.json
+python sync.py --import-profile dive_sync_profile.json     # shows a summary, asks before applying (--yes skips)
+```
+
 ---
 
 ## 🐳 Docker Deployment

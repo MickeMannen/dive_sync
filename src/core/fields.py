@@ -27,7 +27,7 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from src.core.models import GasMixture, UnifiedDive
+from src.core.models import GasMixture, UnifiedDive, UnifiedSample
 
 FieldType = Literal["text", "number", "datetime", "gps", "list", "tanks", "samples"]
 LinkDirection = Literal["bidirectional", "to_target", "to_source", "off"]
@@ -372,3 +372,35 @@ def default_field_links() -> List[FieldLink]:
         ),
     ])
     return links
+
+
+# ---------------------------------------------------------------------------
+# JSON round-trip of field values (conflicts.json, API responses)
+# ---------------------------------------------------------------------------
+
+def serialize_value(field_type: str, value: Any) -> Any:
+    """JSON-safe form of a value in the shape ``get_field`` returns."""
+    if value is None:
+        return None
+    if field_type in ("tanks", "samples"):
+        return [item.model_dump(mode="json") for item in value]
+    if field_type == "datetime":
+        return value.isoformat() if isinstance(value, datetime) else value
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def deserialize_value(field_type: str, raw: Any) -> Any:
+    """Inverse of ``serialize_value``."""
+    if raw is None:
+        return None
+    if field_type == "tanks":
+        return [GasMixture.model_validate(item) for item in raw]
+    if field_type == "samples":
+        return [UnifiedSample.model_validate(item) for item in raw]
+    if field_type == "datetime":
+        return datetime.fromisoformat(raw) if isinstance(raw, str) else raw
+    if field_type in ("gps", "number") and isinstance(raw, list):
+        return tuple(raw)
+    return raw

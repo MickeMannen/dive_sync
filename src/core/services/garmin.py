@@ -136,11 +136,8 @@ class GarminAdapter(BaseDiveAdapter):
         except Exception as e:
             logger.warning("Error fetching Garmin user preferences: %s", e)
 
-    def fetch_dives(self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None) -> List[UnifiedDive]:
-        if not self.logged_in and not self.login():
-            raise RuntimeError("Cannot fetch dives: Not authenticated with Garmin Connect.")
-
-        logger.info("Fetching dive activities list from Garmin Connect...")
+    def _list_dive_activities(self) -> List[Dict[str, Any]]:
+        """Page through the activity list and keep the diving ones."""
         start = 0
         limit = 50
         all_dives: List[Dict[str, Any]] = []
@@ -152,16 +149,8 @@ class GarminAdapter(BaseDiveAdapter):
                 response = self.client.get_activities(start, limit, activitytype="diving")
                 if not response:
                     break
-                
-                # Filter locally to diving activity type
-                dives_batch = [
-                    act for act in response 
-                    if act.get("activityType", {}).get("typeKey") == "diving" or 
-                       (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving") or
-                       "diving" in (act.get("activityType", {}).get("typeKey") or "")
-                ]
                 all_dives.extend(response)
-                
+
                 if len(response) < limit:
                     break
                 start += limit
@@ -171,44 +160,30 @@ class GarminAdapter(BaseDiveAdapter):
                 raise
 
         # Filter to diving type specifically
-        diving_activities = [
-            act for act in all_dives 
-            if act.get("activityType", {}).get("typeKey") == "diving" or 
+        return [
+            act for act in all_dives
+            if act.get("activityType", {}).get("typeKey") == "diving" or
                (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving") or
                "diving" in (act.get("activityType", {}).get("typeKey") or "")
         ]
 
-        # Filter by date ranges before fetching details to determine accurate progress count
-        target_activities = []
-        for activity in diving_activities:
-            start_time_str = activity.get("startTimeLocal")
-            if not start_time_str:
-                continue
-            start_time = self._parse_datetime(start_time_str)
-            if not start_time:
-                continue
-            if date_from and start_time < date_from:
-                continue
-            if date_to and start_time > date_to:
-                continue
-            target_activities.append((activity, start_time))
-
+    def _fetch_activity_details(self, target_activities: List[Any]) -> List[UnifiedDive]:
+        """Fetch details, telemetry and tank sensors for each (activity, start_time)
+        and map them to UnifiedDive. Three API calls per dive."""
         total_targets = len(target_activities)
-        logger.info("Found %d dive activities matching date filters.", total_targets)
-
         unified_dives: List[UnifiedDive] = []
         for index, (activity, start_time) in enumerate(target_activities, 1):
             activity_id = activity.get("activityId")
             if not activity_id:
                 continue
 
-            logger.info(" [%d/%d] Fetching Garmin Dive Activity ID: %s (%s)...", 
+            logger.info(" [%d/%d] Fetching Garmin Dive Activity ID: %s (%s)...",
                         index, total_targets, activity_id, start_time)
             try:
                 # Fetch full detailed JSON using the wrapped client.connectapi
                 time.sleep(self.cooldown_seconds)
                 details = self.client.connectapi(f"/activity-service/activity/{activity_id}")
-                
+
                 # Fetch detailed activity metrics containing chart/profile data
                 activity_details = None
                 try:
@@ -239,6 +214,45 @@ class GarminAdapter(BaseDiveAdapter):
                 raise RuntimeError(f"Failed to fetch details for Garmin activity {activity_id}: {e}") from e
 
         return unified_dives
+
+    def fetch_dives(self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None) -> List[UnifiedDive]:
+        if not self.logged_in and not self.login():
+            raise RuntimeError("Cannot fetch dives: Not authenticated with Garmin Connect.")
+
+        logger.info("Fetching dive activities list from Garmin Connect...")
+        diving_activities = self._list_dive_activities()
+
+        # Filter by date ranges before fetching details to determine accurate progress count
+        target_activities = []
+        for activity in diving_activities:
+            start_time_str = activity.get("startTimeLocal")
+            if not start_time_str:
+                continue
+            start_time = self._parse_datetime(start_time_str)
+            if not start_time:
+                continue
+            if date_from and start_time < date_from:
+                continue
+            if date_to and start_time > date_to:
+                continue
+            target_activities.append((activity, start_time))
+
+        logger.info("Found %d dive activities matching date filters.", len(target_activities))
+        return self._fetch_activity_details(target_activities)
+
+    def fetch_recent_dives(self, limit: int = 10) -> List[UnifiedDive]:
+        """Newest ``limit`` dives only: one listing plus three calls per dive,
+        instead of details for the whole history."""
+        if not self.logged_in and not self.login():
+            raise RuntimeError("Cannot fetch dives: Not authenticated with Garmin Connect.")
+        logger.info("Fetching the newest %d dive activities from Garmin Connect...", limit)
+        dated = []
+        for activity in self._list_dive_activities():
+            start_time = self._parse_datetime(activity.get("startTimeLocal") or "")
+            if start_time:
+                dated.append((activity, start_time))
+        dated.sort(key=lambda item: item[1], reverse=True)
+        return self._fetch_activity_details(dated[:limit])
 
     def fetch_fit_file(self, activity_id: str) -> Optional[str]:
         if not self.logged_in and not self.login():

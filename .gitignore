@@ -1,6 +1,9 @@
 credentials.json
 tokens/
 sync_state.json
+sync_state_*.json
+conflicts.json
+conflicts_*.json
 /credentials_real.json
 /data/
 /tests/data/

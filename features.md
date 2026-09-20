@@ -63,6 +63,8 @@ Verified against the code on 2026-09-20 (branch `feature_branch`, commit `4b234a
 |---|---------|--------|-------|
 | 3.1 | `python sync.py` bidirectional incremental sync with results summary | ✅ | |
 | 3.2 | Flags: `--dry-run`, `--direction`, `--date-from/--date-to`, `--full-sync`, `--garmin`, `--divelogs`, `-v` | ✅ | |
+| 3.8 | Mapping-board flags: `--show-mapping`, `--test-mapping` (read-only, newest 10 dives per side), `--list-conflicts`, `--resolve <id> source\|target` | ✅ | 2026-09-21, rework.md C5 |
+| 3.9 | Profile flags: `--export-profile`, `--validate-profile`, `--import-profile [--yes]` | ✅ | 2026-09-21, rework.md C9 |
 | 3.3 | `--backup` with `--garmin-path` / `--divelogs-path` | ✅ | |
 | 3.4 | `--save-raw-data [dir]` and `--overwrite` | ✅ | |
 | 3.5 | `--mock-data-dir [dir]` offline sync | ✅ | |
@@ -111,7 +113,7 @@ Verified against the code on 2026-09-20 (branch `feature_branch`, commit `4b234a
 
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
-| 6.1 | Pytest suite (`./run_tests.sh`): sync logic, mock sync, field catalogue/links, link-driven engine, scheduler, dive cache, web API, desktop credentials and preferences | 🚧 | 95 tests across 9 files; 4 in `test_mock_sync.py` skip unless real downloaded fixtures `488.json`/`502.json` exist under `data/`. `test_link_engine.py` replays the pre-Track-C loop as a reference over 400 seeded cases |
+| 6.1 | Pytest suite (`./run_tests.sh`): sync logic, mock sync, field catalogue/links, templates, conflicts, profiles, link-driven engine, CLI, scheduler, dive cache, web API, desktop credentials and preferences | 🚧 | 124 tests across 13 files; 4 in `test_mock_sync.py` skip unless real downloaded fixtures `488.json`/`502.json` exist under `data/`. `test_link_engine.py` replays the pre-Track-C loop as a reference over 400 seeded cases |
 | 6.2 | Live-API integration tests against real Garmin/Divelogs | ❌ | All tests are mocked/offline |
 
 ---
@@ -145,12 +147,12 @@ Seeded from `todo_txt` and `rework.md`. Add new requests here; move them into th
 | B8 | Account selection for scheduled jobs, status page and desktop app | | 📝 | Closes gaps 1.21 / 2.7 / 4.5 / 5.17 |
 | B9 | Per-account last-sync status on the status page | | 📝 | Closes 4.10 |
 | B10 | Fix README `setup.py` reference and refresh `DOCKERHUB.md` feature list | | 📝 | Docs only |
-| B11 | Per-field sync rules defined by **linking fields** on a drag-and-drop mapping board (same board on the status page and in the desktop app): each link has a direction (bidirectional / to_target / to_source / off) and a conflict policy (source_wins / target_wins / prefer_non_empty / manual); adapters publish a field catalogue; manual conflicts queued to `conflicts.json` and resolved in either UI | | 🚧 | Engine side done 2026-09-21 (rework.md C1, C2, C3, C19, most of C17): catalogue, links in settings, table-driven loop, policies, match keys, `GET /api/fields`. Pending: templates (C18), conflict queue (C4), CLI (C5), board UI (C6/C7), docs (C8). Touches 1.11–1.14, 4.6, 5.2 |
+| B11 | Per-field sync rules defined by **linking fields** on a drag-and-drop mapping board (same board on the status page and in the desktop app): each link has a direction (bidirectional / to_target / to_source / off) and a conflict policy (source_wins / target_wins / prefer_non_empty / manual); adapters publish a field catalogue; manual conflicts queued to `conflicts.json` and resolved in either UI | | 🚧 | Engine, templates, conflict queue and CLI done 2026-09-21 (rework.md C1–C5, C18, C19, most of C17). Pending: board UI (C6/C7), `POST /api/mapping/test` (C20), docs (C8). Touches 1.11–1.14, 4.6, 5.2 |
 | B13 | Sync with Submersion by joining its cloud changeset log as a peer device (S3-compatible bucket, Dropbox or iCloud folder; Google Drive is not reachable by third parties). UDDF file exchange as fallback | | 📝 | rework.md Track F steps F9–F13; format reference in `docs/submersion_sync_format.md` |
 | B14 | Generalise `SyncEngine` from a fixed Garmin/Divelogs pair to any two adapters with a `service_id` | | ✅ | 2026-09-21, rework.md F1. `SyncEngine(source_adapter=, target_adapter=)`; results keyed by service id; `engine.garmin`/`engine.divelogs` kept as aliases. Backup and raw download stay Garmin/Divelogs-only until F5 |
-| B15 | Portable sync profile: export/import the full sync configuration (rules, filters, pairs, cron jobs, never credentials) as a versioned JSON file from the desktop app, the status page and the CLI, so config authored on one machine can be loaded on the other | | 📝 | rework.md C9–C11 |
-| B16 | Composite fields: a target that exists on one side only (Garmin activity name) is built from several source fields with a user-defined `{key}` template, with live preview; reverse parsing later | | 📝 | rework.md C18, C21; the Divelogs location/divesite comma join becomes a visible default composite link |
-| B17 | Mapping board extras: ordered match keys chosen on the board, read-only 'Test mapping' against the newest 10 live dives, apply-to-all prompt after saving, reset to defaults | | 🚧 | Match keys (rework.md C19) done in the engine 2026-09-21; Test mapping (C20), apply-to-all and reset are board work |
+| B15 | Portable sync profile: export/import the full sync configuration (rules, filters, pairs, cron jobs, never credentials) as a versioned JSON file from the desktop app, the status page and the CLI, so config authored on one machine can be loaded on the other | | 🚧 | Core + CLI done 2026-09-21 (rework.md C9); status page (C10) and desktop (C11) pending |
+| B16 | Composite fields: a target that exists on one side only (Garmin activity name) is built from several source fields with a user-defined `{key}` template, with live preview; reverse parsing later | | 🚧 | Renderer, validation, loop detection and `POST /api/fields/preview` done 2026-09-21 (rework.md C18); the shipped `site_to_garmin` composite is off by default; board editor (C6/C7) and reverse parsing (C21) pending |
+| B17 | Mapping board extras: ordered match keys chosen on the board, read-only 'Test mapping' against the newest 10 live dives, apply-to-all prompt after saving, reset to defaults | | 🚧 | Match keys (rework.md C19) and the Test mapping core (`SyncEngine.test_mapping`, CLI `--test-mapping`) done 2026-09-21; the HTTP endpoint (C20), apply-to-all and reset are board work |
 | B18 | Conditional links (`when` on a FieldLink, e.g. only for dive type training) | | 📝 | Later; field reserved in the model on 2026-09-21, no UI planned yet |
 | B12 | Migrate desktop app from Toga to PySide6 / Qt Quick (QML) | | 📝 | Rewrite `desktop/sections/` and `async_utils.py` only; `src/core`, credentials, paths, preferences unchanged. Briefcase supports PySide6. Unlocks QtCharts for B1 and removes the toga-cocoa quit-hook workaround (5.11) |
 

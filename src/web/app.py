@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, CredentialsModel, CronJobModel
-from src.core.fields import FieldLink, build_catalog, validate_field_links
+from src.core.fields import FieldLink, build_catalog
+from src.core.templates import preview as preview_link, validate_links
 from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
 import src.core.scheduler as scheduler
@@ -138,10 +139,10 @@ def save_settings(data: SettingsSchema):
         field_links = data.field_links if data.field_links is not None else current.field_links
 
         catalog = _pair_catalog()
-        problems = validate_field_links(field_links, catalog)
+        problems = validate_links(field_links, catalog)
         for job in cron_jobs:
             if job.field_links:
-                problems.extend(f"Job '{job.id}': {p}" for p in validate_field_links(job.field_links, catalog))
+                problems.extend(f"Job '{job.id}': {p}" for p in validate_links(job.field_links, catalog))
         if problems:
             raise HTTPException(status_code=400, detail={"message": "Field links are invalid.", "errors": problems})
 
@@ -176,6 +177,16 @@ SYNC_PAIRS = [(GarminAdapter, DivelogsAdapter)]
 
 def _pair_catalog(source=GarminAdapter, target=DivelogsAdapter):
     return build_catalog(source.field_catalog(), target.field_catalog())
+
+
+class PreviewRequest(BaseModel):
+    link: FieldLink
+
+
+@app.post("/api/fields/preview")
+def preview_field_link(data: PreviewRequest):
+    """Validate one (unsaved) link and render its template from an example dive."""
+    return preview_link(data.link, _pair_catalog())
 
 
 @app.get("/api/fields")

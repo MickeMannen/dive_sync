@@ -424,3 +424,152 @@ def test_engine_refuses_same_service_twice(tmp_path):
     with pytest.raises(ValueError, match="itself"):
         SyncEngine(settings_path=str(tmp_path / "s.json"), credentials_path=str(tmp_path / "c.json"),
                    source_adapter=FakeGarmin(), target_adapter=FakeGarmin())
+
+
+# ---------------------------------------------------------------- phase 2: templates, uploads, conflicts, test mapping
+
+from src.core.conflicts import ConflictStore  # noqa: E402
+
+SITE_LINK = FieldLink(id="site_to_garmin", source=["divelogs.location", "divelogs.divesite", "divelogs.dive_number"],
+                      target="garmin.activityName", direction="to_target",
+                      template="{divelogs.location}, {divelogs.divesite} #{dive_number:03d}")
+
+
+def test_composite_link_on_matched_pair(tmp_path):
+    g, d = _pair({"service_fields": {"activityName": "Old name"}},
+                 {"dive_number": 7, "service_fields": {"location": "Larnaca", "divesite": "Zenobia"}})
+    engine = _engine(tmp_path, [g], [d], field_links=[SITE_LINK])
+    res = engine.run_sync(dry_run=False)
+    assert g.service_fields["activityName"] == "Larnaca, Zenobia #007"
+    assert len(res["updated_on_garmin"]) == 1 and not res["updated_on_divelogs"]
+    # equal after the first run -> nothing on the second
+    res = engine.run_sync(dry_run=False)
+    assert not res["updated_on_garmin"]
+    # global direction forbids Garmin writes -> composite does nothing
+    g.service_fields["activityName"] = "Old name"
+    engine = _engine(tmp_path, [g], [d], field_links=[SITE_LINK], directionality="to_divelogs")
+    res = engine.run_sync(dry_run=False)
+    assert g.service_fields["activityName"] == "Old name" and not res["updated_on_garmin"]
+
+
+def test_upload_renders_composite_and_service_links(tmp_path):
+    d = _dive(external_ids={"divelogs": "2"}, dive_number=7, location="Larnaca, Zenobia",
+              service_fields={"location": "Larnaca", "divesite": "Zenobia"},
+              gas_mixtures=[GasMixture(oxygen=32.0, tank_name="left")])
+    board = [l for l in default_field_links() if l.id != SITE_LINK.id] + [SITE_LINK]
+    engine = _engine(tmp_path, [], [d], field_links=board)
+    engine.run_sync(dry_run=False)
+    added = engine.source.added[0]
+    assert added.service_fields["activityName"] == "Larnaca, Zenobia #007"
+    assert added.gas_mixtures[0].tank_name == "left"      # identity links leave tanks alone
+    assert added is not d and d.service_fields.get("activityName") is None  # the original is untouched
+
+    # a plain service-field link is applied too; on the default board nothing changes
+    g = _dive(external_ids={"garmin": "1"}, service_fields={"activityName": "Wreck", "locationName": None})
+    link = FieldLink(id="site", source=["garmin.activityName"], target="divelogs.divesite", direction="to_target")
+    engine = _engine(tmp_path, [g], [], field_links=[link])
+    engine.run_sync(dry_run=False)
+    assert engine.target.added[0].service_fields["divesite"] == "Wreck"
+    engine = _engine(tmp_path, [g], [])
+    engine.run_sync(dry_run=False)
+    assert "divesite" not in engine.target.added[0].service_fields
+
+
+def test_manual_conflicts_are_recorded_refreshed_and_not_written_on_dry_run(tmp_path):
+    link = FieldLink(id="notes", source=["garmin.notes"], target="divelogs.notes", conflict="manual")
+    g, d = _pair({"notes": "A"}, {"notes": "B"})
+    engine = _engine(tmp_path, [g], [d], field_links=[link])
+
+    res = engine.run_sync(dry_run=True)
+    assert len(res["conflicts"]) == 1 and not os.path.exists(engine.conflicts_file)
+
+    res = engine.run_sync(dry_run=False)
+    stored = ConflictStore(engine.conflicts_file).load()
+    assert len(stored) == 1 and stored[0].link_id == "notes"
+    assert stored[0].source_value == "A" and stored[0].target_value == "B"
+    assert stored[0].dive_ids == {"garmin": "1", "divelogs": "2"}
+    assert res["conflicts"][0]["id"] == stored[0].id
+    assert engine.list_conflicts()[0].id == stored[0].id
+
+    # conflict gone on the next run -> entry dropped; a pair outside the run is kept
+    other = stored[0].model_copy(update={"id": "other", "dive_ids": {"garmin": "9", "divelogs": "8"}})
+    ConflictStore(engine.conflicts_file).save(stored + [other])
+    d.notes = "A"
+    engine.run_sync(dry_run=False)
+    assert [c.id for c in engine.list_conflicts()] == ["other"]
+
+
+def test_resolve_conflict_writes_the_chosen_side(tmp_path):
+    link = FieldLink(id="notes", source=["garmin.notes"], target="divelogs.notes", conflict="manual")
+    g, d = _pair({"notes": "A"}, {"notes": "B"})
+    engine = _engine(tmp_path, [g], [d], field_links=[link])
+    engine.run_sync(dry_run=False)
+    conflict = engine.list_conflicts()[0]
+
+    resolved = engine.resolve_conflict(conflict.id[:6], "source")
+    assert resolved.id == conflict.id
+    ext_id, dive = engine.target.updated[-1]
+    assert ext_id == "2" and dive.notes == "A" and engine.list_conflicts() == []
+
+    # the other way round, with a weight tuple and a wrong id
+    link = FieldLink(id="weight", source=["garmin.weight"], target="divelogs.weight", conflict="manual")
+    g, d = _pair({"weight": 5.0, "weight_unit": "kilogram"}, {"weight": 6.0, "weight_unit": "kilogram"})
+    engine = _engine(tmp_path, [g], [d], field_links=[link])
+    engine.run_sync(dry_run=False)
+    conflict = engine.list_conflicts()[0]
+    engine.resolve_conflict(conflict.id, "target")
+    ext_id, dive = engine.source.updated[-1]
+    assert ext_id == "1" and (dive.weight, dive.weight_unit) == (6.0, "kilogram")
+    with pytest.raises(ValueError, match="No conflict"):
+        engine.resolve_conflict("nope", "source")
+    with pytest.raises(ValueError, match="winner"):
+        engine.resolve_conflict("nope", "left")
+
+
+def test_test_mapping_is_read_only(tmp_path):
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A", dive_number=1)]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="B", dive_number=1),
+         _dive(date_time=datetime(2026, 8, 1), external_ids={"divelogs": "3"}, dive_number=9)]
+    engine = _engine(tmp_path, g, d)
+    candidate = [FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="manual"),
+                 FieldLink(id="dive_number", source=["garmin.dive_number"], target="divelogs.dive_number",
+                           direction="off", match_order=1)]
+    out = engine.test_mapping(candidate, limit=10)
+    assert out["ok"] and out["matched"] == 1 and out["fetched"] == {"garmin": 1, "divelogs": 2}
+    assert out["unmatched"]["divelogs"] == ["2026-08-01 00:00:00"]
+    row = out["rows"][0]
+    assert row["link"] == "buddy" and row["result"] == "conflict" and row["conflict"] is True
+    assert (row["source_value"], row["target_value"]) == ("A", "B")
+    # nothing written, nothing persisted, saved board untouched
+    assert engine.target.updated == [] and g[0].buddy == "A" and d[0].buddy == "B"
+    assert not os.path.exists(engine.state_file) and not os.path.exists(engine.conflicts_file)
+    assert engine.settings.field_links == default_field_links()
+
+    out = engine.test_mapping([FieldLink(id="bad", source=["garmin.buddy"], target="divelogs.max_depth")])
+    assert not out["ok"] and out["problems"]
+
+
+def test_fetch_recent_dives_default_and_garmin_override(monkeypatch):
+    fake = FakeDivelogs([_dive(date_time=datetime(2026, m, 1), external_ids={"divelogs": str(m)}) for m in (3, 1, 2)])
+    assert [d.external_ids["divelogs"] for d in fake.fetch_recent_dives(2)] == ["3", "2"]
+
+    g = GarminAdapter("dummy", "dummy")
+    g.logged_in = True
+    g.cooldown_seconds = 0
+    listed = [{"activityId": str(i), "activityType": {"typeKey": "diving"}, "startTimeLocal": f"2026-0{i}-01 10:00:00"} for i in (1, 3, 2)]
+    fetched = []
+
+    class Client:
+        def get_activities(self, start, limit, activitytype=None):
+            return listed if start == 0 else []
+        def connectapi(self, url, params=None):
+            if "tanksensor" in url:
+                return None
+            fetched.append(url)
+            return {"activityId": url.rsplit("/", 1)[1], "summaryDTO": {"startTimeLocal": "2026-01-01 10:00:00", "duration": 1, "maxDepth": 1}}
+        def get_activity_details(self, activity_id):
+            return None
+    g.client = Client()
+    dives = g.fetch_recent_dives(2)
+    assert [d.external_ids["garmin"] for d in dives] == ["3", "2"]
+    assert len(fetched) == 2  # details only for the newest two

@@ -1,8 +1,8 @@
 import os
 import json
 import logging
-from typing import List, Optional, Union
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional, Union
+from pydantic import BaseModel, Field, ValidationError
 
 from src.core.fields import FieldLink, default_field_links
 
@@ -115,3 +115,148 @@ class ConfigManager:
     def save_credentials(credentials: CredentialsModel, path: str = CREDENTIALS_FILE) -> None:
         with open(path, "w") as f:
             json.dump(credentials.model_dump(), f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Portable sync profile (rework.md Track C, step C9)
+# ---------------------------------------------------------------------------
+
+PROFILE_VERSION = 1
+PROFILE_KEY = "dive_sync_profile"
+# Sections a profile may carry, in the order they are written. Credentials
+# live in CredentialsModel and can never end up here by construction.
+PROFILE_SECTIONS = (
+    "directionality",
+    "sync_filters",
+    "grace_window_minutes",
+    "api_cooldown_seconds",
+    "field_links",
+    "schedule",
+    "cron_jobs",
+)
+
+
+class ProfileError(ValueError):
+    """The profile cannot be imported; the message is meant for the user."""
+
+
+class ProfileImportSummary(BaseModel):
+    version: int
+    sections: List[str] = Field(default_factory=list, description="Sections the profile replaced")
+    ignored_keys: List[str] = Field(default_factory=list, description="Top-level keys this build does not know")
+    skipped_links: List[str] = Field(default_factory=list, description="Link ids dropped because they reference unknown fields")
+    changes: List[str] = Field(default_factory=list, description="Human-readable diff against the current settings")
+
+    def as_text(self) -> str:
+        lines = [f"Profile version {self.version}"]
+        lines += [f"  {c}" for c in self.changes] or ["  no changes"]
+        if self.skipped_links:
+            lines.append(f"  skipped links (unknown fields): {', '.join(self.skipped_links)}")
+        if self.ignored_keys:
+            lines.append(f"  ignored keys: {', '.join(self.ignored_keys)}")
+        return "\n".join(lines)
+
+
+def export_profile(settings: SettingsModel) -> Dict[str, Any]:
+    """Everything in SettingsModel, versioned. Nothing secret can be here."""
+    dump = settings.model_dump(mode="json")
+    profile: Dict[str, Any] = {PROFILE_KEY: PROFILE_VERSION}
+    for section in PROFILE_SECTIONS:
+        profile[section] = dump[section]
+    return profile
+
+
+def _describe_links(old: List[FieldLink], new: List[FieldLink]) -> Optional[str]:
+    old_by, new_by = {l.id: l for l in old}, {l.id: l for l in new}
+    added = [i for i in new_by if i not in old_by]
+    removed = [i for i in old_by if i not in new_by]
+    changed = [i for i in new_by if i in old_by and new_by[i] != old_by[i]]
+    if not (added or removed or changed):
+        return None
+    parts = [f"field_links: {len(old)} -> {len(new)} links"]
+    if added:
+        parts.append(f"added {', '.join(added)}")
+    if removed:
+        parts.append(f"removed {', '.join(removed)}")
+    if changed:
+        parts.append(f"changed {', '.join(changed)}")
+    return "; ".join(parts)
+
+
+def import_profile(data: Dict[str, Any], current: SettingsModel,
+                   catalog: Optional[Dict[str, Any]] = None) -> "tuple[SettingsModel, ProfileImportSummary]":
+    """Build new settings from ``current`` with every section present in
+    ``data`` replaced wholesale. Refuses a newer profile version. Links that
+    reference fields not in ``catalog`` (when given) are skipped and listed.
+    Returns the new settings and a summary; nothing is written."""
+    if not isinstance(data, dict) or PROFILE_KEY not in data:
+        raise ProfileError("This file is not a Dive Sync profile (missing the 'dive_sync_profile' version field).")
+    version = data[PROFILE_KEY]
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise ProfileError(f"Profile version must be a whole number, got {version!r}.")
+    if version > PROFILE_VERSION:
+        raise ProfileError(
+            f"This profile was written by a newer Dive Sync (profile version {version}); "
+            f"this build reads version {PROFILE_VERSION}. Update Dive Sync to import it."
+        )
+
+    summary = ProfileImportSummary(version=version)
+    merged = current.model_dump(mode="json")
+    for key in data:
+        if key != PROFILE_KEY and key not in PROFILE_SECTIONS:
+            summary.ignored_keys.append(key)
+
+    for section in PROFILE_SECTIONS:
+        if section not in data:
+            continue
+        value = data[section]
+        if section == "field_links" and catalog is not None and isinstance(value, list):
+            kept = []
+            for item in value:
+                keys = list(item.get("source", [])) + [item.get("target")] if isinstance(item, dict) else []
+                if any(k not in catalog for k in keys):
+                    summary.skipped_links.append(str(item.get("id", "?")) if isinstance(item, dict) else "?")
+                else:
+                    kept.append(item)
+            value = kept
+        merged[section] = value
+        summary.sections.append(section)
+
+    try:
+        new_settings = SettingsModel.model_validate(merged)
+    except ValidationError as e:
+        raise ProfileError(f"The profile contains invalid values: {e}") from e
+
+    for section in summary.sections:
+        old_val = getattr(current, section)
+        new_val = getattr(new_settings, section)
+        if section == "field_links":
+            line = _describe_links(old_val, new_val)
+            if line:
+                summary.changes.append(line)
+        elif section in ("cron_jobs", "schedule"):
+            if old_val != new_val:
+                summary.changes.append(f"{section}: {len(old_val)} -> {len(new_val)} entries")
+        elif section == "sync_filters":
+            for name, old_f in old_val.model_dump().items():
+                new_f = new_val.model_dump()[name]
+                if old_f != new_f:
+                    summary.changes.append(f"sync_filters.{name}: {old_f!r} -> {new_f!r}")
+        elif old_val != new_val:
+            summary.changes.append(f"{section}: {old_val!r} -> {new_val!r}")
+    return new_settings, summary
+
+
+def write_profile(settings: SettingsModel, path: str) -> None:
+    with open(path, "w") as f:
+        json.dump(export_profile(settings), f, indent=2)
+
+
+def read_profile(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise ProfileError(f"Profile file not found: {path}")
+    except json.JSONDecodeError as e:
+        raise ProfileError(f"Profile file {path} is not valid JSON: {e}")

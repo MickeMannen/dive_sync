@@ -32,6 +32,12 @@ class BaseDiveAdapter(ABC):
         """Fetch dives from the service, optionally filtered by date range."""
         pass
 
+    def fetch_recent_dives(self, limit: int = 10) -> List[UnifiedDive]:
+        """The newest ``limit`` dives. Default fetches everything and slices;
+        adapters whose fetch is expensive per dive override this."""
+        dives = sorted(self.fetch_dives(), key=lambda d: d.date_time, reverse=True)
+        return dives[:limit]
+
     @abstractmethod
     def add_dive(self, dive: UnifiedDive) -> Optional[str]:
         """Add a new dive to the service. Returns the new external ID if successful."""

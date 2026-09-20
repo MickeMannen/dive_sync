@@ -14,16 +14,34 @@ from src.core.fields import (
     build_catalog,
     convert_value,
     copy_value,
+    deserialize_value,
     get_field,
     is_empty,
     match_key_equal,
+    serialize_value,
     set_field,
-    validate_field_links,
     values_equal,
 )
 from src.core.models import UnifiedDive, GasMixture
+from src.core.conflicts import Conflict, ConflictStore, conflicts_path_for, pair_key
+from src.core.templates import render, validate_links
 
 logger = logging.getLogger("dive_sync.sync_engine")
+
+
+class LinkOutcome:
+    """What one link did on one matched pair (see ``SyncEngine._apply_link``)."""
+    __slots__ = ("modified", "conflict", "action", "source_value", "target_value", "warnings")
+
+    def __init__(self, action: str, source_value: Any = None, target_value: Any = None,
+                 modified: Optional[str] = None, conflict: Optional[Conflict] = None,
+                 warnings: Optional[List[str]] = None):
+        self.action = action          # "equal" | "not_writable" | "kept" | "conflict" | "write:<key>"
+        self.source_value = source_value
+        self.target_value = target_value
+        self.modified = modified      # service id whose dive changed, if any
+        self.conflict = conflict
+        self.warnings = warnings or []
 
 STATE_FILE = "sync_state.json"
 
@@ -126,6 +144,7 @@ class SyncEngine:
         self.target_name = getattr(self.target, "display_name", "") or self.target_id
         self._slots = {self.source_id: "source", self.target_id: "target"}
         self.catalog: Dict[str, FieldSpec] = build_catalog(self.source.field_catalog(), self.target.field_catalog())
+        self.conflicts_file = conflicts_path_for(self.state_file)
 
     # ------------------------------------------------------------------
     # Pair / adapter access
@@ -311,7 +330,7 @@ class SyncEngine:
         each with its resolved (first) source spec and target spec. Invalid
         links are logged and skipped so one bad edit cannot stop a sync."""
         links = list(self.settings.field_links)
-        problems = validate_field_links(links, self.catalog)
+        problems = validate_links(links, self.catalog)
         bad_ids = set()
         for problem in problems:
             logger.warning("Ignoring field link: %s", problem)
@@ -325,15 +344,11 @@ class SyncEngine:
         return resolved
 
     def active_links(self) -> List[Tuple[FieldLink, FieldSpec, FieldSpec]]:
-        """Links applied to matched dives this run: valid, not off, not
-        composite (templates arrive with C18) and not a tanks link while
-        ``sync_gases`` is off."""
+        """Links applied to matched dives this run: valid, not off, and not a
+        tanks link while ``sync_gases`` is off."""
         active = []
         for link, src_spec, tgt_spec in self._checked_links():
             if link.direction == "off":
-                continue
-            if link.is_composite:
-                logger.warning("Link '%s' is a composite; templates are not rendered yet, skipping.", link.id)
                 continue
             if not self.settings.sync_filters.sync_gases and "tanks" in (src_spec.type, tgt_spec.type):
                 continue
@@ -358,6 +373,13 @@ class SyncEngine:
     def _dive_for(self, service_id: str, a_dive: UnifiedDive, b_dive: UnifiedDive) -> UnifiedDive:
         return a_dive if service_id == self.source_id else b_dive
 
+    @classmethod
+    def _report_value(cls, field_type: str, value: Any) -> Any:
+        """JSON-safe value for reports; long structures become a count."""
+        if field_type in ("samples", "tanks"):
+            return cls._brief(field_type, value)
+        return serialize_value(field_type, value)
+
     @staticmethod
     def _brief(field_type: str, value: Any) -> Any:
         if field_type in ("samples", "tanks", "list") and value is not None:
@@ -365,9 +387,8 @@ class SyncEngine:
         return value
 
     def _apply_link(self, link: FieldLink, src_spec: FieldSpec, tgt_spec: FieldSpec,
-                    a_dive: UnifiedDive, b_dive: UnifiedDive, writable: Set[str]) -> Optional[str]:
-        """Apply one link to one matched pair in memory. Returns the service id
-        whose dive was modified, or None.
+                    a_dive: UnifiedDive, b_dive: UnifiedDive, writable: Set[str]) -> LinkOutcome:
+        """Apply one link to one matched pair in memory.
 
         Rules: if the two values already agree, nothing happens. Otherwise the
         sides this link *and* the global directionality allow writing decide:
@@ -375,21 +396,34 @@ class SyncEngine:
         copied over (``prefer_non_empty`` / ``manual`` copy only into a blank
         field); with both sides writable the link's ``conflict`` policy picks
         the winner (``source_wins`` / ``target_wins`` always copy, the other
-        two only fill blanks and leave a real conflict alone)."""
+        two only fill blanks and leave a real conflict alone; ``manual`` also
+        records it). A templated link renders its text first and can only
+        write its target."""
         src_dive = self._dive_for(src_spec.service_id, a_dive, b_dive)
         tgt_dive = self._dive_for(tgt_spec.service_id, a_dive, b_dive)
-        src_val = get_field(src_dive, src_spec)
+        warnings: List[str] = []
+        if link.template:
+            src_val, warnings = render(link, {self.source_id: a_dive, self.target_id: b_dive}, self.catalog)
+            src_type = "text"
+            for w in warnings:
+                logger.warning("  %s (dive at %s)", w, src_dive.date_time)
+        else:
+            src_val = get_field(src_dive, src_spec)
+            src_type = src_spec.type
         tgt_val = get_field(tgt_dive, tgt_spec)
-        src_as_tgt = convert_value(src_val, src_spec.type, tgt_spec.type, link.separator)
+        src_as_tgt = convert_value(src_val, src_type, tgt_spec.type, link.separator)
+        shown = (self._brief(src_type, src_val), self._brief(tgt_spec.type, tgt_val))
+        raw = (src_val, tgt_val)
         if values_equal(tgt_spec.type, src_as_tgt, tgt_val):
-            return None
+            return LinkOutcome("equal", *raw, warnings=warnings)
 
         can_write_tgt = link.direction in ("bidirectional", "to_target") and tgt_spec.service_id in writable
-        can_write_src = link.direction in ("bidirectional", "to_source") and src_spec.service_id in writable
+        can_write_src = (not link.template and link.direction in ("bidirectional", "to_source")
+                         and src_spec.service_id in writable)
         if not (can_write_tgt or can_write_src):
-            return None
+            return LinkOutcome("not_writable", *raw, warnings=warnings)
 
-        src_empty = is_empty(src_spec.type, src_val)
+        src_empty = is_empty(src_type, src_val)
         tgt_empty = is_empty(tgt_spec.type, tgt_val)
         policy = link.conflict
         fill_only = policy in ("prefer_non_empty", "manual")
@@ -415,31 +449,83 @@ class SyncEngine:
                 origin_empty = src_empty if origin == "source" else tgt_empty
                 winner = origin if (dest_empty and not origin_empty) else None
 
-        src_shown = self._brief(src_spec.type, src_val)
-        tgt_shown = self._brief(tgt_spec.type, tgt_val)
+        label = tgt_spec.label if winner != "target" else src_spec.label
         if winner is None:
             if policy == "manual" and not src_empty and not tgt_empty:
-                # C4 will record this to conflicts.json; until then it is only logged.
                 logger.warning("  %s: conflict left for manual resolution (%s=%r, %s=%r) [link %s]",
-                               tgt_spec.label, src_spec.key, src_shown, tgt_spec.key, tgt_shown, link.id)
-            else:
-                logger.info("  %s differs (%s=%r, %s=%r) -> kept, %s [link %s]",
-                            tgt_spec.label, src_spec.key, src_shown, tgt_spec.key, tgt_shown, policy, link.id)
-            return None
+                               label, src_spec.key, shown[0], tgt_spec.key, shown[1], link.id)
+                conflict = Conflict(
+                    id=Conflict.make_id(link.id, src_spec.service_id, tgt_spec.service_id,
+                                        src_dive.external_ids.get(src_spec.service_id),
+                                        tgt_dive.external_ids.get(tgt_spec.service_id)),
+                    link_id=link.id,
+                    source_service=src_spec.service_id,
+                    target_service=tgt_spec.service_id,
+                    source_external_id=src_dive.external_ids.get(src_spec.service_id),
+                    target_external_id=tgt_dive.external_ids.get(tgt_spec.service_id),
+                    source_key=src_spec.key,
+                    target_key=tgt_spec.key,
+                    source_type=src_type,
+                    field_type=tgt_spec.type,
+                    dive_ids={self.source_id: a_dive.external_ids.get(self.source_id),
+                              self.target_id: b_dive.external_ids.get(self.target_id)},
+                    source_value=serialize_value(src_type, src_val),
+                    target_value=serialize_value(tgt_spec.type, tgt_val),
+                    dive_time=str(a_dive.date_time),
+                )
+                return LinkOutcome("conflict", *raw, conflict=conflict, warnings=warnings)
+            logger.info("  %s differs (%s=%r, %s=%r) -> kept, %s [link %s]",
+                        label, src_spec.key, shown[0], tgt_spec.key, shown[1], policy, link.id)
+            return LinkOutcome("kept", *raw, warnings=warnings)
 
         if winner == "source":
             logger.info("  %s differs (%s=%r, %s=%r) -> %s := %s [link %s, %s]",
-                        tgt_spec.label, src_spec.key, src_shown, tgt_spec.key, tgt_shown,
-                        tgt_spec.key, src_spec.key, link.id, policy)
+                        label, src_spec.key, shown[0], tgt_spec.key, shown[1],
+                        tgt_spec.key, src_spec.key if not link.template else "template", link.id, policy)
             set_field(tgt_dive, tgt_spec, copy_value(tgt_spec.type, src_as_tgt))
-            return tgt_spec.service_id
+            return LinkOutcome(f"write:{tgt_spec.key}", *raw, modified=tgt_spec.service_id, warnings=warnings)
 
         tgt_as_src = convert_value(tgt_val, tgt_spec.type, src_spec.type, link.separator)
         logger.info("  %s differs (%s=%r, %s=%r) -> %s := %s [link %s, %s]",
-                    src_spec.label, src_spec.key, src_shown, tgt_spec.key, tgt_shown,
+                    label, src_spec.key, shown[0], tgt_spec.key, shown[1],
                     src_spec.key, tgt_spec.key, link.id, policy)
         set_field(src_dive, src_spec, copy_value(src_spec.type, tgt_as_src))
-        return src_spec.service_id
+        return LinkOutcome(f"write:{src_spec.key}", *raw, modified=src_spec.service_id, warnings=warnings)
+
+    def prepare_upload(self, dive: UnifiedDive, destination_id: str,
+                       links: Optional[List[Tuple[FieldLink, FieldSpec, FieldSpec]]] = None) -> UnifiedDive:
+        """A deep copy of ``dive`` with every link that feeds a field on
+        ``destination_id`` from the dive's own service applied, so a new dive
+        arrives with its composite / service-specific fields rendered. Links
+        that copy a unified attribute onto itself are no-ops and skipped, which
+        keeps uploads of tanks (with names) and samples exactly as before.
+        Without any link the adapter's own fallback (e.g. the site-name comma
+        split) still applies."""
+        origin_id = self.target_id if destination_id == self.source_id else self.source_id
+        prepared = dive.model_copy(deep=True)
+        dives = {origin_id: prepared}
+        for link, src_spec, tgt_spec in (links if links is not None else self.active_links()):
+            forward = (tgt_spec.service_id == destination_id and link.direction in ("bidirectional", "to_target")
+                       and all(k.split(".", 1)[0] == origin_id for k in link.source))
+            backward = (not link.template and src_spec.service_id == destination_id
+                        and tgt_spec.service_id == origin_id and link.direction in ("bidirectional", "to_source"))
+            if forward:
+                if not link.template and src_spec.unified and src_spec.unified == tgt_spec.unified:
+                    continue
+                if link.template:
+                    value, warnings = render(link, dives, self.catalog)
+                    for w in warnings:
+                        logger.warning("  %s (upload of dive at %s)", w, dive.date_time)
+                    value = convert_value(value, "text", tgt_spec.type, link.separator)
+                else:
+                    value = convert_value(get_field(prepared, src_spec), src_spec.type, tgt_spec.type, link.separator)
+                set_field(prepared, tgt_spec, copy_value(tgt_spec.type, value))
+            elif backward:
+                if src_spec.unified and src_spec.unified == tgt_spec.unified:
+                    continue
+                value = convert_value(get_field(prepared, tgt_spec), tgt_spec.type, src_spec.type, link.separator)
+                set_field(prepared, src_spec, copy_value(src_spec.type, value))
+        return prepared
 
     # ------------------------------------------------------------------
     # Sync run
@@ -541,6 +627,10 @@ class SyncEngine:
                 b.gas_mixtures = []
 
         writable = self.writable_sides()
+        links = self.active_links()
+        run_conflicts: List[Conflict] = []
+        seen_pairs = set()
+        sync_results["conflicts"] = []
 
         # 1. Upload dives only the source has to the target
         if tgt in writable:
@@ -552,7 +642,7 @@ class SyncEngine:
                     "source_id": dive.external_ids.get(src),
                 }
                 if not dry_run:
-                    new_id = self.target.add_dive(dive)
+                    new_id = self.target.add_dive(self.prepare_upload(dive, tgt, links))
                     if new_id:
                         entry[f"new_{tgt}_id"] = new_id
                         entry["new_id"] = new_id
@@ -571,7 +661,7 @@ class SyncEngine:
                     "source_id": dive.external_ids.get(tgt),
                 }
                 if not dry_run:
-                    new_id = self.source.add_dive(dive)
+                    new_id = self.source.add_dive(self.prepare_upload(dive, src, links))
                     if new_id:
                         entry[f"new_{src}_id"] = new_id
                         entry["new_id"] = new_id
@@ -581,10 +671,10 @@ class SyncEngine:
                     sync_results[f"uploaded_to_{src}"].append(entry)
 
         # 3. Matched dives: cross-link IDs, then apply every active field link
-        links = self.active_links()
         for a_dive, b_dive in matched_pairs:
             a_id = a_dive.external_ids.get(src)
             b_id = b_dive.external_ids.get(tgt)
+            seen_pairs.add(pair_key({src: a_id, tgt: b_id}))
 
             needs_update = {src: False, tgt: False}
             is_linking = {src: False, tgt: False}
@@ -600,9 +690,12 @@ class SyncEngine:
                 is_linking[tgt] = True
 
             for link, src_spec, tgt_spec in links:
-                modified = self._apply_link(link, src_spec, tgt_spec, a_dive, b_dive, writable)
-                if modified:
-                    needs_update[modified] = True
+                outcome = self._apply_link(link, src_spec, tgt_spec, a_dive, b_dive, writable)
+                if outcome.modified:
+                    needs_update[outcome.modified] = True
+                if outcome.conflict:
+                    run_conflicts.append(outcome.conflict)
+                    sync_results["conflicts"].append(outcome.conflict.model_dump(mode="json"))
 
             sides = (
                 (src, self.source, a_dive, a_id, tgt, b_id, self.source_name, self.target_name),
@@ -624,12 +717,140 @@ class SyncEngine:
                     entry["dry_run"] = True
                     sync_results[f"updated_on_{sid}"].append(entry)
 
-        # Update last sync time if not dry run
+        # Persist conflicts (entries for pairs we saw are replaced) and state, unless dry run
         if not dry_run:
+            # Touch conflicts.json only when there is something to record or a
+            # file whose stale entries may need dropping; never create an empty one.
+            if run_conflicts or (seen_pairs and os.path.exists(self.conflicts_file)):
+                stored = ConflictStore(self.conflicts_file).replace_for_pairs(seen_pairs, run_conflicts)
+                if stored:
+                    logger.info("%d conflict(s) waiting for manual resolution in %s", len(stored), self.conflicts_file)
             self.save_last_sync_time(datetime.now())
+        elif run_conflicts:
+            logger.info("%d conflict(s) would be recorded (dry run).", len(run_conflicts))
 
         logger.info("Sync Completed.")
         return sync_results
+
+    # ------------------------------------------------------------------
+    # Conflicts and Test mapping
+    # ------------------------------------------------------------------
+
+    def list_conflicts(self) -> List[Conflict]:
+        return ConflictStore(self.conflicts_file).load()
+
+    def _find_dive(self, service_id: str, external_id: str, around: Optional[str]) -> Optional[UnifiedDive]:
+        """Fetch the dive with ``external_id`` from a service. Adapters have no
+        get-by-id, so this fetches a two-day window around ``around``."""
+        adapter = self.adapter_for(service_id)
+        date_from = date_to = None
+        if around:
+            try:
+                centre = datetime.fromisoformat(around)
+                date_from, date_to = centre - timedelta(days=1), centre + timedelta(days=1)
+            except ValueError:
+                pass
+        for dive in adapter.fetch_dives(date_from=date_from, date_to=date_to):
+            if str(dive.external_ids.get(service_id)) == str(external_id):
+                return dive
+        return None
+
+    def resolve_conflict(self, conflict_id: str, winner: str) -> Conflict:
+        """Write the chosen side's recorded value to the other side through the
+        normal ``update_dive`` and drop the entry. ``winner`` is ``source`` or
+        ``target`` as seen from the link. Raises ValueError when the id is
+        unknown or the losing dive cannot be found; RuntimeError when the
+        service refuses the update."""
+        if winner not in ("source", "target"):
+            raise ValueError("winner must be 'source' or 'target'")
+        store = ConflictStore(self.conflicts_file)
+        conflict = store.get(conflict_id)
+        if conflict is None:
+            raise ValueError(f"No conflict with id {conflict_id!r} in {self.conflicts_file}")
+        src_spec = self.catalog.get(conflict.source_key)
+        tgt_spec = self.catalog.get(conflict.target_key)
+        if src_spec is None or tgt_spec is None:
+            raise ValueError(f"Conflict {conflict.id} references a field this build does not know")
+
+        if winner == "source":
+            value = convert_value(deserialize_value(conflict.source_type, conflict.source_value),
+                                  conflict.source_type, tgt_spec.type)
+            loser_service, loser_ext, loser_spec = conflict.target_service, conflict.target_external_id, tgt_spec
+        else:
+            if src_spec.key not in self.catalog or conflict.source_type != src_spec.type:
+                raise ValueError(f"Conflict {conflict.id}: the source is a rendered template and cannot receive a value; choose 'source'")
+            value = convert_value(deserialize_value(conflict.field_type, conflict.target_value),
+                                  conflict.field_type, src_spec.type)
+            loser_service, loser_ext, loser_spec = conflict.source_service, conflict.source_external_id, src_spec
+
+        adapter = self.adapter_for(loser_service)
+        if not adapter.login():
+            raise RuntimeError(f"Failed to authenticate with {loser_service}.")
+        dive = self._find_dive(loser_service, loser_ext, conflict.dive_time)
+        if dive is None:
+            raise ValueError(f"Dive {loser_ext} was not found on {loser_service}; it may have been deleted")
+        set_field(dive, loser_spec, copy_value(loser_spec.type, value))
+        logger.info("Resolving conflict %s: %s := %s on %s dive %s", conflict.id, loser_spec.key,
+                    self._brief(loser_spec.type, value), loser_service, loser_ext)
+        if not adapter.update_dive(str(loser_ext), dive):
+            raise RuntimeError(f"{loser_service} refused the update of dive {loser_ext}")
+        store.remove(conflict.id)
+        return conflict
+
+    def test_mapping(self, field_links: Optional[List[FieldLink]] = None, limit: int = 10) -> Dict[str, Any]:
+        """Strictly read-only rehearsal of a board (the saved one, or an
+        unsaved candidate): fetch the newest ``limit`` dives per side, match
+        them, and report per matched dive and link what the engine would do.
+        Nothing is written, no state is saved."""
+        links = list(field_links) if field_links is not None else list(self.settings.field_links)
+        problems = validate_links(links, self.catalog)
+        if problems:
+            return {"ok": False, "problems": problems, "rows": []}
+
+        saved_links = self.settings.field_links
+        self.settings.field_links = links
+        try:
+            if not self.source.login():
+                raise RuntimeError(f"Failed to authenticate with {self.source_name}.")
+            if not self.target.login():
+                raise RuntimeError(f"Failed to authenticate with {self.target_name}.")
+            source_dives = self.source.fetch_recent_dives(limit)
+            target_dives = self.target.fetch_recent_dives(limit)
+            matched, unique_source, unique_target = self.match_dives(source_dives, target_dives)
+            writable = self.writable_sides()
+            active = self.active_links()
+            rows: List[Dict[str, Any]] = []
+            for a_dive, b_dive in matched:
+                a_copy, b_copy = a_dive.model_copy(deep=True), b_dive.model_copy(deep=True)
+                for link, src_spec, tgt_spec in active:
+                    outcome = self._apply_link(link, src_spec, tgt_spec, a_copy, b_copy, writable)
+                    rows.append({
+                        "dive_time": str(a_dive.date_time),
+                        "dive_ids": {self.source_id: a_dive.external_ids.get(self.source_id),
+                                     self.target_id: b_dive.external_ids.get(self.target_id)},
+                        "link": link.id,
+                        "source_key": "template" if link.template else src_spec.key,
+                        "target_key": tgt_spec.key,
+                        "source_value": self._report_value("text" if link.template else src_spec.type, outcome.source_value),
+                        "target_value": self._report_value(tgt_spec.type, outcome.target_value),
+                        "result": outcome.action,
+                        "conflict": outcome.conflict is not None,
+                        "warnings": outcome.warnings,
+                    })
+            return {
+                "ok": True,
+                "problems": [],
+                "source": self.source_id,
+                "target": self.target_id,
+                "directionality": self.settings.directionality,
+                "fetched": {self.source_id: len(source_dives), self.target_id: len(target_dives)},
+                "matched": len(matched),
+                "unmatched": {self.source_id: [str(d.date_time) for d in unique_source],
+                              self.target_id: [str(d.date_time) for d in unique_target]},
+                "rows": rows,
+            }
+        finally:
+            self.settings.field_links = saved_links
 
     def match_dives(self, source_list: List[UnifiedDive], target_list: List[UnifiedDive]) -> Tuple[List[Tuple[UnifiedDive, UnifiedDive]], List[UnifiedDive], List[UnifiedDive]]:
         """Pair up dives from the two sides.
