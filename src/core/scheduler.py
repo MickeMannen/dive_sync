@@ -66,13 +66,20 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
     job_id = custom_settings.get("id") if custom_settings else "Manual"
     logger.info("Synchronization started for job '%s' (Dry Run: %s)", job_id, dry_run)
     try:
-        engine = SyncEngine()
+        if custom_settings and custom_settings.get("pair"):
+            from src.core.config import ConfigManager
+            from src.core.pairs import engine_for_pair, find_pair
+            pair = find_pair(ConfigManager.load_settings(), custom_settings["pair"])
+            engine = engine_for_pair(pair)
+        else:
+            engine = SyncEngine()
+            engine.run_overrides = {}
         if custom_settings:
             # run_sync re-reads settings.json before every run, so per-job
             # values must go in as explicit overrides rather than by editing
             # engine.settings here (which the reload would discard).
-            overrides: Dict[str, Any] = {}
-            if custom_settings.get("directionality"):
+            overrides: Dict[str, Any] = dict(engine.run_overrides)
+            if custom_settings.get("directionality") and not custom_settings.get("pair"):
                 overrides["direction_override"] = custom_settings["directionality"]
             if "only_new" in custom_settings and custom_settings["only_new"] is not None:
                 overrides["only_new_override"] = bool(custom_settings["only_new"])

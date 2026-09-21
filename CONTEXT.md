@@ -27,7 +27,10 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 ```
 ├── src/
 │   ├── core/                  # Core domain logic
-│   │   ├── services/          # API Adapters (Garmin, Divelogs, Mocks)
+│   │   ├── services/          # Adapters: Garmin, Divelogs, UDDF, Subsurface (git storage + cloud), Submersion (peer), mocks
+│   │   │   └── submersion/    # codec.py (profile blobs), hlc.py (clock), store.py (S3/folder), library.py (HLC merge), adapter.py
+│   │   ├── pairs.py           # Service specs (garmin, uddf:<file>, subsurface:<dir>) -> adapters and engines; sync_pairs
+│   │   ├── site_matcher.py    # Dive-site resolution by name / nearest within 200 m
 │   │   ├── mapping/           # Declarative JSONPath mapping files
 │   │   ├── adapter.py         # BaseDiveAdapter abstract base class
 │   │   ├── config.py          # Settings and credentials management (field_links live here; sync profile export/import)
@@ -66,7 +69,7 @@ All service-specific dive logs are mapped into the `UnifiedDive` model (defined 
 
 ### 2. Dive Matching Logic
 Dives are linked in [SyncEngine.match_dives](file:///Users/mikael/development/dive_sync/src/core/sync_engine.py) using a three-tier system:
-1. **Tier 1: Explicit External ID Links**: Compares the cross-referenced IDs stored in the `external_ids` dictionary (each side's `service_id` is the key, e.g. `garmin` activity ID vs `divelogs` dive ID).
+1. **Tier 1: Known pairs**: a dive that carries the other service's id in `external_ids` (adapters with `stores_external_ids`), or a pair remembered in `sync_state.json` (`links`) from an earlier match or upload. Garmin and Divelogs have no field for a foreign id, so for them the state file is the only link store.
 2. **Tier 2: Match keys from the mapping board**: The `field_links` flagged with `match_order` (number or datetime fields only) are tried in order. The default board flags the dive-number link, which reproduces the old "same positive dive number" rule.
 3. **Tier 3: Naive Timestamp Match**: Matches dives if their start times fall within the configured `grace_window_minutes` (default is 15 minutes).
 

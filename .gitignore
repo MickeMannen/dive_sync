@@ -6,7 +6,8 @@ conflicts.json
 conflicts_*.json
 /credentials_real.json
 /data/
-/tests/data/
+/tests/data/garmin/
+/tests/data/divelogs/
 /initial_prompt.txt
 /docker.txt
 
@@ -27,3 +28,5 @@ __pycache__/
 /.briefcase/
 /dist/
 /*.dist-info/
+/logs/
+/build/

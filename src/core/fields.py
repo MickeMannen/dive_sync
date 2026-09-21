@@ -159,25 +159,126 @@ def normalize_text(value: Any) -> str:
     return str(value).strip()
 
 
+PRESSURE_TOLERANCE = 0.5   # bar; Divelogs stores pressures via a psi round trip (193 -> 192.91)
+VOLUME_TOLERANCE = 0.05    # litres
+DEPTH_TOLERANCE = 0.01     # metres; Divelogs samples are rounded to 2 decimals
+TEMP_TOLERANCE = 0.1       # degrees
+
+
+def _close(a: Any, b: Any, tolerance: float) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    try:
+        return abs(float(a) - float(b)) <= tolerance
+    except (TypeError, ValueError):
+        return a == b
+
+
 def are_gas_mixtures_different(list1: List[GasMixture], list2: List[GasMixture]) -> bool:
-    """Tank-list comparison inherited from the old loop (tank names ignored)."""
+    """Tank-list comparison inherited from the old loop (tank names ignored),
+    with tolerances for the services' storage rounding so an unchanged tank
+    is not rewritten on every run."""
     if len(list1) != len(list2):
         return True
     for gm1, gm2 in zip(list1, list2):
         if gm1.oxygen != gm2.oxygen or gm1.helium != gm2.helium:
             return True
-        if gm1.start_pressure != gm2.start_pressure or gm1.end_pressure != gm2.end_pressure:
+        if not _close(gm1.start_pressure, gm2.start_pressure, PRESSURE_TOLERANCE):
             return True
-        if gm1.tank_volume != gm2.tank_volume:
+        if not _close(gm1.end_pressure, gm2.end_pressure, PRESSURE_TOLERANCE):
+            return True
+        if not _close(gm1.tank_volume, gm2.tank_volume, VOLUME_TOLERANCE):
             return True
     return False
+
+
+def resample_profile(samples: List[UnifiedSample]) -> Tuple[int, List[UnifiedSample]]:
+    """Return ``(samplerate, samples on a uniform grid)``.
+
+    The rate is the most common spacing of the timed samples (at least 1 s).
+    Depth and temperature are linearly interpolated at every grid point from
+    the first to the last timed sample. Samples without times are passed
+    through unchanged at rate 1, as before."""
+    timed = [s for s in samples if s.time is not None]
+    if len(timed) < 2:
+        return 1, list(samples)
+    timed.sort(key=lambda s: s.time)
+    diffs = [b.time - a.time for a, b in zip(timed, timed[1:]) if b.time > a.time]
+    if not diffs:
+        return 1, list(samples)
+    from collections import Counter
+    samplerate = max(1, int(Counter(diffs).most_common(1)[0][0]))
+    if all(d == samplerate for d in diffs):
+        return samplerate, timed
+
+    grid: List[UnifiedSample] = []
+    idx = 0
+    t = timed[0].time
+    last = timed[-1].time
+    while t <= last:
+        while idx + 1 < len(timed) and timed[idx + 1].time <= t:
+            idx += 1
+        a = timed[idx]
+        b = timed[idx + 1] if idx + 1 < len(timed) else a
+        if b.time == a.time or t <= a.time:
+            depth, temp = a.depth, a.temp
+        else:
+            f = (t - a.time) / (b.time - a.time)
+            depth = a.depth + (b.depth - a.depth) * f
+            temp = None
+            if a.temp is not None and b.temp is not None:
+                temp = a.temp + (b.temp - a.temp) * f
+            elif a.temp is not None:
+                temp = a.temp
+        grid.append(UnifiedSample(depth=round(depth, 3), temp=None if temp is None else round(temp, 2), time=t))
+        t += samplerate
+    return samplerate, grid
+
+
+def are_samples_different(list1: List[UnifiedSample], list2: List[UnifiedSample]) -> bool:
+    """Profile comparison on a common footing: both lists are resampled onto
+    their uniform grid first (Garmin records irregular intervals, Divelogs
+    stores a fixed rate), then compared sample by sample with depths within
+    1 cm and temperatures within 0.1 degree (Divelogs rounds both)."""
+    if not list1 or not list2:
+        return bool(list1) != bool(list2)
+    _, list1 = resample_profile(list1)
+    _, list2 = resample_profile(list2)
+    if len(list1) != len(list2):
+        return True
+    for s1, s2 in zip(list1, list2):
+        if s1.time != s2.time:
+            return True
+        if not _close(s1.depth, s2.depth, DEPTH_TOLERANCE):
+            return True
+        if not _close(s1.temp, s2.temp, TEMP_TOLERANCE):
+            return True
+    return False
+
+
+GPS_TOLERANCE = 5e-6  # degrees (~0.5 m); Divelogs stores six decimals, Garmin full floats
+
+
+def _coord_equal(a: Any, b: Any) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    try:
+        return abs(float(a) - float(b)) <= GPS_TOLERANCE
+    except (TypeError, ValueError):
+        return a == b
 
 
 def values_equal(field_type: str, a: Any, b: Any) -> bool:
     if field_type == "text":
         return normalize_text(a) == normalize_text(b)
+    if field_type == "gps":
+        if a is None or b is None:
+            return a == b
+        return _coord_equal(a[0], b[0]) and _coord_equal(a[1], b[1])
     if field_type == "tanks":
         return not are_gas_mixtures_different(list(a or []), list(b or []))
+    if field_type == "samples":
+        return not are_samples_different(list(a or []), list(b or []))
     if field_type == "list":
         return list(a or []) == list(b or [])
     return a == b
@@ -330,13 +431,39 @@ def validate_field_links(links: List[FieldLink], catalog: Dict[str, FieldSpec]) 
 # Default link sets
 # ---------------------------------------------------------------------------
 
-def common_default_links(source_id: str, target_id: str) -> List[FieldLink]:
-    """The shipped links every pair starts with, expressed on the unified
-    fields both services have. Reproduces the pre-Track-C matched-pair loop:
-    the source side wins every text/number conflict, GPS goes source->target
-    and only fills a blank source from the target, tanks and samples go one
-    way to the target, and the dive-number link is the tier-2 match key."""
+MATCH_KEY_MAX_HOURS = 24  # a match-key hit only counts when the dives start within a day of each other
+
+
+def common_default_links(source_id: str, target_id: str, match_on_dive_number: bool = True) -> List[FieldLink]:
+    """The shipped links every pair starts with, on the unified fields both
+    services have. Policy is ``prefer_non_empty`` throughout (decided
+    2026-09-21 after the live baseline): a blank side is filled from the
+    other, a real conflict is left alone and logged, nothing is ever wiped.
+    Tanks and samples go one way to the target. The dive-number link is a
+    match key only where both services let the user set the number."""
     s, t = source_id, target_id
+    fill = "prefer_non_empty"
+    links = [
+        FieldLink(id="buddy", source=[f"{s}.buddy"], target=f"{t}.buddy", conflict=fill),
+        FieldLink(id="notes", source=[f"{s}.notes"], target=f"{t}.notes", conflict=fill),
+        FieldLink(id="weight", source=[f"{s}.weight"], target=f"{t}.weight", conflict=fill),
+        FieldLink(id="visibility", source=[f"{s}.visibility"], target=f"{t}.visibility", conflict=fill),
+        FieldLink(id="gps", source=[f"{s}.gps"], target=f"{t}.gps", conflict=fill),
+        FieldLink(id="samples", source=[f"{s}.samples"], target=f"{t}.samples", direction="to_target", conflict=fill),
+        FieldLink(id="tanks", source=[f"{s}.tanks"], target=f"{t}.tanks", direction="to_target", conflict=fill),
+    ]
+    if match_on_dive_number:
+        links.append(FieldLink(id="dive_number", source=[f"{s}.dive_number"], target=f"{t}.dive_number",
+                               direction="off", match_order=1))
+    return links
+
+
+def legacy_field_links() -> List[FieldLink]:
+    """The board that reproduces the pre-Track-C loop exactly (Garmin wins
+    every difference, empty values included; GPS overwrite one way and
+    fill-only the other; dive number as tier-2 match key). Kept for the
+    equivalence test and for anyone who wants the old behaviour back."""
+    s, t = "garmin", "divelogs"
     return [
         FieldLink(id="buddy", source=[f"{s}.buddy"], target=f"{t}.buddy"),
         FieldLink(id="notes", source=[f"{s}.notes"], target=f"{t}.notes"),
@@ -351,23 +478,29 @@ def common_default_links(source_id: str, target_id: str) -> List[FieldLink]:
 
 
 def default_field_links() -> List[FieldLink]:
-    """Default board for the Garmin -> Divelogs pair. Site names are shown as
-    links but stay off on matched dives, which is what the old loop did (it
-    never compared locations); uploads of new dives still use
-    ``UnifiedDive.location`` until the template renderer (C18) takes over."""
-    links = common_default_links("garmin", "divelogs")
+    """Default board for the Garmin -> Divelogs pair (decided 2026-09-21).
+
+    Divelogs numbers dives itself from date and time, so dive numbers are
+    neither a match key nor synced on this pair. Site names: Garmin's
+    ``locationName`` and Divelogs' ``divesite`` are the same thing and sync
+    both ways; Garmin's ``activityName`` (the title) is built from the
+    Divelogs region and site for new dives (``prefer_non_empty`` means an
+    existing title is never replaced). Divelogs' ``location`` (region) has no
+    Garmin counterpart and is left alone."""
+    links = common_default_links("garmin", "divelogs", match_on_dive_number=False)
     links.extend([
         FieldLink(
-            id="site_to_divelogs",
-            source=["garmin.activityName"],
+            id="site",
+            source=["garmin.locationName"],
             target="divelogs.divesite",
-            direction="off",
+            conflict="prefer_non_empty",
         ),
         FieldLink(
-            id="site_to_garmin",
+            id="activity_name",
             source=["divelogs.location", "divelogs.divesite"],
             target="garmin.activityName",
-            direction="off",
+            direction="to_target",
+            conflict="prefer_non_empty",
             template="{divelogs.location}, {divelogs.divesite}",
         ),
     ])

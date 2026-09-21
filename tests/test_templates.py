@@ -52,6 +52,13 @@ def test_render_empty_source_is_empty_string():
     cat = _catalog()
     dives = {"divelogs": _divelogs_dive(service_fields={"location": None, "divesite": "Zenobia"})}
     assert render(SITE, dives, cat)[0] == "Zenobia ()"
+    # dangling ", " separators around empty placeholders are dropped
+    joined = SITE.model_copy(update={"template": "{divelogs.location}, {divelogs.divesite}"})
+    assert render(joined, dives, cat)[0] == "Zenobia"
+    dives = {"divelogs": _divelogs_dive(service_fields={"location": "Larnaca", "divesite": ""})}
+    assert render(joined, dives, cat)[0] == "Larnaca"
+    dives = {"divelogs": _divelogs_dive(service_fields={"location": "Larnaca", "divesite": "Zenobia"})}
+    assert render(joined, dives, cat)[0] == "Larnaca, Zenobia"
     dives = {"divelogs": _divelogs_dive(dive_number=None, service_fields={})}
     link = FieldLink(id="n", source=["divelogs.dive_number", "divelogs.divesite"], target="garmin.activityName",
                      direction="to_target", template="#{dive_number:03d}/{divesite}")

@@ -172,11 +172,16 @@ def main():
         help="Perform a full sync instead of incremental sync (defaults to incremental)."
     )
     
+    def direction_value(value: str) -> str:
+        value = value.strip().lower()
+        if value == "bidirectional" or value.startswith("to_"):
+            return value
+        raise argparse.ArgumentTypeError("expected bidirectional, to_<service> (e.g. to_divelogs), to_source or to_target")
+
     parser.add_argument(
         "--direction",
-        type=str,
-        choices=["bidirectional", "to_garmin", "to_divelogs"],
-        help="Override config: Sync flow directionality (bidirectional, to_garmin, to_divelogs)."
+        type=direction_value,
+        help="Override config: bidirectional, to_<service> (to_garmin, to_divelogs, to_subsurface, ...), to_source or to_target."
     )
     
     default_data_dir = os.environ.get("DATA_DIR", "./data")
@@ -214,6 +219,27 @@ def main():
         "--divelogs",
         type=str,
         help="Divelogs account username to use (optional if only one is configured)."
+    )
+
+    parser.add_argument(
+        "--source",
+        type=str,
+        metavar="SPEC",
+        help="Service to sync from: garmin, divelogs, uddf:<file>, subsurface:<dir> (default: garmin)."
+    )
+
+    parser.add_argument(
+        "--target",
+        type=str,
+        metavar="SPEC",
+        help="Service to sync to (default: divelogs). Relative file paths are under DATA_DIR."
+    )
+
+    parser.add_argument(
+        "--pair",
+        type=str,
+        metavar="ID",
+        help="Run a sync pair configured in settings.json (sync_pairs) with its own direction and board."
     )
 
     parser.add_argument(
@@ -297,11 +323,22 @@ def main():
                 sys.exit(1)
             return
 
-        engine = SyncEngine(
-            mock_data_dir=args.mock_data_dir,
-            garmin_username=args.garmin,
-            divelogs_username=args.divelogs
-        )
+        from src.core.pairs import engine_for, engine_for_pair, find_pair
+        from src.core.config import ConfigManager
+        if args.pair:
+            pair = find_pair(ConfigManager.load_settings(), args.pair)
+            engine = engine_for_pair(pair, mock_data_dir=args.mock_data_dir,
+                                     garmin_username=args.garmin, divelogs_username=args.divelogs)
+        elif args.source or args.target:
+            engine = engine_for(args.source or "garmin", args.target or "divelogs", mock_data_dir=args.mock_data_dir,
+                                garmin_username=args.garmin, divelogs_username=args.divelogs)
+        else:
+            engine = SyncEngine(
+                mock_data_dir=args.mock_data_dir,
+                garmin_username=args.garmin,
+                divelogs_username=args.divelogs
+            )
+            engine.run_overrides = {}
 
         if args.show_mapping:
             print_mapping(engine)
@@ -340,12 +377,15 @@ def main():
                 sys.exit(1)
         else:
             logger.info("Executing dive data synchronization...")
+            run_kwargs = dict(engine.run_overrides)
+            if args.direction:
+                run_kwargs["direction_override"] = args.direction
             results = engine.run_sync(
                 dry_run=args.dry_run,
                 date_from_override=args.date_from,
                 date_to_override=args.date_to,
                 only_new_override=False if args.full_sync else True,
-                direction_override=args.direction
+                **run_kwargs
             )
             
             # Print sync results summary
@@ -356,21 +396,18 @@ def main():
             print(f"Directionality:  {results['directionality']}")
             print(f"Matched Dives:   {results['matched_count']}")
             print("-"*50)
-            print(f"Uploaded to Divelogs: {len(results['uploaded_to_divelogs'])}")
-            for item in results['uploaded_to_divelogs']:
-                print(f"  - {item['time']} (Garmin ID: {item['garmin_id']})")
-                
-            print(f"Uploaded to Garmin:    {len(results['uploaded_to_garmin'])}")
-            for item in results['uploaded_to_garmin']:
-                print(f"  - {item['time']} (Divelogs ID: {item['divelogs_id']})")
-                
-            print(f"Updated/Linked on Garmin:   {len(results['updated_on_garmin'])}")
-            for item in results['updated_on_garmin']:
-                print(f"  - {item['time']} (Garmin ID: {item['id']}, Linked: {item['linked_divelogs']})")
-                
-            print(f"Updated/Linked on Divelogs: {len(results['updated_on_divelogs'])}")
-            for item in results['updated_on_divelogs']:
-                print(f"  - {item['time']} (Divelogs ID: {item['id']}, Linked: {item['linked_garmin']})")
+            src, tgt = results["source"], results["target"]
+            names = {src: engine.source_name, tgt: engine.target_name}
+            for side, other in ((tgt, src), (src, tgt)):
+                items = results[f"uploaded_to_{side}"]
+                print(f"Uploaded to {names[side]}: {len(items)}")
+                for item in items:
+                    print(f"  - {item['time']} ({names[other]} ID: {item['source_id']})")
+            for side, other in ((src, tgt), (tgt, src)):
+                items = results[f"updated_on_{side}"]
+                print(f"Updated on {names[side]}: {len(items)}")
+                for item in items:
+                    print(f"  - {item['time']} ({names[side]} ID: {item['id']}, paired with {names[other]} ID: {item['linked_id']})")
             conflicts = results.get("conflicts", [])
             if conflicts:
                 print(f"Conflicts for manual resolution: {len(conflicts)} (see --list-conflicts)")

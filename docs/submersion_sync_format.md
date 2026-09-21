@@ -157,6 +157,18 @@ dive_sync only needs `timestamp`, `depth`, `temperature` (and optionally `pressu
 
 ## 9. Open questions to settle with a real export
 
+**Answered 2026-09-21 from a real S3 export** (two devices, schema 210, writer 218; fixtures in `tests/data/submersion/`, captured with `tests/tools/anonymize_fixtures.py`):
+
+1. `diveDateTime`, `entryTime`, `exitTime`, `createdAt`, `updatedAt`, `exportedAt` are **milliseconds** since the epoch. Profile `startTimestamp` / `endTimestamp` and `gasSwitches.timestamp` are seconds from the dive start.
+2. A `divers` row exists (`isDefault: true`) and every dive, site, tag and piece of equipment carries its `diverId`; write rows with the default diver's id.
+4. The second device's manifest has `appliedPeerHlc` populated with the first device's `publishedHlcHigh` after it read that base, so peers do report what they applied; whether GC stalls without it is still unobserved (no deletions were exchanged yet).
+5. The export carries far more tables than section 5 lists (about 100, most empty): `diverSettings`, `diveEquipment`, `diveWeights`, `qualityFindings`, `connectedAccounts`, `diveDataSources`, `importedFiles` (the raw FIT files, base64, one per import), `gasSwitches`, `diveSafetyReviews`, `tankPressureSeries` (one per tank), `diveProfileSeries` (`samples` is base64 of a zlib stream, `codecVersion: 1`, 3002 samples in 19.7 KB), and so on. A dive imported from a FIT file also gets `diveDataSources` with `sourceUuid = garmin-<serial>-<ms>` and `importSource`/`importId` empty, so the Garmin id slot is `sourceUuid`, not `importId`, for FIT-imported dives.
+6. Multi-tank works out of the box on the Submersion side: the two 2026-08-29 Garmin FIT dives arrive with two `diveTanks` rows each (`tankOrder` 0/1, `tankRole` `backGas`), two `tankPressureSeries` and `gasSwitches` rows. Garmin Connect's own API returned only one tank sensor for the same dives, so the FIT file is the complete source for multi-tank data on Garmin.
+
+Still open: 3 (iCloud path) and how a changeset file looks (the bucket only holds `base` snapshots until a device edits something; ask the owner to change a dive on the phone and re-capture).
+
+Original questions:
+
 1. Unit of `diveDateTime` / `entryTime` (seconds or milliseconds).
 2. Whether `divers` must contain a row before dives referencing `diverId` are accepted, and how the app picks the default diver for rows with `diverId = null`.
 3. Exact iCloud container path on macOS.

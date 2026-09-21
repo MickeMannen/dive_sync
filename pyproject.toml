@@ -18,6 +18,9 @@ sources = [
 requires = [
     "pydantic>=2.0.0",
     "requests>=2.28.0",
+    "boto3>=1.34.0",
+    "dulwich>=0.22.0",
+    "python-multipart>=0.0.9",
     "garminconnect>=0.2.0",
 ]
 
@@ -27,15 +30,22 @@ requires = [
 # "dive_sync" (that name belongs to the whole repo, not this subpackage).
 [tool.briefcase.app.desktop]
 formal_name = "DiveSync"
-description = "Dive log sync and editor for Garmin Connect and Divelogs.org"
+description = "Dive log sync and editor for Garmin Connect, Divelogs.org and Subsurface"
 long_description = """\
 DiveSync syncs dive logs between Garmin Connect and Divelogs.org, and lets
 you edit dive metadata on either service. This is the desktop app - for
 scheduled/unattended sync, see the Docker image instead.
 """
 sources = ["desktop"]
-requires = ["toga", "keyring", "platformdirs"]
+requires = ["PySide6-Essentials>=6.7", "PySide6-Addons>=6.7", "keyring", "platformdirs"]
 
 [tool.briefcase.app.desktop.macOS]
 universal_build = false
-requires = ["toga-cocoa"]
+# PySide6 6.10+ wheels are built for macOS 13 (Ventura) and later; Briefcase
+# resolves wheels for this minimum, so it must match or the install fails.
+min_os_version = "13.0"
+
+[tool.pytest.ini_options]
+markers = [
+    "live: needs real test accounts; runs only with DIVE_SYNC_LIVE_DATA_DIR set",
+]

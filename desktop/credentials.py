@@ -17,12 +17,10 @@ directory (see desktop/paths.py), not a repo/cwd-relative path - only for
 the duration of an actual sync/edit operation that needs them (see
 begin_operation()/end_operation()), not for the app's whole lifetime.
 
-That narrow window is deliberate, not cosmetic: toga-cocoa 0.5.6 does not
-wire the native Quit menu item or Cmd+Q to App.on_exit/request_exit at all
-(NSApplication's default "terminate:" handles those directly, ending the
-process before any Python shutdown code - including atexit callbacks -
-gets a chance to run), so "materialize once at startup, clean up on exit"
-would leave the file behind indefinitely on a normal quit.
+That narrow window is deliberate: the original Toga shell could not run any
+cleanup on Cmd+Q, and a crash mid-operation still cannot, so "materialize
+once at startup, clean up on exit" would leave the file behind. The Qt app
+additionally clears everything on aboutToQuit (desktop/app.py).
 """
 import os
 import logging
@@ -65,7 +63,7 @@ def _set(service: str, field: str, value: str) -> None:
 
 
 def load_credentials_model():
-    from src.core.config import CredentialsModel, GarminCredentials, DivelogsCredentials
+    from src.core.config import CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials
 
     return CredentialsModel(
         garmin=GarminCredentials(
@@ -76,6 +74,11 @@ def load_credentials_model():
         divelogs=DivelogsCredentials(
             username=_get("divelogs", "username"),
             password=_get("divelogs", "password"),
+        ),
+        subsurface=SubsurfaceCredentials(
+            email=_get("subsurface", "email"),
+            password=_get("subsurface", "password"),
+            base_url=_get("subsurface", "base_url") or SubsurfaceCredentials().base_url,
         ),
     )
 
@@ -91,12 +94,16 @@ def save_credentials_model(model) -> None:
     _set("garmin", "token_dir", (garmin.token_dir if garmin else "") or DEFAULT_GARMIN_TOKEN_DIR)
     _set("divelogs", "username", divelogs.username if divelogs else "")
     _set("divelogs", "password", divelogs.password if divelogs else "")
+    subsurface = getattr(model, "subsurface", None)
+    _set("subsurface", "email", subsurface.email if subsurface else "")
+    _set("subsurface", "password", subsurface.password if subsurface else "")
+    _set("subsurface", "base_url", subsurface.base_url if subsurface and subsurface.email else "")
 
     logger.info("Credentials saved to OS keychain.")
 
 
 def has_any_credentials() -> bool:
-    return bool(_get("garmin", "username") or _get("divelogs", "username"))
+    return bool(_get("garmin", "username") or _get("divelogs", "username") or _get("subsurface", "email"))
 
 
 def materialize_local_cache() -> None:

@@ -37,7 +37,7 @@ def test_show_mapping(tmp_path):
     res = _run(tmp_path, "--show-mapping")
     assert res.returncode == 0, res.stderr
     assert "Mapping board for garmin -> divelogs" in res.stdout
-    assert "gps_fill" in res.stdout and "prefer_non_empty" in res.stdout and "{divelogs.location}" in res.stdout
+    assert "activity_name" in res.stdout and "prefer_non_empty" in res.stdout and "{divelogs.location}" in res.stdout
 
 
 def test_export_validate_import_profile(tmp_path):
@@ -107,6 +107,6 @@ def test_test_mapping_is_read_only(tmp_path):
     before = (tmp_path / "mock" / "divelogs" / "1.json").read_text()
     res = _run(tmp_path, "--test-mapping")
     assert res.returncode == 0, res.stdout + res.stderr
-    assert "1 matched" in res.stdout and "write:divelogs.notes" in res.stdout and "Read-only" in res.stdout
+    assert "1 matched" in res.stdout and "kept" in res.stdout and "Read-only" in res.stdout
     assert (tmp_path / "mock" / "divelogs" / "1.json").read_text() == before
     assert not (tmp_path / "mock" / "sync_state.json").exists()

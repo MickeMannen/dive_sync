@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dive Sync — Status</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -31,6 +32,91 @@
       <pre id="log-tail"></pre>
     </section>
 
+    <section class="card" id="board-card">
+      <h2>Mapping board <span id="board-dirty" class="dirty" title="Unsaved changes" hidden>●</span></h2>
+      <div class="board-toolbar">
+        <label>Pair <select id="board-pair"></select></label>
+        <label>Direction <select id="pair-direction"></select></label>
+        <label>Grace window (min) <input type="number" id="pair-grace" min="0"></label>
+        <span class="muted" id="board-matchkeys"></span>
+      </div>
+      <div class="board" id="board">
+        <div class="board-column">
+          <h3 id="board-source-name">Source</h3>
+          <ul class="field-list" id="fields-source" data-side="source"></ul>
+        </div>
+        <svg class="board-lines" id="board-lines" aria-hidden="true"></svg>
+        <div class="board-column">
+          <h3 id="board-target-name">Target</h3>
+          <ul class="field-list" id="fields-target" data-side="target"></ul>
+        </div>
+      </div>
+      <p class="muted">Drag a field onto a field in the other column to link them. Click a line or a row below to edit the link. Drop a further field onto an already linked target to build a composite. Fields without a link are not synced; locked fields cannot be written by their service.</p>
+      <table id="links-table">
+        <thead><tr><th>Link</th><th>Source</th><th></th><th>Target</th><th>Direction</th><th>Conflict</th><th>Match</th><th></th></tr></thead>
+        <tbody id="links-body"></tbody>
+      </table>
+      <div id="link-editor" class="editor" hidden>
+        <h3>Link <span id="editor-title"></span></h3>
+        <div class="inline-form">
+          <label>Id <input type="text" id="editor-id"></label>
+          <label>Direction <select id="editor-direction"></select></label>
+          <label>Conflict
+            <select id="editor-conflict">
+              <option value="prefer_non_empty">Fill blanks only (prefer_non_empty)</option>
+              <option value="source_wins">Source wins</option>
+              <option value="target_wins">Target wins</option>
+              <option value="manual">Ask me (manual)</option>
+            </select>
+          </label>
+          <label>Match key order <input type="number" id="editor-match" min="1" placeholder="not a match key"></label>
+          <label>Separator <input type="text" id="editor-separator" maxlength="8"></label>
+        </div>
+        <div id="editor-template-block">
+          <label>Template <textarea id="editor-template" rows="2" placeholder="{field} text {other}"></textarea></label>
+          <div class="actions">
+            <select id="editor-field-picker"></select>
+            <button type="button" class="secondary" id="editor-insert">Insert field</button>
+          </div>
+          <div class="preview"><span class="label">Preview</span> <code id="editor-preview">–</code></div>
+          <div id="editor-problems" class="problems"></div>
+        </div>
+        <div class="actions">
+          <button type="button" id="editor-apply">Apply</button>
+          <button type="button" class="secondary" id="editor-close">Close</button>
+          <button type="button" class="secondary danger" id="editor-delete">Delete link</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" id="board-save">Save board</button>
+        <button type="button" class="secondary" id="board-cancel">Cancel</button>
+        <button type="button" class="secondary" id="board-reset">Reset to defaults</button>
+        <button type="button" class="secondary" id="board-test">Test mapping</button>
+        <span id="board-message" class="muted"></span>
+      </div>
+      <div id="test-result" hidden>
+        <p id="test-summary" class="muted"></p>
+        <div class="scroll-x">
+          <table id="test-table">
+            <thead><tr><th>Dive</th><th>Link</th><th>Source</th><th>Value</th><th>Target</th><th>Value</th><th>Result</th></tr></thead>
+            <tbody id="test-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Conflicts</h2>
+      <p class="muted">Links with the policy "Ask me" record here when both sides hold different values. Pick which side should win; the other side is updated on the service.</p>
+      <div class="scroll-x">
+        <table id="conflicts-table">
+          <thead><tr><th>Dive</th><th>Link</th><th>Source</th><th>Target</th><th>Seen</th><th></th></tr></thead>
+          <tbody id="conflicts-body"></tbody>
+        </table>
+      </div>
+      <span id="conflicts-message" class="muted"></span>
+    </section>
+
     <section class="card">
       <h2>Credentials</h2>
       <form id="credentials-form">
@@ -44,6 +130,11 @@
           <legend>Divelogs.org <span id="divelogs-configured" class="badge"></span></legend>
           <label>Username <input type="text" id="divelogs-username"></label>
           <label>Password <input type="password" id="divelogs-password"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Subsurface Cloud <span id="subsurface-configured" class="badge"></span></legend>
+          <label>Email <input type="text" id="subsurface-email"></label>
+          <label>Password <input type="password" id="subsurface-password"></label>
         </fieldset>
         <div class="actions">
           <button type="button" id="test-credentials">Test</button>
@@ -72,21 +163,51 @@
     </section>
 
     <section class="card">
+      <h2>Sync pairs</h2>
+      <p class="muted">Garmin ↔ Divelogs is always available. Add a pair to sync with a UDDF file, a Subsurface checkout (paths under the data directory) or Subsurface Cloud; each pair gets its own board.</p>
+      <div class="scroll-x">
+        <table id="pairs-table">
+          <thead><tr><th>ID</th><th>Source</th><th>Target</th><th>Direction</th><th>Enabled</th><th></th></tr></thead>
+          <tbody id="pairs-body"></tbody>
+        </table>
+      </div>
+      <div class="actions">
+        <button type="button" class="secondary" id="add-pair">Add pair</button>
+        <span class="muted">Saved together with the schedule.</span>
+      </div>
+    </section>
+
+    <section class="card">
       <h2>Scheduled jobs</h2>
-      <table id="cron-table">
-        <thead>
-          <tr>
-            <th>ID</th><th>Direction</th><th>Frequency</th><th>Hour</th><th>Min</th>
-            <th>Day</th><th>Interval (min)</th><th>Only new</th><th>Gases</th><th>FIT</th><th>Enabled</th><th></th>
-          </tr>
-        </thead>
-        <tbody id="cron-body"></tbody>
-      </table>
+      <div class="scroll-x">
+        <table id="cron-table">
+          <thead>
+            <tr>
+              <th>ID</th><th>Pair</th><th>Direction</th><th>Frequency</th><th>Hour</th><th>Min</th>
+              <th>Day</th><th>Interval (min)</th><th>Only new</th><th>Gases</th><th>FIT</th><th>Enabled</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="cron-body"></tbody>
+        </table>
+      </div>
       <div class="actions">
         <button type="button" id="add-cron-job">Add job</button>
-        <button type="button" id="save-schedule">Save schedule</button>
+        <button type="button" id="save-schedule">Save settings</button>
       </div>
       <span id="schedule-message" class="muted"></span>
+    </section>
+
+    <section class="card">
+      <h2>Sync profile</h2>
+      <p class="muted">The whole configuration (direction, filters, board, pairs, jobs; never credentials) as one file, to move it between the desktop app and this page.</p>
+      <div class="actions">
+        <a class="button-link" href="/api/settings/export" download="dive_sync_profile.json">Export profile</a>
+        <input type="file" id="profile-file" accept="application/json,.json">
+        <button type="button" class="secondary" id="profile-check">Check import</button>
+        <button type="button" id="profile-apply" hidden>Apply import</button>
+      </div>
+      <pre id="profile-summary" class="summary" hidden></pre>
+      <span id="profile-message" class="muted"></span>
     </section>
   </main>
 

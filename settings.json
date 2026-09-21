@@ -7,8 +7,154 @@
     "sync_gases": true,
     "sync_fit": false
   },
-  "grace_window_minutes": 15,
+  "grace_window_minutes": 30,
   "api_cooldown_seconds": 1.0,
   "schedule": [],
-  "cron_jobs": []
+  "cron_jobs": [],
+  "field_links": [
+    {
+      "id": "buddy",
+      "source": [
+        "garmin.buddy"
+      ],
+      "target": "divelogs.buddy",
+      "direction": "to_target",
+      "conflict": "manual",
+      "template": null,
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "notes",
+      "source": [
+        "garmin.notes"
+      ],
+      "target": "divelogs.notes",
+      "direction": "bidirectional",
+      "conflict": "prefer_non_empty",
+      "template": null,
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "weight",
+      "source": [
+        "garmin.weight"
+      ],
+      "target": "divelogs.weight",
+      "direction": "bidirectional",
+      "conflict": "prefer_non_empty",
+      "template": null,
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "visibility",
+      "source": [
+        "garmin.visibility"
+      ],
+      "target": "divelogs.visibility",
+      "direction": "bidirectional",
+      "conflict": "prefer_non_empty",
+      "template": null,
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "gps",
+      "source": [
+        "garmin.gps"
+      ],
+      "target": "divelogs.gps",
+      "direction": "bidirectional",
+      "conflict": "prefer_non_empty",
+      "template": null,
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "samples",
+      "source": [
+        "garmin.samples"
+      ],
+      "target": "divelogs.samples",
+      "direction": "to_target",
+      "conflict": "prefer_non_empty",
+      "template": null,
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "tanks",
+      "source": [
+        "garmin.tanks"
+      ],
+      "target": "divelogs.tanks",
+      "direction": "to_target",
+      "conflict": "prefer_non_empty",
+      "template": null,
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "site",
+      "source": [
+        "garmin.locationName",
+        "garmin.notes"
+      ],
+      "target": "divelogs.divesite",
+      "direction": "to_target",
+      "conflict": "prefer_non_empty",
+      "template": "{garmin.locationName} {garmin.notes}",
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "activity_name",
+      "source": [
+        "divelogs.location",
+        "divelogs.divesite"
+      ],
+      "target": "garmin.activityName",
+      "direction": "to_target",
+      "conflict": "prefer_non_empty",
+      "template": "{divelogs.location}, {divelogs.divesite}",
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    },
+    {
+      "id": "temp_min",
+      "source": [
+        "garmin.temp_min"
+      ],
+      "target": "divelogs.temp_min",
+      "direction": "to_target",
+      "conflict": "prefer_non_empty",
+      "template": null,
+      "reverse": null,
+      "match_order": null,
+      "separator": ", ",
+      "when": null
+    }
+  ],
+  "garmin_timezone": null,
+  "sync_pairs": []
 }

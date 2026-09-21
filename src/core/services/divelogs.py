@@ -7,10 +7,14 @@ from typing import List, Optional, Dict, Any
 import requests
 
 from src.core.adapter import BaseDiveAdapter
-from src.core.fields import FieldSpec
+from src.core.fields import FieldSpec, resample_profile
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
 logger = logging.getLogger("dive_sync.divelogs")
+
+# Observed on the live API: a longer dive-site name is cut to 50 characters.
+DIVESITE_MAX_LENGTH = 50
+
 
 class DivelogsAdapter(BaseDiveAdapter):
     service_id = "divelogs"
@@ -27,9 +31,9 @@ class DivelogsAdapter(BaseDiveAdapter):
             FieldSpec(key="divelogs.max_depth", label="Max depth", type="number", unified="max_depth", unit="m"),
             FieldSpec(key="divelogs.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m"),
             FieldSpec(key="divelogs.temp_min", label="Water temperature", type="number", unified="temp_min", unit="°C"),
-            FieldSpec(key="divelogs.dive_number", label="Dive number", type="number", unified="dive_number"),
+            FieldSpec(key="divelogs.dive_number", label="Dive number", type="number", unified="dive_number", writable=False),  # assigned by Divelogs from date/time
             FieldSpec(key="divelogs.location", label="Location", type="text"),
-            FieldSpec(key="divelogs.divesite", label="Dive site", type="text"),
+            FieldSpec(key="divelogs.divesite", label="Dive site", type="text", max_length=DIVESITE_MAX_LENGTH),
             FieldSpec(key="divelogs.notes", label="Notes", type="text", unified="notes"),
             FieldSpec(key="divelogs.buddy", label="Buddy", type="text", unified="buddy"),
             FieldSpec(key="divelogs.weight", label="Weight", type="number", unified="weight"),
@@ -372,11 +376,13 @@ class DivelogsAdapter(BaseDiveAdapter):
 
         buddy = data.get("buddy")
 
-        # Parse GPS coordinates
+        # Parse GPS coordinates; Divelogs reports 0/0 when none are stored
         lat_val = data.get("lat")
         lat = float(lat_val) if lat_val not in [None, ""] else None
         lng_val = data.get("lng")
         lng = float(lng_val) if lng_val not in [None, ""] else None
+        if lat == 0.0 and lng == 0.0:
+            lat = lng = None
 
         # Parse profile chart data samples
         samples = []
@@ -553,38 +559,31 @@ class DivelogsAdapter(BaseDiveAdapter):
         if dive.lng is not None:
             payload["lng"] = dive.lng
 
-        # Add sampledata and samplerate if samples are present
+        # Add sampledata and samplerate if samples are present. Divelogs keeps
+        # one sample every `samplerate` seconds with no per-sample time, so a
+        # profile with irregular spacing (Garmin records 1 s near events and
+        # several seconds elsewhere) is resampled onto that grid first;
+        # writing the raw list used to compress such dives in time.
         if dive.samples:
+            samplerate, grid = resample_profile(dive.samples)
             sampledata = []
-            for s in dive.samples:
+            for s in grid:
                 d_val = s.depth
                 t_val = s.temp
-                
+
                 if self.imperial_units:
                     # convert depth to feet
                     d_val = d_val * 3.28084
                     # convert temp to fahrenheit
                     if t_val is not None:
                         t_val = (t_val * 9 / 5) + 32
-                        
+
                 if t_val is not None:
                     sampledata.append({"d": round(d_val, 2), "t": round(t_val, 2)})
                 else:
                     sampledata.append(round(d_val, 2))
-            
+
             payload["sampledata"] = sampledata
-            
-            # Calculate samplerate
-            samplerate = 1
-            times = [s.time for s in dive.samples if s.time is not None]
-            if len(times) > 1:
-                diffs = [times[i] - times[i-1] for i in range(1, len(times))]
-                if diffs:
-                    from collections import Counter
-                    c = Counter(diffs)
-                    most_common = c.most_common(1)[0][0]
-                    if most_common > 0:
-                        samplerate = int(most_common)
             payload["samplerate"] = samplerate
         # Override fields using divelogs_to_garmin mappings
         try:

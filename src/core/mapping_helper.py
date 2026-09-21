@@ -154,10 +154,16 @@ class MappingEngine:
                     elif target_field == "location":
                         dive.location = str(val)
                     elif target_field == "divesite":
-                        if dive.location:
-                            dive.location = f"{dive.location}, {val}"
+                        site = str(val)
+                        if not dive.location:
+                            dive.location = site
+                        elif site.strip() == dive.location.strip() or dive.location.strip() in site or site.strip() in dive.location:
+                            # Garmin names activities "<locationName> Single-Gas Dive" and
+                            # earlier sync rounds may already have joined the two; gluing
+                            # them again grew the name on every round trip.
+                            dive.location = site if len(site) >= len(dive.location) else dive.location
                         else:
-                            dive.location = str(val)
+                            dive.location = f"{dive.location}, {site}"
                     elif target_field == "duration":
                         dive.duration = int(val)
                     elif target_field == "weights":

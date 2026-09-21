@@ -8,6 +8,7 @@ from typing import List, Tuple, Dict, Any, Optional, Set
 from src.core.config import ConfigManager, SettingsModel, CredentialsModel, GarminCredentials, DivelogsCredentials
 from src.core.adapter import BaseDiveAdapter
 from src.core.fields import (
+    MATCH_KEY_MAX_HOURS,
     FieldLink,
     FieldSpec,
     are_gas_mixtures_different,  # noqa: F401  (re-exported; older code imported it from here)
@@ -242,25 +243,69 @@ class SyncEngine:
     # Sync state
     # ------------------------------------------------------------------
 
-    def load_last_sync_time(self) -> Optional[datetime]:
+    def load_state(self) -> Dict[str, Any]:
+        """``{"last_sync_time": iso, "links": {"<source id>": "<target id>"}}``;
+        missing or unreadable file -> empty state."""
         if os.path.exists(self.state_file):
             try:
                 with open(self.state_file, "r") as f:
                     data = json.load(f)
-                    ts = data.get("last_sync_time")
-                    if ts:
-                        return datetime.fromisoformat(ts)
+                if isinstance(data, dict):
+                    data.setdefault("links", {})
+                    return data
             except Exception as e:
                 logger.warning("Failed to load sync state: %s", e)
+        return {"links": {}}
+
+    def load_last_sync_time(self) -> Optional[datetime]:
+        ts = self.load_state().get("last_sync_time")
+        if ts:
+            try:
+                return datetime.fromisoformat(ts)
+            except ValueError:
+                logger.warning("Ignoring unreadable last_sync_time %r", ts)
         return None
 
-    def save_last_sync_time(self, dt: datetime) -> None:
+    def load_links(self) -> Dict[str, str]:
+        """Known pairs, source external id -> target external id. This is how
+        two services that cannot store each other's id (Garmin, Divelogs)
+        stay paired across runs, and how an uploaded dive is recognised on
+        the next run instead of being re-matched by time."""
+        links = self.load_state().get("links", {})
+        return {str(k): str(v) for k, v in links.items() if k is not None and v is not None}
+
+    def request_full_compare(self, on: bool = True) -> None:
+        """Set (or clear) the one-shot flag that makes the next run compare
+        every matched dive regardless of the incremental window."""
+        state = self.load_state()
+        if on:
+            state["full_compare_once"] = True
+        else:
+            state.pop("full_compare_once", None)
         try:
             with open(self.state_file, "w") as f:
-                json.dump({"last_sync_time": dt.isoformat()}, f)
-            logger.info("Saved sync state with timestamp: %s", dt)
+                json.dump(state, f, indent=2)
         except Exception as e:
             logger.error("Failed to save sync state: %s", e)
+
+    def save_state(self, dt: Optional[datetime] = None, links: Optional[Dict[str, str]] = None,
+                   clear_full_compare: bool = False) -> None:
+        state = self.load_state()
+        if dt is not None:
+            state["last_sync_time"] = dt.isoformat()
+        if links is not None:
+            state["links"] = dict(links)
+        if clear_full_compare:
+            state.pop("full_compare_once", None)
+        try:
+            with open(self.state_file, "w") as f:
+                json.dump(state, f, indent=2)
+            logger.info("Saved sync state (%s, %d known pairs)", state.get("last_sync_time"), len(state.get("links", {})))
+        except Exception as e:
+            logger.error("Failed to save sync state: %s", e)
+
+    def save_last_sync_time(self, dt: datetime) -> None:
+        self.save_state(dt=dt)
 
     def backup(self, garmin_backup_path: Optional[str] = None, divelogs_backup_path: Optional[str] = None) -> bool:
         """Run backup to local JSON files of all history from selected services."""
@@ -535,7 +580,8 @@ class SyncEngine:
                  date_to_override: Optional[str] = None, only_new_override: Optional[bool] = None,
                  direction_override: Optional[str] = None, sync_gases_override: Optional[bool] = None,
                  sync_fit_override: Optional[bool] = None,
-                 field_links_override: Optional[List[FieldLink]] = None) -> Dict[str, Any]:
+                 field_links_override: Optional[List[FieldLink]] = None,
+                 grace_window_override: Optional[int] = None) -> Dict[str, Any]:
         """Perform bidirectional or directional synchronization.
 
         Settings are re-read from disk at the start of every run; per-run
@@ -561,6 +607,12 @@ class SyncEngine:
             self.settings.sync_filters.sync_fit = sync_fit_override
         if field_links_override is not None:
             self.settings.field_links = list(field_links_override)
+        if grace_window_override is not None:
+            self.settings.grace_window_minutes = grace_window_override
+
+        for adapter in (self.source, self.target):
+            if hasattr(adapter, "upload_timezone") and self.settings.garmin_timezone:
+                adapter.upload_timezone = self.settings.garmin_timezone
 
         # Login
         if not self.source.login():
@@ -584,6 +636,14 @@ class SyncEngine:
             except ValueError:
                 logger.warning("Invalid sync_filters.date_to format. Use YYYY-MM-DD.")
 
+        # A saved board change may ask for one full pass over every matched
+        # dive ("apply to all"): honour the flag once, then clear it.
+        state = self.load_state()
+        full_compare_once = bool(state.get("full_compare_once"))
+        if full_compare_once:
+            logger.info("Full compare requested after a mapping change: ignoring the incremental window for this run.")
+            self.settings.sync_filters.only_new = False
+
         # Handle "only new dives"
         if self.settings.sync_filters.only_new:
             last_sync = self.load_last_sync_time()
@@ -598,8 +658,13 @@ class SyncEngine:
         source_dives = self.source.fetch_dives(date_from=date_from, date_to=date_to)
         target_dives = self.target.fetch_dives(date_from=date_from, date_to=date_to)
 
-        # Match dives
-        matched_pairs, unique_source, unique_target = self.match_dives(source_dives, target_dives)
+        # Match dives (known pairs from earlier runs count as tier 1)
+        known_links = self.load_links()
+        matched_pairs, unique_source, unique_target = self.match_dives(source_dives, target_dives, known_links)
+        for a_dive, b_dive in matched_pairs:
+            a_id, b_id = a_dive.external_ids.get(self.source_id), b_dive.external_ids.get(self.target_id)
+            if a_id and b_id:
+                known_links[str(a_id)] = str(b_id)
 
         logger.info("Match results: %d matched pairs, %d only in %s, %d only in %s",
                     len(matched_pairs), len(unique_source), self.source_name, len(unique_target), self.target_name)
@@ -647,6 +712,8 @@ class SyncEngine:
                         entry[f"new_{tgt}_id"] = new_id
                         entry["new_id"] = new_id
                         sync_results[f"uploaded_to_{tgt}"].append(entry)
+                        if dive.external_ids.get(src):
+                            known_links[str(dive.external_ids[src])] = str(new_id)
                 else:
                     entry["dry_run"] = True
                     sync_results[f"uploaded_to_{tgt}"].append(entry)
@@ -666,6 +733,8 @@ class SyncEngine:
                         entry[f"new_{src}_id"] = new_id
                         entry["new_id"] = new_id
                         sync_results[f"uploaded_to_{src}"].append(entry)
+                        if dive.external_ids.get(tgt):
+                            known_links[str(new_id)] = str(dive.external_ids[tgt])
                 else:
                     entry["dry_run"] = True
                     sync_results[f"uploaded_to_{src}"].append(entry)
@@ -679,15 +748,19 @@ class SyncEngine:
             needs_update = {src: False, tgt: False}
             is_linking = {src: False, tgt: False}
 
+            # Cross-reference in memory; only a service that can persist the
+            # other's id gets an update for it (the local link table covers the rest)
             if a_id and tgt not in a_dive.external_ids:
                 a_dive.external_ids[tgt] = b_id
-                needs_update[src] = True
-                is_linking[src] = True
+                if getattr(self.source, "stores_external_ids", False):
+                    needs_update[src] = True
+                    is_linking[src] = True
 
             if b_id and src not in b_dive.external_ids:
                 b_dive.external_ids[src] = a_id
-                needs_update[tgt] = True
-                is_linking[tgt] = True
+                if getattr(self.target, "stores_external_ids", False):
+                    needs_update[tgt] = True
+                    is_linking[tgt] = True
 
             for link, src_spec, tgt_spec in links:
                 outcome = self._apply_link(link, src_spec, tgt_spec, a_dive, b_dive, writable)
@@ -717,6 +790,13 @@ class SyncEngine:
                     entry["dry_run"] = True
                     sync_results[f"updated_on_{sid}"].append(entry)
 
+        # Let batching adapters publish what was written (git push, file save)
+        if not dry_run:
+            for adapter in (self.source, self.target):
+                finish = getattr(adapter, "finish", None)
+                if callable(finish):
+                    finish()
+
         # Persist conflicts (entries for pairs we saw are replaced) and state, unless dry run
         if not dry_run:
             # Touch conflicts.json only when there is something to record or a
@@ -725,7 +805,7 @@ class SyncEngine:
                 stored = ConflictStore(self.conflicts_file).replace_for_pairs(seen_pairs, run_conflicts)
                 if stored:
                     logger.info("%d conflict(s) waiting for manual resolution in %s", len(stored), self.conflicts_file)
-            self.save_last_sync_time(datetime.now())
+            self.save_state(dt=datetime.now(), links=known_links, clear_full_compare=full_compare_once)
         elif run_conflicts:
             logger.info("%d conflict(s) would be recorded (dry run).", len(run_conflicts))
 
@@ -794,6 +874,9 @@ class SyncEngine:
                     self._brief(loser_spec.type, value), loser_service, loser_ext)
         if not adapter.update_dive(str(loser_ext), dive):
             raise RuntimeError(f"{loser_service} refused the update of dive {loser_ext}")
+        finish = getattr(adapter, "finish", None)
+        if callable(finish):
+            finish()
         store.remove(conflict.id)
         return conflict
 
@@ -852,10 +935,21 @@ class SyncEngine:
         finally:
             self.settings.field_links = saved_links
 
-    def match_dives(self, source_list: List[UnifiedDive], target_list: List[UnifiedDive]) -> Tuple[List[Tuple[UnifiedDive, UnifiedDive]], List[UnifiedDive], List[UnifiedDive]]:
+    @staticmethod
+    def _start_distance_hours(a: UnifiedDive, b: UnifiedDive) -> float:
+        """Hours between two start times: on the UTC instants when both dives
+        carry one (C15), otherwise on the naive local times."""
+        if a.date_time_utc is not None and b.date_time_utc is not None:
+            return abs((a.date_time_utc - b.date_time_utc).total_seconds()) / 3600.0
+        return abs((a.date_time - b.date_time).total_seconds()) / 3600.0
+
+    def match_dives(self, source_list: List[UnifiedDive], target_list: List[UnifiedDive],
+                    known_links: Optional[Dict[str, str]] = None) -> Tuple[List[Tuple[UnifiedDive, UnifiedDive]], List[UnifiedDive], List[UnifiedDive]]:
         """Pair up dives from the two sides.
 
-        Tier 1: explicit external-ID links (each side storing the other's id).
+        Tier 1: explicit external-ID links (each side storing the other's id)
+                or a pair remembered in the sync state (``known_links``,
+                source id -> target id; defaults to the stored table).
         Tier 2: the links flagged as match keys on the board, in ``match_order``
                 (the default board flags the dive-number link).
         Tier 3: start times within ``grace_window_minutes`` of each other."""
@@ -866,6 +960,8 @@ class SyncEngine:
         grace_seconds = self.settings.grace_window_minutes * 60
         src, tgt = self.source_id, self.target_id
         match_keys = self.match_key_links()
+        if known_links is None:
+            known_links = self.load_links()
 
         # Keep track of matched indices
         matched_target_indices = set()
@@ -882,26 +978,30 @@ class SyncEngine:
                 b_id = b_dive.external_ids.get(tgt)
                 b_link_id = b_dive.external_ids.get(src)
 
-                # Tier 1: Match by explicit external ID links
+                # Tier 1: Match by explicit external ID links or a remembered pair
                 id_matched = False
                 if a_link_id and b_id and str(a_link_id).strip() == str(b_id).strip():
                     id_matched = True
                 elif a_id and b_link_id and str(a_id).strip() == str(b_link_id).strip():
                     id_matched = True
+                elif a_id and b_id and known_links.get(str(a_id).strip()) == str(b_id).strip():
+                    id_matched = True
 
-                # Tier 2: Match keys from the board
+                # Tier 2: Match keys from the board. A hit only counts when the
+                # dives start within MATCH_KEY_MAX_HOURS of each other; two logs
+                # numbered independently share numbers across decades otherwise.
                 key_matched = False
-                if not id_matched:
+                if not id_matched and match_keys and self._start_distance_hours(a_dive, b_dive) <= MATCH_KEY_MAX_HOURS:
                     for _link, a_spec, b_spec in match_keys:
                         if match_key_equal(a_spec.type, get_field(a_dive, a_spec), get_field(b_dive, b_spec)):
                             key_matched = True
                             break
 
-                # Tier 3: Match by local naive timestamps (grace window)
+                # Tier 3: start times within the grace window (UTC when both
+                # sides know their offset, naive local otherwise)
                 timestamp_matched = False
                 if not id_matched and not key_matched:
-                    diff = abs((a_dive.date_time - b_dive.date_time).total_seconds())
-                    if diff <= grace_seconds:
+                    if self._start_distance_hours(a_dive, b_dive) * 3600 <= grace_seconds:
                         timestamp_matched = True
 
                 if id_matched or key_matched or timestamp_matched:

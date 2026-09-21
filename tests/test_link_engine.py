@@ -16,7 +16,7 @@ import pytest
 
 from src.core.adapter import BaseDiveAdapter
 from src.core.config import ConfigManager, SettingsModel, SyncFilters
-from src.core.fields import FieldLink, FieldSpec, are_gas_mixtures_different, default_field_links
+from src.core.fields import FieldLink, FieldSpec, are_gas_mixtures_different, default_field_links, legacy_field_links
 from src.core.models import GasMixture, UnifiedDive, UnifiedSample
 from src.core.sync_engine import SyncEngine
 from src.core.services.divelogs import DivelogsAdapter
@@ -227,11 +227,11 @@ def test_link_loop_reproduces_legacy_loop(tmp_path):
             g_ref.gas_mixtures, d_ref.gas_mixtures = [], []
         ref_g, ref_d = legacy_matched_pair(g_ref, d_ref, direction, sync_gases)
 
-        # Engine on the default board
+        # Engine on the legacy board (the shipped defaults changed on 2026-09-21)
         g_new, d_new = _pair()
         _apply_state(g_new, g_state)
         _apply_state(d_new, d_state)
-        engine = _engine(tmp_path, [g_new], [d_new], directionality=direction,
+        engine = _engine(tmp_path, [g_new], [d_new], directionality=direction, field_links=legacy_field_links(),
                          sync_filters=SyncFilters(only_new=False, sync_gases=sync_gases))
         results = engine.run_sync(dry_run=False)
 
@@ -330,7 +330,7 @@ def test_invalid_links_are_skipped_not_fatal(tmp_path):
 
 
 def test_dry_run_reports_without_writing(tmp_path):
-    g, d = _pair({"buddy": "A"}, {"buddy": "B"})
+    g, d = _pair({"buddy": "A"}, {"buddy": None})  # a blank side is filled on the default board
     engine = _engine(tmp_path, [g], [d])
     res = engine.run_sync(dry_run=True)
     assert res["updated_on_divelogs"][0]["dry_run"] is True
@@ -351,14 +351,15 @@ def test_match_keys_come_from_the_board(tmp_path):
     g = [_dive(date_time=datetime(2026, 1, 1, 8), dive_number=7, external_ids={"garmin": "1"})]
     d = [_dive(date_time=datetime(2026, 1, 1, 20), dive_number=7, external_ids={"divelogs": "2"})]
 
+    # The Garmin/Divelogs default board has no match key (Divelogs numbers its own dives)
     engine = _engine(tmp_path, g, d)
     matched, ug, ud = engine.match_dives(g, d)
-    assert len(matched) == 1  # default board flags dive number
-
-    no_keys = [l.model_copy(update={"match_order": None}) for l in default_field_links()]
-    engine = _engine(tmp_path, g, d, field_links=no_keys)
-    matched, ug, ud = engine.match_dives(g, d)
     assert matched == [] and len(ug) == 1 and len(ud) == 1  # ids differ, 12 h apart
+
+    with_key = legacy_field_links()
+    engine = _engine(tmp_path, g, d, field_links=with_key)
+    matched, ug, ud = engine.match_dives(g, d)
+    assert len(matched) == 1  # same number, same day
 
     # A datetime match key drawn from the Divelogs side works too
     key = FieldLink(id="t", source=["divelogs.date_time"], target="garmin.date_time", direction="off", match_order=1)
@@ -370,8 +371,33 @@ def test_match_keys_come_from_the_board(tmp_path):
     # Dive number zero is "unset"
     g0 = [_dive(date_time=datetime(2026, 1, 1, 8), dive_number=0, external_ids={"garmin": "1"})]
     d0 = [_dive(date_time=datetime(2026, 1, 1, 20), dive_number=0, external_ids={"divelogs": "2"})]
-    engine = _engine(tmp_path, g0, d0)
+    engine = _engine(tmp_path, g0, d0, field_links=with_key)
     assert engine.match_dives(g0, d0)[0] == []
+
+
+def test_match_key_hit_needs_start_times_within_a_day(tmp_path):
+    """Two logs numbered independently share numbers across decades; a number
+    hit only counts when the dives start within 24 h of each other, and it
+    must not steal the true timestamp partner (live baseline, 2026-09-21)."""
+    g = [_dive(date_time=datetime(2026, 5, 3, 22), dive_number=16, external_ids={"garmin": "16"}),
+         _dive(date_time=datetime(2026, 2, 16, 10, 7), dive_number=20, external_ids={"garmin": "20"})]
+    d = [_dive(date_time=datetime(2026, 2, 16, 10, 7), dive_number=16, external_ids={"divelogs": "a"})]
+    engine = _engine(tmp_path, g, d, field_links=legacy_field_links())
+    matched, ug, ud = engine.match_dives(g, d)
+    assert len(matched) == 1
+    assert matched[0][0].external_ids["garmin"] == "20"  # the timestamp twin, not the number twin
+    assert [x.external_ids["garmin"] for x in ug] == ["16"]
+
+
+def test_matching_uses_utc_when_both_sides_have_it(tmp_path):
+    # Local times 8 h apart (different zones), same instant
+    g = [_dive(date_time=datetime(2026, 6, 1, 20), date_time_utc=datetime(2026, 6, 1, 12), external_ids={"garmin": "1"})]
+    d = [_dive(date_time=datetime(2026, 6, 1, 12), date_time_utc=datetime(2026, 6, 1, 12), external_ids={"divelogs": "2"})]
+    engine = _engine(tmp_path, g, d)
+    assert len(engine.match_dives(g, d)[0]) == 1
+    # Without UTC on one side the naive local times decide (8 h apart: no match)
+    d[0].date_time_utc = None
+    assert engine.match_dives(g, d)[0] == []
 
 
 # ---------------------------------------------------------------- generic pair (F1)
@@ -394,6 +420,7 @@ def test_engine_with_a_non_garmin_pair(tmp_path):
     class FakeUddf(RecordingAdapter):
         service_id = "uddf"
         display_name = "UDDF file"
+        stores_external_ids = True
         _catalog = [
             FieldSpec(key="uddf.buddy", label="Buddy", type="text", unified="buddy"),
             FieldSpec(key="uddf.dive_number", label="Dive number", type="number", unified="dive_number"),
@@ -406,7 +433,8 @@ def test_engine_with_a_non_garmin_pair(tmp_path):
     path = _settings_file(tmp_path, field_links=links, directionality="to_uddf")
     a = [_dive(external_ids={"divelogs": "10"}, dive_number=3, buddy="Anna"),
          _dive(date_time=datetime(2026, 8, 1), external_ids={"divelogs": "11"}, dive_number=4)]
-    b = [_dive(date_time=datetime(2026, 5, 5), external_ids={"uddf": "x"}, dive_number=3, buddy=None)]
+    # same number and same day: the match key counts (a hit more than a day apart would not)
+    b = [_dive(date_time=datetime(2026, 6, 22, 20), external_ids={"uddf": "x"}, dive_number=3, buddy=None)]
     engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "c.json"),
                         source_adapter=FakeDivelogs(a), target_adapter=FakeUddf(b))
     assert engine.state_file.endswith("sync_state_divelogs_uddf.json")
@@ -456,7 +484,7 @@ def test_upload_renders_composite_and_service_links(tmp_path):
     d = _dive(external_ids={"divelogs": "2"}, dive_number=7, location="Larnaca, Zenobia",
               service_fields={"location": "Larnaca", "divesite": "Zenobia"},
               gas_mixtures=[GasMixture(oxygen=32.0, tank_name="left")])
-    board = [l for l in default_field_links() if l.id != SITE_LINK.id] + [SITE_LINK]
+    board = [l for l in default_field_links() if l.id != "activity_name"] + [SITE_LINK]
     engine = _engine(tmp_path, [], [d], field_links=board)
     engine.run_sync(dry_run=False)
     added = engine.source.added[0]
@@ -472,7 +500,8 @@ def test_upload_renders_composite_and_service_links(tmp_path):
     assert engine.target.added[0].service_fields["divesite"] == "Wreck"
     engine = _engine(tmp_path, [g], [])
     engine.run_sync(dry_run=False)
-    assert "divesite" not in engine.target.added[0].service_fields
+    # default board: divesite follows locationName (empty here); the writer then falls back to the site name
+    assert engine.target.added[0].service_fields.get("divesite") is None
 
 
 def test_manual_conflicts_are_recorded_refreshed_and_not_written_on_dry_run(tmp_path):
@@ -573,3 +602,73 @@ def test_fetch_recent_dives_default_and_garmin_override(monkeypatch):
     dives = g.fetch_recent_dives(2)
     assert [d.external_ids["garmin"] for d in dives] == ["3", "2"]
     assert len(fetched) == 2  # details only for the newest two
+
+
+def test_known_pairs_are_remembered_and_used_for_matching(tmp_path):
+    """Garmin and Divelogs cannot store each other's id: pairs live in the
+    sync state, uploads are remembered, and no update is issued just to
+    'link' a dive (the first real run on the test accounts rewrote every
+    matched Divelogs dive for that reason, 2026-09-21)."""
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A"),
+         _dive(date_time=datetime(2026, 7, 1, 12), external_ids={"garmin": "9"}, buddy="B")]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, g, d)
+    res = engine.run_sync(dry_run=False)
+    assert res["updated_on_divelogs"] == [] and res["updated_on_garmin"] == []  # nothing to write
+    assert engine.load_links() == {"1": "2", "9": "new-1"}  # matched pair + upload
+
+    # Next run: the uploaded twin carries a different local time (say the
+    # service shifted it), yet it is paired by id and not uploaded again
+    d2 = [_dive(external_ids={"divelogs": "2"}, buddy="A"),
+          _dive(date_time=datetime(2026, 7, 1, 20), external_ids={"divelogs": "new-1"}, buddy="B")]
+    engine2 = _engine(tmp_path, g, d2)
+    res = engine2.run_sync(dry_run=False)
+    assert res["matched_count"] == 2 and res["uploaded_to_divelogs"] == [] and res["uploaded_to_garmin"] == []
+
+    # A dry run neither records pairs nor touches the state file
+    engine3 = _engine(tmp_path, [_dive(external_ids={"garmin": "5"})], [_dive(external_ids={"divelogs": "6"})])
+    os.remove(engine3.state_file)
+    engine3.run_sync(dry_run=True)
+    assert not os.path.exists(engine3.state_file)
+
+    # A service that can store ids still gets the link written through update_dive
+    class LinkingDivelogs(FakeDivelogs):
+        stores_external_ids = True
+    path = _settings_file(tmp_path)
+    g = [_dive(external_ids={"garmin": "1"})]
+    d = [_dive(external_ids={"divelogs": "2"})]
+    engine4 = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "c.json"),
+                         source_adapter=FakeGarmin(g), target_adapter=LinkingDivelogs(d))
+    res = engine4.run_sync(dry_run=False)
+    assert len(res["updated_on_divelogs"]) == 1 and engine4.target.updated[0][1].external_ids["garmin"] == "1"
+    assert res["updated_on_garmin"] == []
+
+
+def test_state_file_without_links_still_loads(tmp_path):
+    engine = _engine(tmp_path, [], [])
+    with open(engine.state_file, "w") as f:
+        json.dump({"last_sync_time": "2026-09-01T10:00:00"}, f)
+    assert engine.load_last_sync_time() == datetime(2026, 9, 1, 10) and engine.load_links() == {}
+    engine.save_state(links={"a": "b"})
+    assert engine.load_last_sync_time() == datetime(2026, 9, 1, 10) and engine.load_links() == {"a": "b"}
+
+
+def test_full_compare_flag_is_honoured_once(tmp_path):
+    """The 'apply the changed board to all matched dives' prompt sets a
+    one-shot flag: the next run ignores the incremental window, then clears it."""
+    from src.core.config import SyncFilters
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy=None)]
+    engine = _engine(tmp_path, g, d, sync_filters=SyncFilters(only_new=True))
+    engine.save_state(dt=datetime(2030, 1, 1))          # a last-sync far in the future: incremental would fetch nothing
+    engine.request_full_compare(True)
+    assert engine.load_state()["full_compare_once"] is True
+    res = engine.run_sync(dry_run=False)
+    assert engine.settings.sync_filters.only_new is False and len(res["updated_on_divelogs"]) == 1
+    assert "full_compare_once" not in engine.load_state()
+    # a dry run does not consume the flag
+    engine.request_full_compare(True)
+    engine.run_sync(dry_run=True)
+    assert engine.load_state()["full_compare_once"] is True
+    engine.request_full_compare(False)
+    assert "full_compare_once" not in engine.load_state()

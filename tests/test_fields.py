@@ -15,6 +15,7 @@ from src.core.fields import (
     copy_value,
     default_field_links,
     get_field,
+    legacy_field_links,
     is_empty,
     match_key_equal,
     set_field,
@@ -81,22 +82,28 @@ def test_adapters_declare_service_ids_and_catalogues():
     # Garmin cannot write gases or samples; Divelogs writes everything
     assert catalog["garmin.tanks"].writable is False
     assert catalog["garmin.samples"].writable is False
-    assert all(spec.writable for spec in DivelogsAdapter.field_catalog())
+    assert catalog["divelogs.dive_number"].writable is False  # numbered by Divelogs itself
+    assert all(spec.writable for spec in DivelogsAdapter.field_catalog() if spec.key != "divelogs.dive_number")
 
 
 def test_default_links_validate_against_catalogue():
     links = default_field_links()
     assert validate_field_links(links, _catalog()) == []
+    assert validate_field_links(legacy_field_links(), _catalog()) == []
     ids = [l.id for l in links]
     assert len(ids) == len(set(ids))
     by_id = {l.id: l for l in links}
-    # Today's behaviour, spelled out
-    assert by_id["buddy"].direction == "bidirectional" and by_id["buddy"].conflict == "source_wins"
-    assert by_id["gps"].direction == "to_target"
-    assert by_id["gps_fill"].source == ["divelogs.gps"] and by_id["gps_fill"].conflict == "prefer_non_empty"
+    # Decided 2026-09-21: never wipe, no dive-number key on this pair, site names linked
+    assert all(l.conflict == "prefer_non_empty" for l in links)
+    assert by_id["buddy"].direction == "bidirectional" and by_id["gps"].direction == "bidirectional"
     assert by_id["tanks"].direction == "to_target" and by_id["samples"].direction == "to_target"
-    assert by_id["dive_number"].direction == "off" and by_id["dive_number"].match_order == 1
-    assert by_id["site_to_garmin"].is_composite and by_id["site_to_garmin"].direction == "off"
+    assert "dive_number" not in by_id and not any(l.match_order for l in links)
+    assert by_id["site"].source == ["garmin.locationName"] and by_id["site"].target == "divelogs.divesite"
+    assert by_id["activity_name"].is_composite and by_id["activity_name"].direction == "to_target"
+    # the legacy board is what the old loop did
+    legacy = {l.id: l for l in legacy_field_links()}
+    assert legacy["buddy"].conflict == "source_wins" and legacy["dive_number"].match_order == 1
+    assert legacy["gps_fill"].conflict == "prefer_non_empty"
 
 
 def test_validate_field_links_reports_problems():
@@ -257,3 +264,36 @@ def test_adapters_fill_and_push_service_fields():
     assert (payload["location"], payload["divesite"]) == ("Malmö", "Ön")
     payload = g._map_from_unified(foreign)
     assert payload["activityName"] == "Malmö, Ön"
+
+
+def test_gps_equality_tolerates_service_rounding():
+    assert values_equal("gps", (4.7817514557391405, 103.68850165978074), (4.781751, 103.688502))
+    assert not values_equal("gps", (4.7817514557391405, 103.68850165978074), (4.7817, 103.688502))
+    assert values_equal("gps", (None, None), (None, None)) and not values_equal("gps", (1.0, None), (1.0, 2.0))
+    assert not values_equal("gps", None, (1.0, 2.0))
+
+
+def test_tank_and_sample_comparisons_tolerate_storage_rounding():
+    from src.core.fields import are_samples_different
+    g = [GasMixture(oxygen=32.0, start_pressure=193.0, end_pressure=96.0, tank_volume=11.1)]
+    d = [GasMixture(oxygen=32.0, start_pressure=192.91, end_pressure=95.76, tank_volume=11.1, tank_name="Micke01")]
+    assert values_equal("tanks", g, d)
+    assert not values_equal("tanks", g, [GasMixture(oxygen=32.0, start_pressure=190.0, end_pressure=96.0, tank_volume=11.1)])
+    assert not values_equal("tanks", g, [GasMixture(oxygen=21.0, start_pressure=193.0, end_pressure=96.0, tank_volume=11.1)])
+    a = [UnifiedSample(depth=1.416, temp=30.0, time=0), UnifiedSample(depth=1.733, temp=30.0, time=2)]
+    b = [UnifiedSample(depth=1.42, temp=30.0, time=0), UnifiedSample(depth=1.73, temp=30.0, time=2)]
+    assert values_equal("samples", a, b) and not are_samples_different(a, b)
+    assert not values_equal("samples", a, b[:1])
+    assert not values_equal("samples", a, [b[0], UnifiedSample(depth=1.73, temp=30.0, time=4)])
+    assert not values_equal("samples", a, [b[0], UnifiedSample(depth=1.80, temp=30.0, time=2)])
+
+
+def test_sample_comparison_resamples_both_sides():
+    from src.core.fields import resample_profile
+    irregular = [UnifiedSample(depth=0.0, time=0), UnifiedSample(depth=1.0, time=1), UnifiedSample(depth=2.0, time=2),
+                 UnifiedSample(depth=9.0, time=9), UnifiedSample(depth=10.0, time=10), UnifiedSample(depth=17.0, time=17)]
+    _, grid = resample_profile(irregular)
+    stored = [UnifiedSample(depth=round(s.depth, 2), time=s.time) for s in grid]   # what Divelogs keeps
+    assert values_equal("samples", irregular, stored)
+    assert not values_equal("samples", irregular, stored[:-1])
+    assert not values_equal("samples", [], stored) and values_equal("samples", [], [])

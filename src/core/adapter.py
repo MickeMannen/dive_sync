@@ -16,6 +16,10 @@ class BaseDiveAdapter(ABC):
 
     service_id: ClassVar[str] = ""
     display_name: ClassVar[str] = ""
+    # True when update_dive can persist the other service's id on the dive
+    # (Subsurface extradata, Submersion importId). Garmin and Divelogs have no
+    # such field, so their pairs are remembered in the local sync state instead.
+    stores_external_ids: ClassVar[bool] = False
 
     @classmethod
     def field_catalog(cls) -> List[FieldSpec]:
@@ -52,3 +56,9 @@ class BaseDiveAdapter(ABC):
     def delete_dive(self, external_id: str) -> bool:
         """Delete an existing dive from the service."""
         pass
+
+    def finish(self) -> None:
+        """Called once after a run that may have written (never after a dry
+        run). Adapters that batch their writes (a git repository, a file
+        store) commit and publish here; the default does nothing."""
+        return None

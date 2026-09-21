@@ -37,6 +37,20 @@ class CronJobModel(BaseModel):
     field_links: Optional[List[FieldLink]] = Field(
         None, description="Optional per-job mapping board; None means the global field_links apply"
     )
+    pair: Optional[str] = Field(None, description="Id of a configured sync pair; None = Garmin -> Divelogs")
+
+class SyncPairModel(BaseModel):
+    """One source/target pair the engine can run (rework.md F3). A service
+    spec is a service id, optionally with an argument after a colon:
+    ``garmin``, ``divelogs``, ``uddf:<file>``, ``subsurface:<directory>``.
+    Relative paths resolve against DATA_DIR."""
+    id: str = Field(..., description="Unique name of the pair, used by --pair and by cron jobs")
+    source: str = Field("garmin", description="Service spec of side A")
+    target: str = Field("divelogs", description="Service spec of side B")
+    directionality: str = Field("bidirectional", description="bidirectional, to_<service id>, to_source, to_target")
+    enabled: bool = True
+    grace_window_minutes: Optional[int] = Field(None, description="Per-pair override of the matching window")
+    field_links: Optional[List[FieldLink]] = Field(None, description="Per-pair board; None = the defaults for this pair")
 
 class SettingsModel(BaseModel):
     directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
@@ -49,6 +63,14 @@ class SettingsModel(BaseModel):
         default_factory=default_field_links,
         description="The mapping board: which field feeds which, in what direction, with what conflict policy",
     )
+    garmin_timezone: Optional[str] = Field(
+        None,
+        description="IANA zone to stamp on dives uploaded to Garmin Connect; empty = detect from the account's newest dive",
+    )
+    sync_pairs: List[SyncPairModel] = Field(
+        default_factory=list,
+        description="Named source/target pairs beyond the implicit Garmin -> Divelogs one",
+    )
 
 class GarminCredentials(BaseModel):
     username: str = ""
@@ -59,9 +81,55 @@ class DivelogsCredentials(BaseModel):
     username: str = ""
     password: str = ""
 
+class SubsurfaceCredentials(BaseModel):
+    """Subsurface Cloud: a git repository over HTTPS. The repo path and the
+    branch are both the account email; login is HTTP basic auth."""
+    email: str = ""
+    password: str = ""
+    base_url: str = Field("https://cloud.subsurface-divelog.org/", description="Cloud server; the generic host picks the nearest mirror")
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.email and self.password)
+
+class SubmersionCredentials(BaseModel):
+    """Submersion sync store. Only S3-compatible stores (Backblaze B2, Cloudflare
+    R2, Garage, ...) are supported for unattended sync; a local folder store
+    (Dropbox / iCloud folder) is a later, desktop-only option."""
+    store_type: str = Field("s3", description="'s3' or 'folder'")
+    endpoint_url: str = Field("", description="S3 endpoint, e.g. https://s3.eu-central-003.backblazeb2.com")
+    region: str = Field("", description="S3 region, e.g. eu-central-003 for Backblaze B2")
+    bucket: str = ""
+    prefix: str = Field("submersion-sync/", description="Key prefix Submersion writes its ssv1.* files under")
+    access_key_id: str = Field("", description="B2: the application key id")
+    secret_access_key: str = Field("", description="B2: the application key")
+    path_style: bool = Field(False, description="Use path-style addressing (needed by some self-hosted stores)")
+    folder_path: str = Field("", description="store_type 'folder': the synced folder on this machine")
+
+    @property
+    def configured(self) -> bool:
+        if self.store_type == "folder":
+            return bool(self.folder_path)
+        return bool(self.endpoint_url and self.bucket and self.access_key_id and self.secret_access_key)
+
 class CredentialsModel(BaseModel):
     garmin: Union[List[GarminCredentials], GarminCredentials] = Field(default_factory=GarminCredentials)
     divelogs: Union[List[DivelogsCredentials], DivelogsCredentials] = Field(default_factory=DivelogsCredentials)
+    subsurface: SubsurfaceCredentials = Field(default_factory=SubsurfaceCredentials)
+    submersion: SubmersionCredentials = Field(default_factory=SubmersionCredentials)
+
+    def configured_services(self) -> List[str]:
+        """Service ids that have usable credentials, for status displays."""
+        out = []
+        if any(a.username for a in self.get_garmin_accounts()):
+            out.append("garmin")
+        if any(a.username for a in self.get_divelogs_accounts()):
+            out.append("divelogs")
+        if self.subsurface.configured:
+            out.append("subsurface")
+        if self.submersion.configured:
+            out.append("submersion")
+        return out
 
     def get_garmin_accounts(self) -> List[GarminCredentials]:
         if isinstance(self.garmin, list):
@@ -131,6 +199,8 @@ PROFILE_SECTIONS = (
     "grace_window_minutes",
     "api_cooldown_seconds",
     "field_links",
+    "garmin_timezone",
+    "sync_pairs",
     "schedule",
     "cron_jobs",
 )
@@ -234,7 +304,7 @@ def import_profile(data: Dict[str, Any], current: SettingsModel,
             line = _describe_links(old_val, new_val)
             if line:
                 summary.changes.append(line)
-        elif section in ("cron_jobs", "schedule"):
+        elif section in ("cron_jobs", "schedule", "sync_pairs"):
             if old_val != new_val:
                 summary.changes.append(f"{section}: {len(old_val)} -> {len(new_val)} entries")
         elif section == "sync_filters":

@@ -100,6 +100,17 @@ def _format_value(value: Any, field_type: str, spec: str, separator: str) -> str
         return str(value)
 
 
+def tidy_joined_text(text: str, separator: str = ", ") -> str:
+    """Composite output with empty placeholders leaves dangling separators
+    ("Västra Hamnen, " or ", Zenobia"); drop the empty segments. Only the
+    link's own separator is treated this way."""
+    token = separator.strip() or separator
+    if not token or token not in text:
+        return text.strip()
+    segments = [seg.strip() for seg in text.split(token)]
+    return separator.join(seg for seg in segments if seg)
+
+
 def render(link: FieldLink, dive_by_service: Dict[str, UnifiedDive],
            catalog: Dict[str, FieldSpec]) -> Tuple[str, List[str]]:
     """Render ``link.template`` (or, for a single untemplated source, the plain
@@ -123,6 +134,8 @@ def render(link: FieldLink, dive_by_service: Dict[str, UnifiedDive],
             dive = dive_by_service.get(spec.service_id)
             parts.append(_format_value(get_field(dive, spec), spec.type, fmt or "", link.separator) if dive else "")
         text = "".join(parts)
+        if link.is_composite:
+            text = tidy_joined_text(text, link.separator)
 
     target = catalog.get(link.target)
     if target and target.max_length and len(text) > target.max_length:

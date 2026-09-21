@@ -214,7 +214,7 @@ def test_settings_api_carries_field_links(tmp_path, monkeypatch):
     res = client.get("/api/settings")
     assert res.status_code == 200
     default_ids = [l["id"] for l in res.json()["field_links"]]
-    assert "buddy" in default_ids and "dive_number" in default_ids
+    assert "buddy" in default_ids and "site" in default_ids
 
     # Saving an edited board keeps it
     payload = _base_settings_payload()
@@ -269,3 +269,129 @@ def test_fields_preview_api_and_template_validation_on_save(tmp_path, monkeypatc
     assert res.status_code == 400 and "unknown field {nope}" in res.json()["detail"]["errors"][0]
     payload["field_links"] = [link]
     assert client.post("/api/settings", json=payload).status_code == 200
+
+
+def test_credentials_api_preserves_subsurface_and_submersion(tmp_path, monkeypatch):
+    import src.core.config
+    client = TestClient(app)
+    creds_file = str(tmp_path / "credentials.json")
+    original_load = src.core.config.ConfigManager.load_credentials
+    original_save = src.core.config.ConfigManager.save_credentials
+    monkeypatch.setattr(src.core.config.ConfigManager, "load_credentials", lambda path=creds_file: original_load(creds_file))
+    monkeypatch.setattr(src.core.config.ConfigManager, "save_credentials", lambda creds, path=creds_file: original_save(creds, creds_file))
+
+    subsurface = {"email": "me@x.org", "password": "pw"}
+    submersion = {"endpoint_url": "https://s3.eu-central-003.backblazeb2.com", "region": "eu-central-003",
+                  "bucket": "dives", "access_key_id": "id", "secret_access_key": "key"}
+    res = client.post("/api/credentials", json={"garmin_username": "g", "garmin_password": "p",
+                                                 "subsurface": subsurface, "submersion": submersion})
+    assert res.status_code == 200
+    status = client.get("/api/credentials/status").json()
+    assert status["subsurface_configured"] and status["subsurface_email"] == "me@x.org"
+    assert status["submersion_configured"] and status["submersion_store"]["bucket"] == "dives"
+    assert "password" not in status and "secret_access_key" not in str(status)
+
+    # a Garmin/Divelogs-only save (the current form) keeps them
+    res = client.post("/api/credentials", json={"garmin_username": "g2", "garmin_password": "p"})
+    assert res.status_code == 200
+    status = client.get("/api/credentials/status").json()
+    assert status["garmin_username"] == "g2" and status["subsurface_configured"] and status["submersion_configured"]
+
+    from src.core.services import subsurface_cloud
+    from src.core.services.submersion import store as submersion_store
+    monkeypatch.setattr(subsurface_cloud, "check_cloud_login", lambda e, p, b: (True, "cloud ok"))
+    monkeypatch.setattr(submersion_store, "check_store_access", lambda c: (False, "denied"))
+    res = client.post("/api/credentials/test", json={"subsurface": subsurface, "submersion": submersion})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["subsurface"] is True and body["subsurface_message"] == "cloud ok"
+    assert body["submersion"] is False and body["submersion_message"] == "denied"
+    assert body["garmin"] is None
+
+
+# ---------------------------------------------------------------- phase 6 endpoints
+
+class _FakeEngine:
+    """Stands in for SyncEngine in the board endpoints: no logins, no fetches."""
+    source_id, target_id = "garmin", "divelogs"
+    run_overrides = {}
+
+    def __init__(self):
+        self.full_compare = None
+        self.resolved = []
+
+    def test_mapping(self, links=None, limit=10):
+        return {"ok": True, "problems": [], "matched": 1, "fetched": {"garmin": limit, "divelogs": limit},
+                "rows": [{"link": (links or [None])[0].id if links else "buddy", "result": "equal"}]}
+
+    def list_conflicts(self):
+        from src.core.conflicts import Conflict
+        return [Conflict(id="abc123", link_id="notes", source_service="garmin", target_service="divelogs",
+                         source_key="garmin.notes", target_key="divelogs.notes", field_type="text",
+                         source_value="A", target_value="B", dive_ids={"garmin": "1", "divelogs": "2"})]
+
+    def resolve_conflict(self, conflict_id, winner):
+        if conflict_id != "abc123":
+            raise ValueError("No conflict with that id")
+        self.resolved.append((conflict_id, winner))
+        return self.list_conflicts()[0]
+
+    def request_full_compare(self, on=True):
+        self.full_compare = on
+
+
+def test_mapping_test_conflicts_and_full_compare_endpoints(monkeypatch):
+    import src.web.app as web
+    client = TestClient(app)
+    fake = _FakeEngine()
+    monkeypatch.setattr(web, "_engine_for_pair_id", lambda pair_id: fake)
+
+    res = client.post("/api/mapping/test", json={"field_links": [
+        {"id": "buddy", "source": ["garmin.buddy"], "target": "divelogs.buddy"}], "limit": 5})
+    assert res.status_code == 200 and res.json()["rows"][0]["link"] == "buddy" and res.json()["fetched"]["garmin"] == 5
+
+    monkeypatch.setattr(scheduler, "is_sync_running", True)
+    assert client.post("/api/mapping/test", json={}).status_code == 409
+    assert client.post("/api/conflicts/abc123/resolve", json={"winner": "source"}).status_code == 409
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+
+    res = client.get("/api/conflicts")
+    assert res.status_code == 200 and res.json()["conflicts"][0]["id"] == "abc123" and res.json()["source"] == "garmin"
+    res = client.post("/api/conflicts/abc123/resolve", json={"winner": "target"})
+    assert res.status_code == 200 and fake.resolved == [("abc123", "target")]
+    assert client.post("/api/conflicts/nope/resolve", json={"winner": "target"}).status_code == 400
+
+    res = client.post("/api/sync/full-compare")
+    assert res.status_code == 200 and fake.full_compare is True
+
+
+def test_profile_export_and_import_endpoints(tmp_path, monkeypatch):
+    import io
+    import json as _json
+    _isolated_settings(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    res = client.get("/api/settings/export")
+    assert res.status_code == 200 and res.headers["content-disposition"].startswith("attachment")
+    profile = res.json()
+    assert profile["dive_sync_profile"] == 1 and "field_links" in profile
+
+    profile["grace_window_minutes"] = 45
+    profile["field_links"] = [l for l in profile["field_links"] if l["id"] in ("buddy", "notes")]
+    upload = {"file": ("profile.json", io.BytesIO(_json.dumps(profile).encode()), "application/json")}
+    res = client.post("/api/settings/import", files=upload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["applied"] is False and "grace_window_minutes: 15 -> 45" in body["summary"]["changes"]
+    assert client.get("/api/settings").json()["grace_window_minutes"] == 15   # nothing applied yet
+
+    upload = {"file": ("profile.json", io.BytesIO(_json.dumps(profile).encode()), "application/json")}
+    res = client.post("/api/settings/import?apply=true", files=upload)
+    assert res.status_code == 200 and res.json()["applied"] is True
+    saved = client.get("/api/settings").json()
+    assert saved["grace_window_minutes"] == 45 and [l["id"] for l in saved["field_links"]] == ["buddy", "notes"]
+
+    bad = {"file": ("x.json", io.BytesIO(b"{not json"), "application/json")}
+    assert client.post("/api/settings/import", files=bad).status_code == 400
+    newer = {"file": ("x.json", io.BytesIO(_json.dumps({"dive_sync_profile": 99}).encode()), "application/json")}
+    assert "newer" in client.post("/api/settings/import", files=newer).json()["detail"]

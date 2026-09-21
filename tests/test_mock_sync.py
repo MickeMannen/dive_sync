@@ -121,14 +121,16 @@ def test_mock_sync_offline_mode(tmp_path):
     assert len(results["uploaded_to_garmin"]) == 1
     assert results["uploaded_to_garmin"][0]["divelogs_id"] == "50003"
 
-    # Garmin Dive 1 and Divelogs Dive 1 should be matched and cross-linked
-    assert len(results["updated_on_garmin"]) == 1
-    assert results["updated_on_garmin"][0]["id"] == "10001"
-    assert results["updated_on_garmin"][0]["linked_divelogs"] == "50001"
-
-    assert len(results["updated_on_divelogs"]) == 1
-    assert results["updated_on_divelogs"][0]["id"] == "50001"
-    assert results["updated_on_divelogs"][0]["linked_garmin"] == "10001"
+    # Garmin Dive 1 and Divelogs Dive 1 are matched; neither service can store
+    # the other's id, so the pair is remembered in the sync state instead of
+    # being "linked" through an update (nothing else differs on the fill-only board)
+    # Garmin gets the Divelogs notes filled in (the only blank/filled difference); Divelogs needs nothing
+    assert [u["id"] for u in results["updated_on_garmin"]] == ["10001"]
+    assert results["updated_on_divelogs"] == []
+    state = json.load(open(os.path.join(mock_data_dir, "sync_state.json")))
+    assert state["links"]["10001"] == "50001"
+    # ... and the uploads are remembered too (Garmin 2 -> new Divelogs 2, Divelogs 3 -> new Garmin 3)
+    assert state["links"]["10002"] == "2" and state["links"]["3"] == "50003"
 
     # Verify files created/updated in the directories
     # A new Divelogs mock file for dive 2 should exist (Garmin 2 uploaded)

@@ -17,6 +17,8 @@ class UnifiedSample(BaseModel):
 
 class UnifiedDive(BaseModel):
     date_time: datetime = Field(..., description="Local start date and time of the dive (timezone-naive)")
+    date_time_utc: Optional[datetime] = Field(None, description="Start instant in UTC (timezone-naive) when the service provides it; used for matching and the {date_time_utc} template key")
+    timezone: Optional[str] = Field(None, description="IANA zone of the local start time when the service provides it, e.g. 'Asia/Kuala_Lumpur'")
     duration: int = Field(..., description="Duration of the dive in seconds")
     max_depth: float = Field(..., description="Maximum depth in meters")
     avg_depth: Optional[float] = Field(None, description="Average depth in meters")
