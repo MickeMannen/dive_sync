@@ -260,8 +260,11 @@ def get_credentials_status():
         "submersion_store": {
             "store_type": creds.submersion.store_type,
             "endpoint_url": creds.submersion.endpoint_url,
+            "region": creds.submersion.region,
             "bucket": creds.submersion.bucket,
             "prefix": creds.submersion.prefix,
+            "path_style": creds.submersion.path_style,
+            "folder_path": creds.submersion.folder_path,
         },
     }
 

@@ -16,6 +16,7 @@ class SettingsController(QObject):
     garminStatusChanged = Signal()
     divelogsStatusChanged = Signal()
     subsurfaceStatusChanged = Signal()
+    submersionStatusChanged = Signal()
     credentialsChanged = Signal()
     profileSummaryChanged = Signal()
 
@@ -25,6 +26,7 @@ class SettingsController(QObject):
         self._garmin_status = ""
         self._divelogs_status = ""
         self._subsurface_status = ""
+        self._submersion_status = ""
         self._profile_summary = ""
         self._pending_profile = None
         self._workers = []
@@ -47,6 +49,10 @@ class SettingsController(QObject):
     @Property(str, notify=subsurfaceStatusChanged)
     def subsurfaceStatus(self) -> str:
         return self._subsurface_status
+
+    @Property(str, notify=submersionStatusChanged)
+    def submersionStatus(self) -> str:
+        return self._submersion_status
 
     @Property(str, notify=profileSummaryChanged)
     def profileSummary(self) -> str:
@@ -74,6 +80,38 @@ class SettingsController(QObject):
     @Property(str, notify=credentialsChanged)
     def subsurfaceEmail(self) -> str:
         return self._model.subsurface.email
+
+    @Property(str, notify=credentialsChanged)
+    def submersionStoreType(self) -> str:
+        return self._model.submersion.store_type
+
+    @Property(str, notify=credentialsChanged)
+    def submersionEndpointUrl(self) -> str:
+        return self._model.submersion.endpoint_url
+
+    @Property(str, notify=credentialsChanged)
+    def submersionRegion(self) -> str:
+        return self._model.submersion.region
+
+    @Property(str, notify=credentialsChanged)
+    def submersionBucket(self) -> str:
+        return self._model.submersion.bucket
+
+    @Property(str, notify=credentialsChanged)
+    def submersionPrefix(self) -> str:
+        return self._model.submersion.prefix
+
+    @Property(str, notify=credentialsChanged)
+    def submersionAccessKeyId(self) -> str:
+        return self._model.submersion.access_key_id
+
+    @Property(bool, notify=credentialsChanged)
+    def submersionPathStyle(self) -> bool:
+        return self._model.submersion.path_style
+
+    @Property(str, notify=credentialsChanged)
+    def submersionFolderPath(self) -> str:
+        return self._model.submersion.folder_path
 
     def _set(self, attr, value, signal):
         setattr(self, attr, value)
@@ -131,12 +169,41 @@ class SettingsController(QObject):
             return message
         self._run(work, lambda text: self._set("_subsurface_status", str(text), self.subsurfaceStatusChanged))
 
+    @Slot(str, str, str, str, str, str, str, bool, str)
+    def testSubmersion(self, store_type: str, endpoint_url: str, region: str, bucket: str, prefix: str,
+                        access_key_id: str, secret_access_key: str, path_style: bool, folder_path: str) -> None:
+        from src.core.config import SubmersionCredentials
+        config = SubmersionCredentials(
+            store_type=store_type or "s3",
+            endpoint_url=endpoint_url,
+            region=region,
+            bucket=bucket,
+            prefix=prefix or SubmersionCredentials().prefix,
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key or self._model.submersion.secret_access_key,
+            path_style=path_style,
+            folder_path=folder_path,
+        )
+        if not config.configured:
+            self._set("_submersion_status", "Fill in the store details first.", self.submersionStatusChanged)
+            return
+        self._set("_submersion_status", "Testing…", self.submersionStatusChanged)
+
+        def work():
+            from src.core.services.submersion.store import check_store_access
+            ok, message = check_store_access(config)
+            return message
+        self._run(work, lambda text: self._set("_submersion_status", str(text), self.submersionStatusChanged))
+
     # -- save -------------------------------------------------------------
 
-    @Slot(str, str, str, str, str, str, str)
+    @Slot(str, str, str, str, str, str, str, str, str, str, str, str, str, str, bool, str)
     def save(self, garmin_user: str, garmin_pw: str, token_dir: str, divelogs_user: str, divelogs_pw: str,
-             subsurface_email: str, subsurface_pw: str) -> None:
-        from src.core.config import CredentialsModel, DivelogsCredentials, GarminCredentials, SubsurfaceCredentials
+             subsurface_email: str, subsurface_pw: str,
+             submersion_store_type: str, submersion_endpoint_url: str, submersion_region: str,
+             submersion_bucket: str, submersion_prefix: str, submersion_access_key_id: str,
+             submersion_secret_access_key: str, submersion_path_style: bool, submersion_folder_path: str) -> None:
+        from src.core.config import CredentialsModel, DivelogsCredentials, GarminCredentials, SubsurfaceCredentials, SubmersionCredentials
         g_accounts = self._model.get_garmin_accounts()
         d_accounts = self._model.get_divelogs_accounts()
         model = CredentialsModel(
@@ -145,6 +212,17 @@ class SettingsController(QObject):
             divelogs=DivelogsCredentials(username=divelogs_user, password=divelogs_pw or (d_accounts[0].password if d_accounts else "")),
             subsurface=SubsurfaceCredentials(email=subsurface_email, password=subsurface_pw or self._model.subsurface.password,
                                              base_url=self._model.subsurface.base_url),
+            submersion=SubmersionCredentials(
+                store_type=submersion_store_type or "s3",
+                endpoint_url=submersion_endpoint_url,
+                region=submersion_region,
+                bucket=submersion_bucket,
+                prefix=submersion_prefix or SubmersionCredentials().prefix,
+                access_key_id=submersion_access_key_id,
+                secret_access_key=submersion_secret_access_key or self._model.submersion.secret_access_key,
+                path_style=submersion_path_style,
+                folder_path=submersion_folder_path,
+            ),
         )
         creds_store.save_credentials_model(model)
         self._model = creds_store.load_credentials_model()

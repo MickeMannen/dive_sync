@@ -137,6 +137,27 @@
           <label>Email <input type="text" id="subsurface-email"></label>
           <label>Password <input type="password" id="subsurface-password"></label>
         </fieldset>
+        <fieldset>
+          <legend>Submersion sync store <span id="submersion-configured" class="badge"></span></legend>
+          <label>Store type
+            <select id="submersion-store-type">
+              <option value="s3">S3-compatible (Backblaze B2, R2, …)</option>
+              <option value="folder">Local folder (Dropbox / iCloud)</option>
+            </select>
+          </label>
+          <div id="submersion-s3-fields">
+            <label>Endpoint URL <input type="text" id="submersion-endpoint-url" placeholder="https://s3.eu-central-003.backblazeb2.com"></label>
+            <label>Region <input type="text" id="submersion-region" placeholder="eu-central-003"></label>
+            <label>Bucket <input type="text" id="submersion-bucket"></label>
+            <label>Prefix <input type="text" id="submersion-prefix" placeholder="submersion-sync/"></label>
+            <label>Access key ID <input type="text" id="submersion-access-key-id"></label>
+            <label>Secret access key <input type="password" id="submersion-secret-access-key"></label>
+            <label class="inline-checkbox"><input type="checkbox" id="submersion-path-style"> Path-style addressing</label>
+          </div>
+          <div id="submersion-folder-fields" hidden>
+            <label>Folder path <input type="text" id="submersion-folder-path" placeholder="/Users/you/Dropbox/Submersion"></label>
+          </div>
+        </fieldset>
         <div class="actions">
           <button type="button" id="test-credentials">Test</button>
           <button type="submit">Save credentials</button>

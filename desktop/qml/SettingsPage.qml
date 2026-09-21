@@ -45,12 +45,50 @@ ColumnLayout {
                 Text { text: settingsController.subsurfaceStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             }
         }
+        Card {
+            title: "Submersion sync store"
+            RowLayout {
+                spacing: 6
+                Text { text: "Store type"; color: Theme.muted; font.pixelSize: 11 }
+                ComboBox {
+                    id: subStoreType
+                    model: ["s3", "folder"]
+                    currentIndex: settingsController.submersionStoreType === "folder" ? 1 : 0
+                }
+            }
+            ColumnLayout {
+                visible: subStoreType.currentText === "s3"
+                spacing: 8
+                LabeledField { id: subEndpoint; label: "Endpoint URL"; fieldWidth: 420; text: settingsController.submersionEndpointUrl }
+                LabeledField { id: subRegion; label: "Region"; fieldWidth: 220; text: settingsController.submersionRegion }
+                LabeledField { id: subBucket; label: "Bucket"; fieldWidth: 320; text: settingsController.submersionBucket }
+                LabeledField { id: subPrefix; label: "Prefix"; fieldWidth: 320; text: settingsController.submersionPrefix }
+                LabeledField { id: subAccessKey; label: "Access key ID"; fieldWidth: 320; text: settingsController.submersionAccessKeyId }
+                LabeledField { id: subSecretKey; label: "Secret access key (leave blank to keep the saved one)"; fieldWidth: 320; secret: true }
+                CheckBox { id: subPathStyle; text: "Path-style addressing"; checked: settingsController.submersionPathStyle }
+            }
+            ColumnLayout {
+                visible: subStoreType.currentText === "folder"
+                spacing: 8
+                LabeledField { id: subFolderPath; label: "Folder path"; fieldWidth: 420; text: settingsController.submersionFolderPath }
+            }
+            RowLayout {
+                Button {
+                    text: "Test"
+                    onClicked: settingsController.testSubmersion(subStoreType.currentText, subEndpoint.text, subRegion.text,
+                        subBucket.text, subPrefix.text, subAccessKey.text, subSecretKey.text, subPathStyle.checked, subFolderPath.text)
+                }
+                Text { text: settingsController.submersionStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+            }
+        }
         RowLayout {
             Button {
                 text: "Save credentials"
                 onClicked: {
-                    settingsController.save(gUser.text, gPass.text, gToken.text, dUser.text, dPass.text, sEmail.text, sPass.text)
-                    gPass.text = ""; dPass.text = ""; sPass.text = ""
+                    settingsController.save(gUser.text, gPass.text, gToken.text, dUser.text, dPass.text, sEmail.text, sPass.text,
+                        subStoreType.currentText, subEndpoint.text, subRegion.text, subBucket.text, subPrefix.text,
+                        subAccessKey.text, subSecretKey.text, subPathStyle.checked, subFolderPath.text)
+                    gPass.text = ""; dPass.text = ""; sPass.text = ""; subSecretKey.text = ""
                 }
             }
             Text { text: settingsController.message; color: Theme.muted }

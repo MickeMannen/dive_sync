@@ -187,12 +187,16 @@ def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratc
     from src.core.config import ConfigManager
     s = SettingsController()
     assert s.hasCredentials is False
-    s.save("g@x", "pw", "", "d", "pw2", "me@x.org", "pw3")
+    s.save("g@x", "pw", "", "d", "pw2", "me@x.org", "pw3",
+           "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "secret", False, "")
     assert s.hasCredentials and s.garminUsername == "g@x" and s.subsurfaceEmail == "me@x.org" and s.message == "Saved to keychain."
     assert fake_keyring.store[("DiveSync", "divelogs_password")] == "pw2"
+    assert s.submersionBucket == "my-bucket" and fake_keyring.store[("DiveSync", "submersion_secret_access_key")] == "secret"
     # keeping a blank password keeps the stored one
-    s.save("g@x", "", "", "d", "", "me@x.org", "")
+    s.save("g@x", "", "", "d", "", "me@x.org", "",
+           "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "", False, "")
     assert fake_keyring.store[("DiveSync", "garmin_password")] == "pw"
+    assert fake_keyring.store[("DiveSync", "submersion_secret_access_key")] == "secret"
 
     path = str(scratch_data_dir / "profile.json")
     assert s.exportProfile(path).startswith("Profile written")

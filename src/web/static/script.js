@@ -75,9 +75,25 @@ async function loadCredentialsStatus() {
   setBadge("garmin-configured", data.garmin_configured);
   setBadge("divelogs-configured", data.divelogs_configured);
   setBadge("subsurface-configured", data.subsurface_configured);
+  setBadge("submersion-configured", data.submersion_configured);
   if (data.garmin_username) $("garmin-username").value = data.garmin_username;
   if (data.divelogs_username) $("divelogs-username").value = data.divelogs_username;
   if (data.subsurface_email) $("subsurface-email").value = data.subsurface_email;
+  const store = data.submersion_store || {};
+  if (store.store_type) $("submersion-store-type").value = store.store_type;
+  if (store.endpoint_url) $("submersion-endpoint-url").value = store.endpoint_url;
+  if (store.region) $("submersion-region").value = store.region;
+  if (store.bucket) $("submersion-bucket").value = store.bucket;
+  if (store.prefix) $("submersion-prefix").value = store.prefix;
+  $("submersion-path-style").checked = !!store.path_style;
+  if (store.folder_path) $("submersion-folder-path").value = store.folder_path;
+  updateSubmersionStoreFields();
+}
+
+function updateSubmersionStoreFields() {
+  const isFolder = $("submersion-store-type").value === "folder";
+  $("submersion-s3-fields").hidden = isFolder;
+  $("submersion-folder-fields").hidden = !isFolder;
 }
 
 function setBadge(id, on) {
@@ -97,6 +113,23 @@ function credentialsPayload() {
   const email = $("subsurface-email").value.trim();
   const pw = $("subsurface-password").value;
   if (email && pw) payload.subsurface = { email, password: pw };
+
+  const storeType = $("submersion-store-type").value;
+  const submersion = {
+    store_type: storeType,
+    endpoint_url: $("submersion-endpoint-url").value.trim(),
+    region: $("submersion-region").value.trim(),
+    bucket: $("submersion-bucket").value.trim(),
+    prefix: $("submersion-prefix").value.trim() || "submersion-sync/",
+    access_key_id: $("submersion-access-key-id").value.trim(),
+    secret_access_key: $("submersion-secret-access-key").value,
+    path_style: $("submersion-path-style").checked,
+    folder_path: $("submersion-folder-path").value.trim(),
+  };
+  const submersionSet = storeType === "folder"
+    ? !!submersion.folder_path
+    : !!(submersion.endpoint_url && submersion.bucket && submersion.access_key_id && submersion.secret_access_key);
+  if (submersionSet) payload.submersion = submersion;
   return payload;
 }
 
@@ -124,6 +157,7 @@ async function testCredentials() {
   if (data.garmin !== null && data.garmin !== undefined) parts.push(`Garmin: ${data.garmin ? "OK" : "failed"}`);
   if (data.divelogs !== null && data.divelogs !== undefined) parts.push(`Divelogs: ${data.divelogs ? "OK" : "failed"}`);
   if (data.subsurface !== undefined) parts.push(`Subsurface Cloud: ${data.subsurface ? "OK" : "failed"}`);
+  if (data.submersion !== undefined) parts.push(`Submersion: ${data.submersion ? "OK" : (data.submersion_message || "failed")}`);
   $("credentials-message").textContent = parts.join(" · ") || "Enter credentials to test.";
 }
 
@@ -845,6 +879,7 @@ function init() {
   $("trigger-sync").addEventListener("click", triggerSync);
   $("credentials-form").addEventListener("submit", saveCredentials);
   $("test-credentials").addEventListener("click", testCredentials);
+  $("submersion-store-type").addEventListener("change", updateSubmersionStoreFields);
   $("add-cron-job").addEventListener("click", () => addCronRow());
   $("add-pair").addEventListener("click", () => addPairRow());
   $("save-schedule").addEventListener("click", saveSchedule);

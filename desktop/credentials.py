@@ -63,7 +63,7 @@ def _set(service: str, field: str, value: str) -> None:
 
 
 def load_credentials_model():
-    from src.core.config import CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials
+    from src.core.config import CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials
 
     return CredentialsModel(
         garmin=GarminCredentials(
@@ -79,6 +79,17 @@ def load_credentials_model():
             email=_get("subsurface", "email"),
             password=_get("subsurface", "password"),
             base_url=_get("subsurface", "base_url") or SubsurfaceCredentials().base_url,
+        ),
+        submersion=SubmersionCredentials(
+            store_type=_get("submersion", "store_type") or SubmersionCredentials().store_type,
+            endpoint_url=_get("submersion", "endpoint_url"),
+            region=_get("submersion", "region"),
+            bucket=_get("submersion", "bucket"),
+            prefix=_get("submersion", "prefix") or SubmersionCredentials().prefix,
+            access_key_id=_get("submersion", "access_key_id"),
+            secret_access_key=_get("submersion", "secret_access_key"),
+            path_style=bool(_get("submersion", "path_style")),
+            folder_path=_get("submersion", "folder_path"),
         ),
     )
 
@@ -99,11 +110,28 @@ def save_credentials_model(model) -> None:
     _set("subsurface", "password", subsurface.password if subsurface else "")
     _set("subsurface", "base_url", subsurface.base_url if subsurface and subsurface.email else "")
 
+    submersion = getattr(model, "submersion", None)
+    _set("submersion", "store_type", submersion.store_type if submersion else "")
+    _set("submersion", "endpoint_url", submersion.endpoint_url if submersion else "")
+    _set("submersion", "region", submersion.region if submersion else "")
+    _set("submersion", "bucket", submersion.bucket if submersion else "")
+    _set("submersion", "prefix", submersion.prefix if submersion else "")
+    _set("submersion", "access_key_id", submersion.access_key_id if submersion else "")
+    _set("submersion", "secret_access_key", submersion.secret_access_key if submersion else "")
+    _set("submersion", "path_style", "1" if (submersion and submersion.path_style) else "")
+    _set("submersion", "folder_path", submersion.folder_path if submersion else "")
+
     logger.info("Credentials saved to OS keychain.")
 
 
 def has_any_credentials() -> bool:
-    return bool(_get("garmin", "username") or _get("divelogs", "username") or _get("subsurface", "email"))
+    return bool(
+        _get("garmin", "username")
+        or _get("divelogs", "username")
+        or _get("subsurface", "email")
+        or _get("submersion", "bucket")
+        or _get("submersion", "folder_path")
+    )
 
 
 def materialize_local_cache() -> None:
