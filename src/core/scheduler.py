@@ -107,8 +107,23 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
     except Exception as e:
         logger.error("Sync run encountered an error: %s", e)
         last_sync_results[job_id] = {"error": str(e)}
+        _notify_failure(job_id, str(e))
     finally:
         is_sync_running = False
+
+
+def _notify_failure(job_id: str, error: str) -> None:
+    """Best-effort webhook alert (rework.md A11). A broken/unset notify_url,
+    or the settings file itself being unreadable, must never raise out of
+    here - this runs from the except block of the sync it's reporting on."""
+    try:
+        from src.core.config import ConfigManager
+        from src.core.notify import notify_run_failure
+        notify_url = ConfigManager.load_settings().notify_url
+        if notify_url:
+            notify_run_failure(notify_url, job_id, error)
+    except Exception as notify_error:
+        logger.warning("Failed to send failure alert for job '%s': %s", job_id, notify_error)
 
 
 def _next_daily_occurrence(now: datetime, hour: int, minute: int) -> datetime:

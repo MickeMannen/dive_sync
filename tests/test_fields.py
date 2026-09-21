@@ -16,6 +16,7 @@ from src.core.fields import (
     default_field_links,
     get_field,
     legacy_field_links,
+    pre_c12_default_field_links,
     is_empty,
     match_key_equal,
     set_field,
@@ -95,7 +96,9 @@ def test_default_links_validate_against_catalogue():
     by_id = {l.id: l for l in links}
     # Decided 2026-09-21: never wipe, no dive-number key on this pair, site names linked
     # Decided 2026-09-22: tanks always mirrors the source (never wipe still applies elsewhere)
-    assert all(l.conflict == "prefer_non_empty" for l in links if l.id != "tanks")
+    # Decided 2026-09-20, flipped 2026-09-21 (C12): scalar fields ask instead of silently keeping a real conflict
+    assert all(l.conflict == "manual" for l in links if l.id not in ("tanks", "samples"))
+    assert by_id["samples"].conflict == "prefer_non_empty"
     assert by_id["tanks"].conflict == "prefer_source"
     assert by_id["buddy"].direction == "bidirectional" and by_id["gps"].direction == "bidirectional"
     assert by_id["tanks"].direction == "to_target" and by_id["samples"].direction == "to_target"
@@ -198,7 +201,8 @@ def test_settings_default_field_links_and_round_trip(tmp_path):
 
 def test_old_settings_file_loads_unchanged_with_default_links(tmp_path):
     """A settings.json written before Track C has no field_links key; it must
-    load with every old value intact and the default board attached."""
+    load with every old value intact and the pre-C12 default board attached
+    (not today's default, which now differs - C12 migration)."""
     old = {
         "directionality": "to_divelogs",
         "sync_filters": {"date_from": "2026-01-01", "date_to": None, "only_new": False, "sync_gases": False, "sync_fit": True},
@@ -219,7 +223,8 @@ def test_old_settings_file_loads_unchanged_with_default_links(tmp_path):
     assert loaded.grace_window_minutes == 20 and loaded.api_cooldown_seconds == 2.5
     assert loaded.schedule[0].hour == 3
     assert loaded.cron_jobs[0].id == "nightly" and loaded.cron_jobs[0].field_links is None
-    assert loaded.field_links == default_field_links()
+    assert loaded.field_links == pre_c12_default_field_links()
+    assert all(l.conflict == "prefer_non_empty" for l in loaded.field_links if l.id not in ("tanks",))
     # and every old key survives a save
     ConfigManager.save_settings(loaded, path)
     saved = json.load(open(path))
@@ -228,6 +233,37 @@ def test_old_settings_file_loads_unchanged_with_default_links(tmp_path):
             assert saved[key][0]["id"] == "nightly"
         else:
             assert saved[key] == value
+
+
+def test_new_settings_file_gets_the_current_default_board(tmp_path):
+    """A settings.json that does not exist yet at all (a fresh install) gets
+    today's default board (manual), not the frozen pre-C12 one - the
+    migration in load_settings only applies to a file that already exists
+    without a field_links key."""
+    path = str(tmp_path / "settings.json")
+    loaded = ConfigManager.load_settings(path)
+    assert loaded.field_links == default_field_links()
+    assert all(l.conflict == "manual" for l in loaded.field_links if l.id not in ("tanks", "samples"))
+
+
+def test_settings_file_with_explicit_field_links_is_never_migrated(tmp_path):
+    """A file that already has a field_links key - even one that happens to
+    equal the frozen pre-C12 board - keeps exactly what it says; the C12
+    migration only fires when the key is absent entirely."""
+    path = str(tmp_path / "settings.json")
+    explicit = {
+        "directionality": "bidirectional",
+        "sync_filters": {"date_from": None, "date_to": None, "only_new": True, "sync_gases": True, "sync_fit": False},
+        "grace_window_minutes": 15,
+        "api_cooldown_seconds": 1.0,
+        "schedule": [],
+        "cron_jobs": [],
+        "field_links": [link.model_dump() for link in pre_c12_default_field_links()],
+    }
+    with open(path, "w") as f:
+        json.dump(explicit, f)
+    loaded = ConfigManager.load_settings(path)
+    assert loaded.field_links == pre_c12_default_field_links()
 
 
 def test_cron_job_accepts_link_override():

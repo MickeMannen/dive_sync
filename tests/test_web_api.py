@@ -210,6 +210,38 @@ def test_fields_api():
     assert tanks["writable"] is False and tanks["type"] == "tanks"
 
 
+def test_notify_url_round_trips_and_is_kept_when_omitted(tmp_path, monkeypatch):
+    _isolated_settings(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    payload = _base_settings_payload()
+    payload["notify_url"] = "https://ntfy.sh/mytopic"
+    res = client.post("/api/settings", json=payload)
+    assert res.status_code == 200
+    assert client.get("/api/settings").json()["notify_url"] == "https://ntfy.sh/mytopic"
+
+    # Omitting it keeps what's stored (same rule as field_links/sync_pairs)
+    res = client.post("/api/settings", json=_base_settings_payload())
+    assert res.status_code == 200
+    assert client.get("/api/settings").json()["notify_url"] == "https://ntfy.sh/mytopic"
+
+    # An explicit "" clears it
+    payload["notify_url"] = ""
+    res = client.post("/api/settings", json=payload)
+    assert res.status_code == 200
+    assert client.get("/api/settings").json()["notify_url"] == ""
+
+
+def test_notify_test_endpoint(monkeypatch):
+    client = TestClient(app)
+    from src.core import notify
+    monkeypatch.setattr(notify, "send_notification", lambda url, title, message: (True, "Sent (HTTP 200)."))
+
+    res = client.post("/api/notify/test", json={"notify_url": "https://ntfy.sh/mytopic"})
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "detail": "Sent (HTTP 200)."}
+
+
 def _isolated_settings(tmp_path, monkeypatch):
     import src.core.config
     settings_file = str(tmp_path / "settings.json")

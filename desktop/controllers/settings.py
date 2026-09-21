@@ -227,20 +227,23 @@ class SettingsController(QObject):
         since this writes those two sections directly rather than going
         through save_credentials_model(), which would otherwise replace the
         whole account list with whatever (nothing) this slot was given."""
-        creds_store._set("subsurface", "email", subsurface_email)
-        creds_store._set("subsurface", "password", subsurface_pw or self._model.subsurface.password)
-        creds_store._set("subsurface", "base_url", self._model.subsurface.base_url if subsurface_email else "")
-
-        from src.core.config import SubmersionCredentials
-        creds_store._set("submersion", "store_type", submersion_store_type or "s3")
-        creds_store._set("submersion", "endpoint_url", submersion_endpoint_url)
-        creds_store._set("submersion", "region", submersion_region)
-        creds_store._set("submersion", "bucket", submersion_bucket)
-        creds_store._set("submersion", "prefix", submersion_prefix or SubmersionCredentials().prefix)
-        creds_store._set("submersion", "access_key_id", submersion_access_key_id)
-        creds_store._set("submersion", "secret_access_key", submersion_secret_access_key or self._model.submersion.secret_access_key)
-        creds_store._set("submersion", "path_style", "1" if submersion_path_style else "")
-        creds_store._set("submersion", "folder_path", submersion_folder_path)
+        from src.core.config import SubsurfaceCredentials, SubmersionCredentials
+        creds_store.save_subsurface_credentials(SubsurfaceCredentials(
+            email=subsurface_email,
+            password=subsurface_pw or self._model.subsurface.password,
+            base_url=self._model.subsurface.base_url,
+        ) if subsurface_email else None)
+        creds_store.save_submersion_credentials(SubmersionCredentials(
+            store_type=submersion_store_type or "s3",
+            endpoint_url=submersion_endpoint_url,
+            region=submersion_region,
+            bucket=submersion_bucket,
+            prefix=submersion_prefix or SubmersionCredentials().prefix,
+            access_key_id=submersion_access_key_id,
+            secret_access_key=submersion_secret_access_key or self._model.submersion.secret_access_key,
+            path_style=submersion_path_style,
+            folder_path=submersion_folder_path,
+        ))
 
         self._model = creds_store.load_credentials_model()
         self.credentialsChanged.emit()

@@ -35,6 +35,7 @@ class RecordingAdapter(BaseDiveAdapter):
         self.dives = list(dives or [])
         self.updated = []
         self.added = []
+        self.deleted = []
 
     @classmethod
     def field_catalog(cls):
@@ -55,6 +56,7 @@ class RecordingAdapter(BaseDiveAdapter):
         return True
 
     def delete_dive(self, external_id):
+        self.deleted.append(external_id)
         return True
 
 
@@ -370,6 +372,57 @@ def test_dry_run_reports_without_writing(tmp_path):
     assert engine.target.updated == [] and not os.path.exists(engine.state_file)
 
 
+def test_pre_sync_backup_snapshots_what_was_fetched(tmp_path):
+    """rework.md C14: a JSON snapshot of the fetched dives per side, written
+    before any write, next to the state file."""
+    g, d = _pair({"buddy": "A"}, {"buddy": "A"})
+    engine = _engine(tmp_path, [g], [d])
+    engine.run_sync(dry_run=False)
+
+    backups_root = os.path.join(os.path.dirname(engine.state_file), "backups")
+    runs = os.listdir(backups_root)
+    assert len(runs) == 1
+    with open(os.path.join(backups_root, runs[0], "garmin.json")) as f:
+        garmin_backup = json.load(f)
+    with open(os.path.join(backups_root, runs[0], "divelogs.json")) as f:
+        divelogs_backup = json.load(f)
+    assert len(garmin_backup) == 1 and garmin_backup[0]["buddy"] == "A"
+    assert len(divelogs_backup) == 1
+
+
+def test_pre_sync_backup_skipped_on_dry_run(tmp_path):
+    g, d = _pair({"buddy": "A"}, {"buddy": "A"})
+    engine = _engine(tmp_path, [g], [d])
+    engine.run_sync(dry_run=True)
+
+    backups_root = os.path.join(os.path.dirname(engine.state_file), "backups")
+    assert not os.path.exists(backups_root)
+
+
+def test_pre_sync_backup_prunes_to_the_retention_count(tmp_path):
+    g, d = _pair({"buddy": "A"}, {"buddy": "A"})
+    engine = _engine(tmp_path, [g], [d], backup_retention_count=2)
+    for _ in range(4):
+        engine.run_sync(dry_run=False)
+
+    backups_root = os.path.join(os.path.dirname(engine.state_file), "backups")
+    assert len(os.listdir(backups_root)) == 2
+
+
+def test_pre_sync_backup_failure_does_not_abort_the_sync(tmp_path, monkeypatch):
+    """The try/except inside _write_pre_sync_backup itself must swallow a
+    real write failure (disk full, permissions, ...) rather than the sync
+    it's meant to protect failing along with it."""
+    g, d = _pair({"buddy": "A"}, {"buddy": "A"})
+    engine = _engine(tmp_path, [g], [d])
+    import src.core.sync_engine as sync_engine_module
+    monkeypatch.setattr(sync_engine_module.os, "makedirs", lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")))
+
+    res = engine.run_sync(dry_run=False)
+
+    assert res["matched_count"] == 1
+
+
 def test_field_links_override_survives_settings_reload(tmp_path):
     g, d = _pair({"buddy": "A"}, {"buddy": "B"})
     engine = _engine(tmp_path, [g], [d])
@@ -675,6 +728,89 @@ def test_known_pairs_are_remembered_and_used_for_matching(tmp_path):
     res = engine4.run_sync(dry_run=False)
     assert len(res["updated_on_divelogs"]) == 1 and engine4.target.updated[0][1].external_ids["garmin"] == "1"
     assert res["updated_on_garmin"] == []
+
+
+def test_deletion_propagates_on_full_sync_when_enabled(tmp_path):
+    """rework.md C13: a dive gone from one side on a full sync is deleted on
+    the other when propagate_deletes is on for the pair."""
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, g, d)
+    engine.run_sync(dry_run=False)
+    assert engine.load_links() == {"1": "2"}
+
+    # Next full sync: Garmin no longer has dive "1" (deleted there)
+    engine2 = _engine(tmp_path, [], d, propagate_deletes=True)
+    res = engine2.run_sync(dry_run=False)
+
+    assert engine2.target.deleted == ["2"]
+    assert res["deleted_on_divelogs"] == [{"id": "2", "gone_from": "garmin"}]
+    assert engine2.load_links() == {}
+
+
+def test_deletion_only_logged_when_propagate_deletes_off(tmp_path):
+    """When off, the deleted-from-garmin dive is untouched on Divelogs and,
+    exactly as before C13, falls through to the normal unmatched-dive
+    upload path - re-created on Garmin as a new dive (the "log that the
+    dive will be re-uploaded" case from the original decision)."""
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, g, d)
+    engine.run_sync(dry_run=False)
+
+    engine2 = _engine(tmp_path, [], d)  # propagate_deletes defaults to off
+    res = engine2.run_sync(dry_run=False)
+
+    assert engine2.target.deleted == []
+    assert res["deleted_on_divelogs"] == []
+    assert len(res["uploaded_to_garmin"]) == 1
+    assert engine2.load_links() == {"1": "2", "new-1": "2"}  # stale link kept, plus the fresh re-upload
+
+
+def test_deletion_not_checked_on_incremental_sync(tmp_path):
+    """An incremental fetch's date window cannot tell 'deleted' apart from
+    'outside this run', so it must not be treated as either even with
+    propagate_deletes on - same natural re-upload as the off case."""
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, g, d)
+    engine.run_sync(dry_run=False)
+
+    engine2 = _engine(tmp_path, [], d, propagate_deletes=True, sync_filters=SyncFilters(only_new=True))
+    res = engine2.run_sync(dry_run=False)
+
+    assert engine2.target.deleted == []
+    assert res["deleted_on_divelogs"] == []
+    assert len(res["uploaded_to_garmin"]) == 1
+    assert engine2.load_links() == {"1": "2", "new-1": "2"}
+
+
+def test_deletion_dry_run_reports_without_deleting(tmp_path):
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, g, d)
+    engine.run_sync(dry_run=False)
+
+    engine2 = _engine(tmp_path, [], d, propagate_deletes=True)
+    res = engine2.run_sync(dry_run=True)
+
+    assert engine2.target.deleted == []
+    assert res["deleted_on_divelogs"] == [{"id": "2", "gone_from": "garmin", "dry_run": True}]
+    assert engine2.load_links() == {"1": "2"}  # dry run touches no state
+
+
+def test_deletion_gone_on_both_sides_just_drops_the_stale_link(tmp_path):
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, g, d)
+    engine.run_sync(dry_run=False)
+
+    engine2 = _engine(tmp_path, [], [], propagate_deletes=True)
+    res = engine2.run_sync(dry_run=False)
+
+    assert engine2.source.deleted == [] and engine2.target.deleted == []
+    assert res["deleted_on_divelogs"] == [] and res["deleted_on_garmin"] == []
+    assert engine2.load_links() == {}
 
 
 def test_state_file_without_links_still_loads(tmp_path):

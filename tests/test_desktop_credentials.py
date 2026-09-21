@@ -33,6 +33,17 @@ def fake_keyring(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def isolated_preferences(tmp_path, monkeypatch):
+    """Garmin token_dir (and Subsurface/Submersion's non-secret fields) live
+    in desktop/preferences.py's plain JSON file since 2026-09-22 (D9
+    finding: too many separate keychain items), so account round-trip tests
+    now touch it too - must never be the real one (AGENTS.md/rework.md:
+    desktop tests never touch real app-data)."""
+    import desktop.preferences as prefs
+    monkeypatch.setattr(prefs, "PREFS_FILE", str(tmp_path / "desktop_prefs.json"))
+
+
 def test_has_any_credentials_initially_false(fake_keyring):
     assert creds_store.has_any_credentials() is False
 
@@ -128,9 +139,12 @@ def test_legacy_single_account_migrates_on_load(fake_keyring):
     loaded = creds_store.load_credentials_model()
     assert [a.username for a in loaded.get_garmin_accounts()] == ["diver1"]
     assert loaded.get_garmin_accounts()[0].password == "secret1"
-    # The migration is self-healing: the new list-based keys now exist, so a
-    # second load doesn't depend on the legacy keys any more.
-    assert creds_store._account_usernames("garmin") == ["diver1"]
+    assert loaded.get_garmin_accounts()[0].token_dir == "tokens/garmin"
+    # The migration is self-healing: the new consolidated item now holds it,
+    # so a second load doesn't depend on the legacy keys any more, and the
+    # (non-secret) token_dir moved into preferences.py.
+    assert creds_store._get_json("garmin_accounts") == [{"username": "diver1", "password": "secret1"}]
+    assert creds_store._get("garmin", "username") == ""
 
 
 def test_materialize_local_cache_writes_via_config_manager(fake_keyring, monkeypatch):

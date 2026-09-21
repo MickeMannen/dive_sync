@@ -145,7 +145,7 @@ def test_weight_and_visibility_mapping():
     assert dive_back_imperial.visibility == 29.5
     assert dive_back_imperial.visibility_unit == "foot"
 
-def test_matched_dives_update_fields():
+def test_matched_dives_update_fields(tmp_path):
     g_dive = UnifiedDive(
         date_time=datetime(2026, 6, 22, 12, 0, 0),
         duration=3000,
@@ -178,8 +178,8 @@ def test_matched_dives_update_fields():
         samples=[]
     )
     
-    engine = SyncEngine()
-    
+    engine = SyncEngine(settings_path=str(tmp_path / "settings.json"), credentials_path=str(tmp_path / "credentials.json"))
+
     # Mock settings loading
     from src.core.config import SettingsModel, SyncFilters
     from src.core.fields import legacy_field_links

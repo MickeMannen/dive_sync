@@ -56,6 +56,7 @@ class SyncPairModel(BaseModel):
     enabled: bool = True
     grace_window_minutes: Optional[int] = Field(None, description="Per-pair override of the matching window")
     field_links: Optional[List[FieldLink]] = Field(None, description="Per-pair board; None = the defaults for this pair")
+    propagate_deletes: Optional[bool] = Field(None, description="Per-pair override of whether a dive deleted on one side is deleted on the other (rework.md C13); None = the global default")
 
 class SettingsModel(BaseModel):
     directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
@@ -75,6 +76,18 @@ class SettingsModel(BaseModel):
     sync_pairs: List[SyncPairModel] = Field(
         default_factory=list,
         description="Named source/target pairs beyond the implicit Garmin -> Divelogs one",
+    )
+    notify_url: Optional[str] = Field(
+        None,
+        description="Webhook (ntfy / Gotify / generic) POSTed a short plain-text message when a scheduled or manual sync run fails; empty disables alerts (rework.md A11)",
+    )
+    propagate_deletes: bool = Field(
+        False,
+        description="Default for the implicit Garmin<->Divelogs pair, and the fallback for any pair without its own override: delete the linked dive on the other side when one is deleted here (rework.md C13). Only checked during a full (non-incremental) sync - an incremental run's date-limited fetch cannot tell 'deleted' apart from 'outside this run's window', so deletion detection is skipped there entirely, on or off",
+    )
+    backup_retention_count: int = Field(
+        10,
+        description="How many automatic pre-write backups (DATA_DIR/backups/<timestamp>/<service>.json, one per run, skipped in dry-run) to keep before the oldest are deleted (rework.md C14). 0 keeps none",
     )
 
 class GarminCredentials(BaseModel):
@@ -160,6 +173,14 @@ class ConfigManager:
         with open(path, "r") as f:
             try:
                 data = json.load(f)
+                if "field_links" not in data:
+                    # rework.md C12: a settings.json old enough to predate
+                    # field_links entirely gets the board it would have had
+                    # back then, not today's default - which now differs
+                    # (manual vs. prefer_non_empty) - so loading it doesn't
+                    # silently change what happens on the next sync.
+                    from src.core.fields import pre_c12_default_field_links
+                    data["field_links"] = [link.model_dump() for link in pre_c12_default_field_links()]
                 return SettingsModel.model_validate(data)
             except Exception as e:
                 logger.warning("Settings file %s could not be read (%s); using defaults for this run.", path, e)
@@ -208,6 +229,9 @@ PROFILE_SECTIONS = (
     "sync_pairs",
     "schedule",
     "cron_jobs",
+    "notify_url",
+    "propagate_deletes",
+    "backup_retention_count",
 )
 
 

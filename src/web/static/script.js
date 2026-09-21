@@ -240,6 +240,31 @@ function populateDefaults(settings) {
   $("api-cooldown").value = settings.api_cooldown_seconds;
   $("default-only-new").checked = settings.sync_filters.only_new;
   $("default-sync-gases").checked = settings.sync_filters.sync_gases;
+  $("default-propagate-deletes").checked = !!settings.propagate_deletes;
+  $("notify-url").value = settings.notify_url || "";
+}
+
+async function saveNotifyUrl() {
+  $("notify-message").textContent = "Saving…";
+  const { ok, message } = await postSettings(settingsPayload({ notify_url: $("notify-url").value.trim() }));
+  $("notify-message").textContent = message;
+  if (ok) currentSettings = await (await fetch("/api/settings")).json();
+}
+
+async function testNotifyUrl() {
+  const url = $("notify-url").value.trim();
+  if (!url) {
+    $("notify-message").textContent = "Enter a webhook URL first.";
+    return;
+  }
+  $("notify-message").textContent = "Sending test alert…";
+  const res = await fetch("/api/notify/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notify_url: url }),
+  });
+  const data = await res.json();
+  $("notify-message").textContent = data.detail || (res.ok ? "Sent." : "Failed to send.");
 }
 
 function escapeHtml(text) {
@@ -275,6 +300,7 @@ function addPairRow(pair) {
   row.innerHTML = pairRowHtml(p);
   row.dataset.links = JSON.stringify(pair?.field_links ?? null);
   row.dataset.grace = pair?.grace_window_minutes ?? "";
+  row.dataset.propagateDeletes = pair?.propagate_deletes ?? "";
   row.querySelector(".remove-row").addEventListener("click", () => row.remove());
   $("pairs-body").appendChild(row);
 }
@@ -283,6 +309,7 @@ function readPairsTable() {
   return Array.from($("pairs-body").querySelectorAll("tr")).map((row) => {
     const links = JSON.parse(row.dataset.links || "null");
     const grace = row.dataset.grace;
+    const propagateDeletes = row.dataset.propagateDeletes;
     return {
       id: row.querySelector(".p-id").value.trim(),
       source: row.querySelector(".p-source").value.trim(),
@@ -291,6 +318,7 @@ function readPairsTable() {
       enabled: row.querySelector(".p-enabled").checked,
       grace_window_minutes: grace === "" || grace === "null" ? null : parseInt(grace, 10),
       field_links: links,
+      propagate_deletes: propagateDeletes === "" || propagateDeletes === "null" ? null : propagateDeletes === "true",
     };
   });
 }
@@ -370,6 +398,7 @@ function settingsPayload(extra) {
     },
     grace_window_minutes: parseInt($("grace-window").value, 10),
     api_cooldown_seconds: parseFloat($("api-cooldown").value),
+    propagate_deletes: $("default-propagate-deletes").checked,
     schedule: (currentSettings?.schedule || []).map((s) => ({ hour: s.hour, minute: s.minute })),
     cron_jobs: readCronTable(),
     sync_pairs: readPairsTable(),
@@ -465,6 +494,7 @@ function selectPair(pairId) {
   $("board-target-name").textContent = info.target_name;
   $("pair-direction").innerHTML = optionList(directionOptionsFor(info.source, info.target), pairDirection());
   $("pair-grace").value = pairGrace();
+  $("pair-propagate-deletes").checked = pairPropagateDeletes();
   renderBoard();
   loadConflicts();
 }
@@ -478,6 +508,13 @@ function pairGrace() {
   if (board.pairId === "default") return currentSettings?.grace_window_minutes ?? 15;
   const pair = (currentSettings?.sync_pairs || []).find((p) => p.id === board.pairId);
   return pair?.grace_window_minutes ?? currentSettings?.grace_window_minutes ?? 15;
+}
+
+function pairPropagateDeletes() {
+  if (board.pairId === "default") return !!currentSettings?.propagate_deletes;
+  const pair = (currentSettings?.sync_pairs || []).find((p) => p.id === board.pairId);
+  const value = pair?.propagate_deletes;
+  return value === null || value === undefined ? !!currentSettings?.propagate_deletes : !!value;
 }
 
 function fieldLi(field) {
@@ -796,10 +833,13 @@ async function saveBoard() {
   if (board.pairId === "default") {
     $("default-directionality").value = $("pair-direction").value;
     $("grace-window").value = $("pair-grace").value;
+    $("default-propagate-deletes").checked = $("pair-propagate-deletes").checked;
     payload = settingsPayload({ field_links: board.links });
   } else {
     const pairs = readPairsTable().map((p) => (p.id === board.pairId
-      ? Object.assign(p, { field_links: board.links, directionality: $("pair-direction").value, grace_window_minutes: parseInt($("pair-grace").value, 10) || null })
+      ? Object.assign(p, { field_links: board.links, directionality: $("pair-direction").value,
+                           grace_window_minutes: parseInt($("pair-grace").value, 10) || null,
+                           propagate_deletes: $("pair-propagate-deletes").checked })
       : p));
     payload = settingsPayload({ sync_pairs: pairs });
   }
@@ -969,6 +1009,8 @@ async function init() {
   $("add-cron-job").addEventListener("click", () => addCronRow());
   $("add-pair").addEventListener("click", () => addPairRow());
   $("save-schedule").addEventListener("click", saveSchedule);
+  $("notify-save").addEventListener("click", saveNotifyUrl);
+  $("notify-test").addEventListener("click", testNotifyUrl);
 
   $("board-pair").addEventListener("change", (e) => selectPair(e.target.value));
   $("board-save").addEventListener("click", saveBoard);

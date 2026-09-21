@@ -204,8 +204,8 @@ def test_mapping_controller_board_operations(qapp, scratch_data_dir, fake_keyrin
     assert len(m.links) == 11 and not m.dirty
     m.resetToDefaults()
     assert len(m.links) == 9 and m.dirty
-    m.savePairOptions("to_divelogs", 30)
-    assert m.pairDirection == "to_divelogs" and m.pairGrace == 30
+    m.savePairOptions("to_divelogs", 30, True)
+    assert m.pairDirection == "to_divelogs" and m.pairGrace == 30 and m.pairPropagateDeletes is True
     m.applyToAll()
     state = json.load(open(scratch_data_dir / "sync_state.json"))
     assert state["full_compare_once"] is True
@@ -224,12 +224,13 @@ def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratc
     s.save("me@x.org", "pw3", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "secret", False, "")
     assert s.hasCredentials and s.garminAccounts == [{"username": "g@x", "token_dir": creds_store.DEFAULT_GARMIN_TOKEN_DIR}]
     assert s.divelogsAccounts == [{"username": "d"}] and s.subsurfaceEmail == "me@x.org" and s.message == "Saved to keychain."
-    assert s.submersionBucket == "my-bucket" and fake_keyring.store[("DiveSync", "submersion_secret_access_key")] == "secret"
+    assert s.submersionBucket == "my-bucket"
+    assert json.loads(fake_keyring.store[("DiveSync", "submersion_secret")])["secret_access_key"] == "secret"
     # keeping a blank password keeps the stored one
     s.saveGarminAccounts([{"username": "g@x", "password": "", "token_dir": ""}])
     s.save("me@x.org", "", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "", False, "")
     assert creds_store.load_credentials_model().get_garmin_accounts()[0].password == "pw"
-    assert fake_keyring.store[("DiveSync", "submersion_secret_access_key")] == "secret"
+    assert json.loads(fake_keyring.store[("DiveSync", "submersion_secret")])["secret_access_key"] == "secret"
 
     path = str(scratch_data_dir / "profile.json")
     assert s.exportProfile(path).startswith("Profile written")
@@ -309,3 +310,40 @@ def test_cleanup_on_quit_syncs_garmin_token_and_clears_materialized_files(scratc
         keyring.get_password(creds_store.SERVICE_NAME, creds_store._garmin_token_key("diver1"))
         == '{"cached": true, "refreshed": true}'
     ), "the refreshed token must be synced back to the keychain before the file is cleared"
+
+
+def test_cleanup_on_quit_still_clears_the_token_file_when_the_keychain_sync_fails(
+    scratch_data_dir, fake_keyring, monkeypatch
+):
+    """Found by hand on 2026-09-22 (rework.md D7): a real macOS keychain
+    permission re-prompt (a fresh ad-hoc-signed build re-authorizing) made
+    sync_garmin_token_from_file's keyring.set_password raise, and because it
+    shared a try block with the clear step right after it, the exception
+    silently skipped clearing the file too - leaving a real plaintext
+    Garmin token on disk with no error logged anywhere. A stale/unsynced
+    token forcing a fresh login next time is an acceptable trade against
+    that; the file must still be removed even when the sync fails."""
+    from desktop import app as desktop_app
+    from desktop import credentials as creds_store
+    from src.core.config import CredentialsModel, GarminCredentials
+    from src.core.services.garmin import safe_token_filename
+
+    token_dir = str(scratch_data_dir / "tokens" / "garmin")
+    creds_store.save_credentials_model(
+        CredentialsModel(garmin=GarminCredentials(username="diver1", password="secret1", token_dir=token_dir))
+    )
+    creds_store.materialize_local_cache()
+    os.makedirs(token_dir, exist_ok=True)
+    token_path = os.path.join(token_dir, safe_token_filename("diver1"))
+    with open(token_path, "w") as f:
+        f.write('{"cached": true}')
+    assert os.path.exists(token_path)
+
+    monkeypatch.setattr(
+        creds_store, "sync_garmin_token_from_file",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("keychain access denied")),
+    )
+
+    desktop_app.cleanup_on_quit()
+
+    assert not os.path.exists(token_path), "the token file must be removed even when syncing it back to the keychain failed"

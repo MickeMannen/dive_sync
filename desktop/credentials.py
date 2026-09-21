@@ -5,10 +5,18 @@ keeps its existing plain credentials.json unchanged (it's headless, so
 there's no OS keychain to use).
 
 Two things get keychain-backed this way: the Garmin/Divelogs
-username+password, and (see materialize_garmin_token()/
-sync_garmin_token_from_file()) the Garmin session token cache -
-`garminconnect`/garth's token file grants live API access without the
-password, so it's just as sensitive.
+username+password (and Subsurface/Submersion's), and (see
+materialize_garmin_token()/sync_garmin_token_from_file()) the Garmin session
+token cache - `garminconnect`/garth's token file grants live API access
+without the password, so it's just as sensitive. Everything else (Garmin
+token_dir, Subsurface base_url, Submersion's store config) lives in
+desktop/preferences.py's plain JSON file instead: each keychain item needs
+its own one-time macOS access approval, and a hands-on test on 2026-09-22
+(rework.md D7/D9) found that storing every individual field as its own
+keychain item multiplied that into 15-20 separate prompts for one app
+launch - most of them for values that were never secret in the first place.
+One keychain item per service that actually holds a secret keeps that down
+to a handful.
 
 src.core (SyncEngine, dive_cache, GarminAdapter, ...) only knows how to read
 plain files, so keychain-sourced secrets are materialized into the
@@ -30,6 +38,7 @@ from typing import List
 
 import keyring
 
+from desktop import preferences
 from desktop.paths import data_dir
 from src.core.services.garmin import safe_account_id, safe_token_filename
 
@@ -64,16 +73,35 @@ def _set(service: str, field: str, value: str) -> None:
         pass
 
 
-# --- multi-account storage (rework.md E7) ---------------------------------
-#
-# A service's account usernames live as a JSON array under one keychain
-# entry ("garmin_usernames" / "divelogs_usernames"); each account's own
-# fields live under a key scoped by safe_account_id(username) so usernames
-# with odd characters (dots, @, ...) stay valid keyring key material - the
-# same sanitizer the Garmin token cache filename uses, so both stay in sync
-# by construction rather than by convention.
+def _get_json(key: str):
+    raw = keyring.get_password(SERVICE_NAME, key)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
-def _account_usernames(service: str) -> List[str]:
+
+def _set_json(key: str, value) -> None:
+    if value:
+        keyring.set_password(SERVICE_NAME, key, json.dumps(value))
+        return
+    try:
+        keyring.delete_password(SERVICE_NAME, key)
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
+# --- accounts: one keychain item per service, holding every account -------
+
+def _account_usernames_pre_consolidation(service: str) -> List[str]:
+    """The rework.md E7 scheme (2026-09-22, same day, superseded a few hours
+    later by the one-item-per-service scheme below): one keychain item per
+    *field per account* (``account_<id>_password``, ``account_<id>_token_dir``
+    ...), indexed by a separate ``<service>_usernames`` list item. Only used
+    here to migrate any keychain that happened to pick this scheme up during
+    that window."""
     raw = _get(service, "usernames")
     if not raw:
         return []
@@ -83,124 +111,190 @@ def _account_usernames(service: str) -> List[str]:
         return []
 
 
-def _set_account_usernames(service: str, usernames: List[str]) -> None:
-    _set(service, "usernames", json.dumps(usernames) if usernames else "")
-
-
 def _account_field(service: str, username: str, field: str) -> str:
     return f"account_{safe_account_id(username)}_{field}"
 
 
-def _migrate_legacy_single_account(service: str) -> List[str]:
-    """One-time upgrade path: before E7, each service kept exactly one
-    account under a bare "<service>_username"/"<service>_password" key. If
-    that's all that's there, adopt it into the new list-of-accounts scheme
-    (and clear the old keys) instead of the account silently disappearing
-    the first time this runs post-upgrade."""
-    legacy_username = _get(service, "username")
-    if not legacy_username:
+def _migrate_from_pre_consolidation_scheme(service: str) -> List[dict]:
+    usernames = _account_usernames_pre_consolidation(service)
+    if not usernames:
         return []
-    _set(service, _account_field(service, legacy_username, "password"), _get(service, "password"))
+    accounts = []
+    for username in usernames:
+        account = {"username": username, "password": _get(service, _account_field(service, username, "password"))}
+        accounts.append(account)
+        if service == "garmin":
+            token_dir = _get(service, _account_field(service, username, "token_dir"))
+            if token_dir:
+                preferences.set_garmin_token_dir(username, token_dir)
+        _set(service, _account_field(service, username, "password"), "")
+        if service == "garmin":
+            _set(service, _account_field(service, username, "token_dir"), "")
+    _set(service, "usernames", "")
+    return accounts
+
+
+def _migrate_from_legacy_single_account_scheme(service: str) -> List[dict]:
+    """Before E7 (also 2026-09-22, earlier the same day): exactly one
+    account under a bare "<service>_username"/"<service>_password" key."""
+    username = _get(service, "username")
+    if not username:
+        return []
+    account = {"username": username, "password": _get(service, "password")}
     if service == "garmin":
-        _set(service, _account_field(service, legacy_username, "token_dir"), _get(service, "token_dir") or DEFAULT_GARMIN_TOKEN_DIR)
-    _set_account_usernames(service, [legacy_username])
+        token_dir = _get(service, "token_dir")
+        if token_dir:
+            preferences.set_garmin_token_dir(username, token_dir)
     _set(service, "username", "")
     _set(service, "password", "")
     if service == "garmin":
         _set(service, "token_dir", "")
-    return [legacy_username]
+    return [account]
+
+
+def _load_raw_accounts(service: str) -> List[dict]:
+    """A list of ``{"username", "password"}`` dicts, from whichever
+    generation of storage this keychain happens to have - self-healing: a
+    migration is immediately written back in the new scheme and the old
+    keys are cleared, so this only runs once per keychain."""
+    accounts = _get_json(f"{service}_accounts")
+    if accounts:
+        return accounts
+    migrated = _migrate_from_pre_consolidation_scheme(service) or _migrate_from_legacy_single_account_scheme(service)
+    if migrated:
+        _set_json(f"{service}_accounts", migrated)
+    return migrated
 
 
 def _load_accounts(service: str, cls):
-    usernames = _account_usernames(service) or _migrate_legacy_single_account(service)
     accounts = []
-    for username in usernames:
-        kwargs = {"username": username, "password": _get(service, _account_field(service, username, "password"))}
+    for entry in _load_raw_accounts(service):
+        kwargs = {"username": entry.get("username", ""), "password": entry.get("password", "")}
         if service == "garmin":
-            kwargs["token_dir"] = _get(service, _account_field(service, username, "token_dir")) or DEFAULT_GARMIN_TOKEN_DIR
+            kwargs["token_dir"] = preferences.get_garmin_token_dir(kwargs["username"], DEFAULT_GARMIN_TOKEN_DIR)
         accounts.append(cls(**kwargs))
     return accounts
 
 
 def _save_accounts(service: str, accounts) -> None:
-    """Full replace: accounts not present in ``accounts`` are dropped from
-    the keychain, same semantics as the status page's credentials form. An
-    account with a blank password whose username already had one stored
-    keeps that stored password (same rationale as save_credentials in
-    src/web/app.py: adding/removing one account shouldn't force retyping
-    every other account's password)."""
-    previous = set(_account_usernames(service))
-    new_usernames = [a.username for a in accounts if a.username]
-    for username in previous - set(new_usernames):
-        _set(service, _account_field(service, username, "password"), "")
-        if service == "garmin":
-            _set(service, _account_field(service, username, "token_dir"), "")
+    """Full replace: accounts not present in ``accounts`` are dropped, same
+    semantics as the status page's credentials form. An account with a
+    blank password whose username already had one stored keeps that stored
+    password (same rationale as save_credentials in src/web/app.py: adding/
+    removing one account shouldn't force retyping every other account's
+    password). Garmin's token_dir is non-secret and lives in preferences.py,
+    not here."""
+    previous = {a.get("username"): a for a in _load_raw_accounts(service)}
+    saved = []
     for account in accounts:
         if not account.username:
             continue
-        password = account.password or (_get(service, _account_field(service, account.username, "password")) if account.username in previous else "")
-        _set(service, _account_field(service, account.username, "password"), password)
+        password = account.password or previous.get(account.username, {}).get("password", "")
+        saved.append({"username": account.username, "password": password})
         if service == "garmin":
-            _set(service, _account_field(service, account.username, "token_dir"), account.token_dir or DEFAULT_GARMIN_TOKEN_DIR)
-    _set_account_usernames(service, new_usernames)
+            preferences.set_garmin_token_dir(account.username, account.token_dir or DEFAULT_GARMIN_TOKEN_DIR)
+    kept_usernames = {a["username"] for a in saved}
+    if service == "garmin":
+        for username in set(previous) - kept_usernames:
+            preferences.set_garmin_token_dir(username, "")
+    _set_json(f"{service}_accounts", saved)
 
 
 def load_credentials_model():
     from src.core.config import CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials
 
+    subsurface = _get_json("subsurface")
+    if subsurface is None:
+        subsurface = {}
+        email = _get("subsurface", "email")
+        if email:
+            subsurface = {"email": email, "password": _get("subsurface", "password")}
+            base_url = _get("subsurface", "base_url")
+            if base_url:
+                preferences.set_subsurface_base_url(base_url)
+            _set("subsurface", "email", "")
+            _set("subsurface", "password", "")
+            _set("subsurface", "base_url", "")
+            _set_json("subsurface", subsurface)
+
+    submersion_secret = _get_json("submersion_secret")
+    submersion_config = preferences.get_submersion_config()
+    if submersion_secret is None and not submersion_config:
+        # Legacy flat scheme (pre-consolidation): every field its own item.
+        access_key_id = _get("submersion", "access_key_id")
+        secret_access_key = _get("submersion", "secret_access_key")
+        non_secret = {field: _get("submersion", field) for field in preferences.SUBMERSION_NON_SECRET_FIELDS}
+        if access_key_id or secret_access_key or any(non_secret.values()):
+            submersion_secret = {"access_key_id": access_key_id, "secret_access_key": secret_access_key}
+            preferences.set_submersion_config(**{k: v for k, v in non_secret.items() if v})
+            submersion_config = preferences.get_submersion_config()
+            for field in ("access_key_id", "secret_access_key", *preferences.SUBMERSION_NON_SECRET_FIELDS):
+                _set("submersion", field, "")
+            _set_json("submersion_secret", submersion_secret)
+    submersion_secret = submersion_secret or {}
+
     return CredentialsModel(
         garmin=_load_accounts("garmin", GarminCredentials),
         divelogs=_load_accounts("divelogs", DivelogsCredentials),
         subsurface=SubsurfaceCredentials(
-            email=_get("subsurface", "email"),
-            password=_get("subsurface", "password"),
-            base_url=_get("subsurface", "base_url") or SubsurfaceCredentials().base_url,
+            email=subsurface.get("email", ""),
+            password=subsurface.get("password", ""),
+            base_url=preferences.get_subsurface_base_url(SubsurfaceCredentials().base_url),
         ),
         submersion=SubmersionCredentials(
-            store_type=_get("submersion", "store_type") or SubmersionCredentials().store_type,
-            endpoint_url=_get("submersion", "endpoint_url"),
-            region=_get("submersion", "region"),
-            bucket=_get("submersion", "bucket"),
-            prefix=_get("submersion", "prefix") or SubmersionCredentials().prefix,
-            access_key_id=_get("submersion", "access_key_id"),
-            secret_access_key=_get("submersion", "secret_access_key"),
-            path_style=bool(_get("submersion", "path_style")),
-            folder_path=_get("submersion", "folder_path"),
+            store_type=submersion_config.get("store_type") or SubmersionCredentials().store_type,
+            endpoint_url=submersion_config.get("endpoint_url", ""),
+            region=submersion_config.get("region", ""),
+            bucket=submersion_config.get("bucket", ""),
+            prefix=submersion_config.get("prefix") or SubmersionCredentials().prefix,
+            access_key_id=submersion_secret.get("access_key_id", ""),
+            secret_access_key=submersion_secret.get("secret_access_key", ""),
+            path_style=bool(submersion_config.get("path_style")),
+            folder_path=submersion_config.get("folder_path", ""),
         ),
     )
+
+
+def save_subsurface_credentials(subsurface) -> None:
+    """``subsurface`` is a ``SubsurfaceCredentials`` (or None to clear)."""
+    if subsurface and subsurface.email:
+        _set_json("subsurface", {"email": subsurface.email, "password": subsurface.password})
+        preferences.set_subsurface_base_url(subsurface.base_url)
+    else:
+        _set_json("subsurface", None)
+
+
+def save_submersion_credentials(submersion) -> None:
+    """``submersion`` is a ``SubmersionCredentials`` (or None to clear)."""
+    if submersion and submersion.configured:
+        _set_json("submersion_secret", {
+            "access_key_id": submersion.access_key_id,
+            "secret_access_key": submersion.secret_access_key,
+        })
+        preferences.set_submersion_config(
+            store_type=submersion.store_type, endpoint_url=submersion.endpoint_url, region=submersion.region,
+            bucket=submersion.bucket, prefix=submersion.prefix, path_style=submersion.path_style,
+            folder_path=submersion.folder_path,
+        )
+    else:
+        _set_json("submersion_secret", None)
 
 
 def save_credentials_model(model) -> None:
     _save_accounts("garmin", model.get_garmin_accounts())
     _save_accounts("divelogs", model.get_divelogs_accounts())
-    subsurface = getattr(model, "subsurface", None)
-    _set("subsurface", "email", subsurface.email if subsurface else "")
-    _set("subsurface", "password", subsurface.password if subsurface else "")
-    _set("subsurface", "base_url", subsurface.base_url if subsurface and subsurface.email else "")
-
-    submersion = getattr(model, "submersion", None)
-    _set("submersion", "store_type", submersion.store_type if submersion else "")
-    _set("submersion", "endpoint_url", submersion.endpoint_url if submersion else "")
-    _set("submersion", "region", submersion.region if submersion else "")
-    _set("submersion", "bucket", submersion.bucket if submersion else "")
-    _set("submersion", "prefix", submersion.prefix if submersion else "")
-    _set("submersion", "access_key_id", submersion.access_key_id if submersion else "")
-    _set("submersion", "secret_access_key", submersion.secret_access_key if submersion else "")
-    _set("submersion", "path_style", "1" if (submersion and submersion.path_style) else "")
-    _set("submersion", "folder_path", submersion.folder_path if submersion else "")
-
+    save_subsurface_credentials(getattr(model, "subsurface", None))
+    save_submersion_credentials(getattr(model, "submersion", None))
     logger.info("Credentials saved to OS keychain.")
 
 
 def has_any_credentials() -> bool:
+    model = load_credentials_model()
     return bool(
-        _account_usernames("garmin")
-        or _account_usernames("divelogs")
-        or _get("garmin", "username")    # pre-E7 single account, not yet migrated
-        or _get("divelogs", "username")
-        or _get("subsurface", "email")
-        or _get("submersion", "bucket")
-        or _get("submersion", "folder_path")
+        model.get_garmin_accounts()
+        or model.get_divelogs_accounts()
+        or model.subsurface.configured
+        or model.submersion.configured
     )
 
 

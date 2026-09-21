@@ -140,6 +140,13 @@ class MappingController(QObject):
         return pair.grace_window_minutes if pair and pair.grace_window_minutes is not None else self._settings.grace_window_minutes
 
     @Property(bool, notify=boardChanged)
+    def pairPropagateDeletes(self) -> bool:
+        if self._pair_id == "default":
+            return self._settings.propagate_deletes
+        pair = self._settings_pair()
+        return pair.propagate_deletes if pair and pair.propagate_deletes is not None else self._settings.propagate_deletes
+
+    @Property(bool, notify=boardChanged)
     def dirty(self) -> bool:
         return self._links != self._saved
 
@@ -414,17 +421,19 @@ class MappingController(QObject):
             self.askApplyToAll.emit()
         return ""
 
-    @Slot(str, int)
-    def savePairOptions(self, direction: str, grace: int) -> None:
+    @Slot(str, int, bool)
+    def savePairOptions(self, direction: str, grace: int, propagate_deletes: bool) -> None:
         settings = ConfigManager.load_settings()
         if self._pair_id == "default":
             settings.directionality = direction
             settings.grace_window_minutes = grace
+            settings.propagate_deletes = propagate_deletes
         else:
             for pair in settings.sync_pairs:
                 if pair.id == self._pair_id:
                     pair.directionality = direction
                     pair.grace_window_minutes = grace
+                    pair.propagate_deletes = propagate_deletes
         ConfigManager.save_settings(settings)
         self._settings = settings
         self.boardChanged.emit()

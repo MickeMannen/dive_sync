@@ -449,22 +449,53 @@ MATCH_KEY_MAX_HOURS = 24  # a match-key hit only counts when the dives start wit
 
 def common_default_links(source_id: str, target_id: str, match_on_dive_number: bool = True) -> List[FieldLink]:
     """The shipped links every pair starts with, on the unified fields both
-    services have. Scalar fields use ``prefer_non_empty`` (decided
-    2026-09-21 after the live baseline): a blank side is filled from the
-    other, a real conflict is left alone and logged, nothing is ever wiped.
-    ``tanks`` is ``prefer_source`` (decided 2026-09-22): it is a one-way
-    structural link already (``to_target``), so this mirrors whichever side
-    is the dive computer / source of truth for gas data (Garmin in every
-    pair configured so far) whenever that side has tank data, which fixes
-    the case where a target already had *some* (stale) tanks and
-    ``prefer_non_empty`` refused to update them. A source with no tank data
-    at all (a manually created Garmin dive) still never blanks a target
-    that has real tank data. ``samples`` stays fill-only for now. The dive-number
-    link is a match key only where both services let the user set the
-    number."""
+    services have. Scalar fields use ``manual`` (decided 2026-09-20, flipped
+    from the interim ``prefer_non_empty`` on 2026-09-21 per rework.md C12
+    once the conflict queue had been used for real): a blank side is still
+    filled from the other for free, but a real conflict (both sides non-empty
+    and different) is queued in the Conflicts view instead of being silently
+    left alone - ``manual`` and ``prefer_non_empty`` behave identically
+    except for that one case (see ``SyncEngine._apply_link``). ``samples``
+    stays ``prefer_non_empty``: a depth/temperature profile "conflict" is
+    hundreds of points, not something a person can usefully arbitrate one
+    value at a time in the Conflicts UI. ``tanks`` is ``prefer_source``
+    (decided 2026-09-22): it is a one-way structural link already
+    (``to_target``), so this mirrors whichever side is the dive computer /
+    source of truth for gas data (Garmin in every pair configured so far)
+    whenever that side has tank data, which fixes the case where a target
+    already had *some* (stale) tanks and ``prefer_non_empty`` refused to
+    update them. A source with no tank data at all (a manually created
+    Garmin dive) still never blanks a target that has real tank data. The
+    dive-number link is a match key only where both services let the user
+    set the number."""
     s, t = source_id, target_id
-    fill = "prefer_non_empty"
+    ask = "manual"
     links = [
+        FieldLink(id="buddy", source=[f"{s}.buddy"], target=f"{t}.buddy", conflict=ask),
+        FieldLink(id="notes", source=[f"{s}.notes"], target=f"{t}.notes", conflict=ask),
+        FieldLink(id="weight", source=[f"{s}.weight"], target=f"{t}.weight", conflict=ask),
+        FieldLink(id="visibility", source=[f"{s}.visibility"], target=f"{t}.visibility", conflict=ask),
+        FieldLink(id="gps", source=[f"{s}.gps"], target=f"{t}.gps", conflict=ask),
+        FieldLink(id="samples", source=[f"{s}.samples"], target=f"{t}.samples", direction="to_target", conflict="prefer_non_empty"),
+        FieldLink(id="tanks", source=[f"{s}.tanks"], target=f"{t}.tanks", direction="to_target", conflict="prefer_source"),
+    ]
+    if match_on_dive_number:
+        links.append(FieldLink(id="dive_number", source=[f"{s}.dive_number"], target=f"{t}.dive_number",
+                               direction="off", match_order=1))
+    return links
+
+
+def pre_c12_default_field_links() -> List[FieldLink]:
+    """Frozen snapshot of ``default_field_links()`` as it was before C12
+    flipped scalar fields from ``prefer_non_empty`` to ``manual`` - do not
+    edit to match future changes. Used only by
+    ``ConfigManager.load_settings`` to migrate a settings.json old enough to
+    have no ``field_links`` key at all: such a file gets *this* board rather
+    than picking up the new default and silently changing behaviour underfoot
+    (rework.md C12)."""
+    s, t = "garmin", "divelogs"
+    fill = "prefer_non_empty"
+    return [
         FieldLink(id="buddy", source=[f"{s}.buddy"], target=f"{t}.buddy", conflict=fill),
         FieldLink(id="notes", source=[f"{s}.notes"], target=f"{t}.notes", conflict=fill),
         FieldLink(id="weight", source=[f"{s}.weight"], target=f"{t}.weight", conflict=fill),
@@ -472,11 +503,16 @@ def common_default_links(source_id: str, target_id: str, match_on_dive_number: b
         FieldLink(id="gps", source=[f"{s}.gps"], target=f"{t}.gps", conflict=fill),
         FieldLink(id="samples", source=[f"{s}.samples"], target=f"{t}.samples", direction="to_target", conflict=fill),
         FieldLink(id="tanks", source=[f"{s}.tanks"], target=f"{t}.tanks", direction="to_target", conflict="prefer_source"),
+        FieldLink(id="site", source=["garmin.locationName"], target="divelogs.divesite", conflict=fill),
+        FieldLink(
+            id="activity_name",
+            source=["divelogs.location", "divelogs.divesite"],
+            target="garmin.activityName",
+            direction="to_target",
+            conflict=fill,
+            template="{divelogs.location}, {divelogs.divesite}",
+        ),
     ]
-    if match_on_dive_number:
-        links.append(FieldLink(id="dive_number", source=[f"{s}.dive_number"], target=f"{t}.dive_number",
-                               direction="off", match_order=1))
-    return links
 
 
 def legacy_field_links() -> List[FieldLink]:
@@ -499,29 +535,32 @@ def legacy_field_links() -> List[FieldLink]:
 
 
 def default_field_links() -> List[FieldLink]:
-    """Default board for the Garmin -> Divelogs pair (decided 2026-09-21).
+    """Default board for the Garmin -> Divelogs pair (decided 2026-09-21;
+    conflict policy flipped to ``manual`` 2026-09-21 per C12 - see
+    ``common_default_links`` for why).
 
     Divelogs numbers dives itself from date and time, so dive numbers are
     neither a match key nor synced on this pair. Site names: Garmin's
     ``locationName`` and Divelogs' ``divesite`` are the same thing and sync
     both ways; Garmin's ``activityName`` (the title) is built from the
-    Divelogs region and site for new dives (``prefer_non_empty`` means an
-    existing title is never replaced). Divelogs' ``location`` (region) has no
-    Garmin counterpart and is left alone."""
+    Divelogs region and site for new dives (``manual`` still never replaces
+    an existing title on its own - a real difference is queued as a
+    conflict rather than either overwritten or silently ignored). Divelogs'
+    ``location`` (region) has no Garmin counterpart and is left alone."""
     links = common_default_links("garmin", "divelogs", match_on_dive_number=False)
     links.extend([
         FieldLink(
             id="site",
             source=["garmin.locationName"],
             target="divelogs.divesite",
-            conflict="prefer_non_empty",
+            conflict="manual",
         ),
         FieldLink(
             id="activity_name",
             source=["divelogs.location", "divelogs.divesite"],
             target="garmin.activityName",
             direction="to_target",
-            conflict="prefer_non_empty",
+            conflict="manual",
             template="{divelogs.location}, {divelogs.divesite}",
         ),
     ])

@@ -41,7 +41,17 @@ ColumnLayout {
                 }
             }
             LabeledField { id: graceField; label: "Grace window (min)"; fieldWidth: 90; text: String(mappingController.pairGrace) }
-            Button { text: "Save pair options"; onClicked: mappingController.savePairOptions(dirBox.currentValue, parseInt(graceField.text) || 0) }
+            ColumnLayout {
+                spacing: 2
+                Text { text: " "; color: Theme.muted; font.pixelSize: 11 }
+                CheckBox {
+                    id: propagateDeletesBox
+                    text: "Propagate deletes"
+                    checked: mappingController.pairPropagateDeletes
+                    Connections { target: mappingController; function onBoardChanged() { propagateDeletesBox.checked = mappingController.pairPropagateDeletes } }
+                }
+            }
+            Button { text: "Save pair options"; onClicked: mappingController.savePairOptions(dirBox.currentValue, parseInt(graceField.text) || 0, propagateDeletesBox.checked) }
             Text { text: mappingController.matchKeys; color: Theme.muted; font.pixelSize: 11 }
         }
 

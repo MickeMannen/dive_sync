@@ -88,12 +88,16 @@ class SettingsSchema(BaseModel):
     sync_filters: SyncFiltersSchema
     grace_window_minutes: int
     api_cooldown_seconds: float
+    propagate_deletes: bool = False
     schedule: List[Dict[str, int]]
     cron_jobs: List[CronJobSchema] = []
     # Omitted (None) keeps the board / pairs currently on disk, so a settings
     # form that does not know about them cannot wipe them.
     field_links: Optional[List[FieldLink]] = None
     sync_pairs: Optional[List[SyncPairModel]] = None
+    # Same omitted-keeps-current rule; an explicit "" (an emptied form field,
+    # as opposed to a missing key) disables alerts.
+    notify_url: Optional[str] = None
 
 class SyncTriggerRequest(BaseModel):
     dry_run: bool = False
@@ -171,11 +175,13 @@ def save_settings(data: SettingsSchema):
             ),
             grace_window_minutes=data.grace_window_minutes,
             api_cooldown_seconds=data.api_cooldown_seconds,
+            propagate_deletes=data.propagate_deletes,
             schedule=schedule_slots,
             cron_jobs=cron_jobs,
             field_links=field_links,
             sync_pairs=data.sync_pairs if data.sync_pairs is not None else current.sync_pairs,
             garmin_timezone=current.garmin_timezone,
+            notify_url=data.notify_url if data.notify_url is not None else current.notify_url,
         )
         ConfigManager.save_settings(settings)
         logger.info("Schedule configuration updated successfully.")
@@ -503,6 +509,19 @@ def get_status():
         "last_results": scheduler.last_sync_results,
         "next_scheduled_run": scheduler.get_next_scheduled_run(settings)
     }
+
+class NotifyTestRequest(BaseModel):
+    notify_url: str
+
+
+@app.post("/api/notify/test")
+def test_notify(data: NotifyTestRequest):
+    """Send a real test alert to the given URL, without saving it (rework.md
+    A11) - lets the status page's Test button check a URL before Save."""
+    from src.core.notify import send_notification
+    ok, detail = send_notification(data.notify_url, "Dive Sync", "This is a test alert from Dive Sync.")
+    return {"ok": ok, "detail": detail}
+
 
 @app.get("/api/logs/stream")
 def stream_logs():

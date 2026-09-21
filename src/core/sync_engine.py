@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import shutil
 import time
 from datetime import datetime, timedelta
 from typing import List, Tuple, Dict, Any, Optional, Set
@@ -349,6 +350,43 @@ class SyncEngine:
         
         return True
 
+    def _write_pre_sync_backup(self, source_dives: List[UnifiedDive], target_dives: List[UnifiedDive]) -> None:
+        """DATA_DIR/backups/<timestamp>/<service_id>.json snapshot of what a
+        sync run just fetched, written before any add/update/delete this run
+        might make (rework.md C14) - a safety net independent of the CLI
+        --backup flow (``backup()`` above), which the user has to remember to
+        run. Reuses the same ``UnifiedDive`` JSON shape. Best-effort: a
+        failure here must never abort the sync it's protecting."""
+        try:
+            # Anchored to the state file's own directory rather than reading
+            # DATA_DIR directly - self.state_file is already resolved
+            # correctly for every construction path (settings_path-relative,
+            # mock_data_dir, or DATA_DIR for a real deployment), so this
+            # follows wherever this particular engine instance's data
+            # actually lives instead of assuming the process-wide default.
+            backups_root = os.path.join(os.path.dirname(self.state_file) or ".", "backups")
+            backup_dir = os.path.join(backups_root, datetime.now().strftime("%Y%m%dT%H%M%S%f"))
+            os.makedirs(backup_dir, exist_ok=True)
+            for service_id, dives in ((self.source_id, source_dives), (self.target_id, target_dives)):
+                with open(os.path.join(backup_dir, f"{service_id}.json"), "w") as f:
+                    json.dump([d.model_dump(mode="json") for d in dives], f, indent=2)
+            logger.info("Pre-sync backup saved to %s", backup_dir)
+            self._prune_old_backups(backups_root)
+        except Exception as e:
+            logger.warning("Pre-sync backup failed (continuing without it): %s", e)
+
+    def _prune_old_backups(self, backups_root: str) -> None:
+        keep = max(0, self.settings.backup_retention_count)
+        try:
+            entries = sorted(
+                d for d in os.listdir(backups_root) if os.path.isdir(os.path.join(backups_root, d))
+            )
+        except FileNotFoundError:
+            return
+        stale = entries if keep == 0 else entries[:-keep]
+        for name in stale:
+            shutil.rmtree(os.path.join(backups_root, name), ignore_errors=True)
+
     # ------------------------------------------------------------------
     # Field links
     # ------------------------------------------------------------------
@@ -592,7 +630,8 @@ class SyncEngine:
                  date_to_override: Optional[str] = None, only_new_override: Optional[bool] = None,
                  direction_override: Optional[str] = None, sync_gases_override: Optional[bool] = None,
                  field_links_override: Optional[List[FieldLink]] = None,
-                 grace_window_override: Optional[int] = None) -> Dict[str, Any]:
+                 grace_window_override: Optional[int] = None,
+                 propagate_deletes_override: Optional[bool] = None) -> Dict[str, Any]:
         """Perform bidirectional or directional synchronization.
 
         Settings are re-read from disk at the start of every run; per-run
@@ -618,6 +657,8 @@ class SyncEngine:
             self.settings.field_links = list(field_links_override)
         if grace_window_override is not None:
             self.settings.grace_window_minutes = grace_window_override
+        if propagate_deletes_override is not None:
+            self.settings.propagate_deletes = propagate_deletes_override
 
         for adapter in (self.source, self.target):
             if hasattr(adapter, "upload_timezone") and self.settings.garmin_timezone:
@@ -667,8 +708,67 @@ class SyncEngine:
         source_dives = self.source.fetch_dives(date_from=date_from, date_to=date_to)
         target_dives = self.target.fetch_dives(date_from=date_from, date_to=date_to)
 
-        # Match dives (known pairs from earlier runs count as tier 1)
+        # Automatic pre-write backup (rework.md C14): a snapshot of exactly
+        # what was just fetched, before any add/update/delete this run might
+        # make. Independent of the CLI --backup flow (SyncEngine.backup);
+        # best-effort and never blocks the sync itself.
+        if not dry_run:
+            self._write_pre_sync_backup(source_dives, target_dives)
+
+        # Deletion propagation (rework.md C13). Only ever checked on a full
+        # (non-incremental) sync: an incremental run's date-limited fetch
+        # cannot tell "deleted" apart from "outside this run's window" - a
+        # dive from months ago simply isn't in the fetch either way - so
+        # there is no reliable signal to act on here on an incremental run.
+        # Must run before match_dives(): a dive whose linked partner just got
+        # deleted looks, to the matcher, exactly like a brand new unmatched
+        # dive, and would otherwise be uploaded right back to the side it was
+        # just deleted from in this same run.
+        src, tgt = self.source_id, self.target_id
         known_links = self.load_links()
+        deleted_entries: Dict[str, List[Dict[str, Any]]] = {f"deleted_on_{tgt}": [], f"deleted_on_{src}": []}
+        if not self.settings.sync_filters.only_new:
+            fetched_source_ids = {str(d.external_ids[src]) for d in source_dives if d.external_ids.get(src)}
+            fetched_target_ids = {str(d.external_ids[tgt]) for d in target_dives if d.external_ids.get(tgt)}
+            for a_id, b_id in list(known_links.items()):
+                source_gone = a_id not in fetched_source_ids
+                target_gone = b_id not in fetched_target_ids
+                if not source_gone and not target_gone:
+                    continue
+                if source_gone and target_gone:
+                    # Gone on both sides already; nothing to propagate, just
+                    # stop remembering a pair that no longer exists anywhere.
+                    known_links.pop(a_id, None)
+                    continue
+                gone_side, gone_name = (src, self.source_name) if source_gone else (tgt, self.target_name)
+                surviving_side, surviving_adapter, surviving_dives, stale_id = (
+                    (tgt, self.target, target_dives, b_id) if source_gone
+                    else (src, self.source, source_dives, a_id)
+                )
+                if not self.settings.propagate_deletes:
+                    logger.info("  Dive %s is gone from %s; propagate_deletes is off for this pair, so %s ID %s "
+                               "will be treated as a new unmatched dive (likely re-uploaded to %s)",
+                               stale_id, gone_name, surviving_side, stale_id, gone_name)
+                    continue
+                logger.info("  Dive %s is gone from %s; propagate_deletes is on -> deleting %s ID %s",
+                           stale_id, gone_name, surviving_side, stale_id)
+                entry = {"id": stale_id, "gone_from": gone_side}
+                if not dry_run:
+                    if surviving_adapter.delete_dive(stale_id):
+                        deleted_entries[f"deleted_on_{surviving_side}"].append(entry)
+                    else:
+                        logger.warning("  Failed to delete %s ID %s on %s", surviving_side, stale_id, surviving_side)
+                        continue
+                else:
+                    entry["dry_run"] = True
+                    deleted_entries[f"deleted_on_{surviving_side}"].append(entry)
+                # Either deleted for real, or a dry run standing in for it:
+                # drop the link and keep the dive out of this run's matching
+                # so it isn't also reported as a new unmatched upload.
+                known_links.pop(a_id, None)
+                surviving_dives[:] = [d for d in surviving_dives if str(d.external_ids.get(surviving_side)) != stale_id]
+
+        # Match dives (known pairs from earlier runs count as tier 1)
         matched_pairs, unique_source, unique_target = self.match_dives(source_dives, target_dives, known_links)
         for a_dive, b_dive in matched_pairs:
             a_id, b_id = a_dive.external_ids.get(self.source_id), b_dive.external_ids.get(self.target_id)
@@ -678,7 +778,6 @@ class SyncEngine:
         logger.info("Match results: %d matched pairs, %d only in %s, %d only in %s",
                     len(matched_pairs), len(unique_source), self.source_name, len(unique_target), self.target_name)
 
-        src, tgt = self.source_id, self.target_id
         sync_results: Dict[str, Any] = {
             "dry_run": dry_run,
             "directionality": self.settings.directionality,
@@ -689,6 +788,7 @@ class SyncEngine:
             f"uploaded_to_{src}": [],
             f"updated_on_{tgt}": [],
             f"updated_on_{src}": [],
+            **deleted_entries,
             "skipped": []
         }
 
@@ -1045,7 +1145,6 @@ class SyncEngine:
         divelogs_dir = os.path.join(mock_data_dir, self.divelogs_dir_name)
 
         if overwrite:
-            import shutil
             if include_garmin and os.path.exists(garmin_dir):
                 logger.info("Overwriting existing data. Clearing directory: %s", garmin_dir)
                 shutil.rmtree(garmin_dir)

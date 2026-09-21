@@ -29,6 +29,55 @@ def test_run_sync_thread_records_error(monkeypatch):
     assert scheduler.last_sync_results["Manual"] == {"error": "kaboom"}
 
 
+def test_run_sync_thread_sends_failure_alert_when_notify_url_set(monkeypatch, tmp_path):
+    from src.core.sync_engine import SyncEngine
+    from src.core.config import ConfigManager
+    from src.core import notify
+
+    def boom(self, dry_run=False):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(SyncEngine, "run_sync", boom)
+    monkeypatch.setattr(ConfigManager, "load_settings", lambda path=None: SettingsModel(notify_url="https://ntfy.sh/mytopic"))
+    calls = []
+    monkeypatch.setattr(notify, "notify_run_failure", lambda url, job_id, error: calls.append((url, job_id, error)))
+
+    scheduler.run_sync_thread(dry_run=False)
+
+    assert calls == [("https://ntfy.sh/mytopic", "Manual", "kaboom")]
+
+
+def test_run_sync_thread_skips_alert_when_notify_url_unset(monkeypatch):
+    from src.core.sync_engine import SyncEngine
+    from src.core.config import ConfigManager
+    from src.core import notify
+
+    def boom(self, dry_run=False):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(SyncEngine, "run_sync", boom)
+    monkeypatch.setattr(ConfigManager, "load_settings", lambda path=None: SettingsModel())
+    calls = []
+    monkeypatch.setattr(notify, "notify_run_failure", lambda *a: calls.append(a))
+
+    scheduler.run_sync_thread(dry_run=False)
+
+    assert calls == []
+
+
+def test_run_sync_thread_success_sends_no_alert(monkeypatch):
+    from src.core.sync_engine import SyncEngine
+    from src.core import notify
+
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False: {"status": "ok"})
+    calls = []
+    monkeypatch.setattr(notify, "notify_run_failure", lambda *a: calls.append(a))
+
+    scheduler.run_sync_thread(dry_run=True)
+
+    assert calls == []
+
+
 def test_run_sync_thread_keys_results_by_job_id(monkeypatch):
     from src.core.sync_engine import SyncEngine
 

@@ -10,6 +10,7 @@ conflicts_*.json
 /tests/data/divelogs/
 /initial_prompt.txt
 /docker.txt
+/rework.md
 
 # Python
 __pycache__/

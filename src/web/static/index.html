@@ -52,6 +52,7 @@
         <label>Pair <select id="board-pair"></select></label>
         <label>Direction <select id="pair-direction"></select></label>
         <label>Grace window (min) <input type="number" id="pair-grace" min="0"></label>
+        <label class="inline-checkbox"><input type="checkbox" id="pair-propagate-deletes"> Propagate deletes</label>
         <span class="muted" id="board-matchkeys"></span>
       </div>
       <div class="board" id="board">
@@ -197,7 +198,22 @@
         <label>API cooldown (sec) <input type="number" step="0.1" id="api-cooldown" min="0"></label>
         <label><input type="checkbox" id="default-only-new"> Only new dives</label>
         <label><input type="checkbox" id="default-sync-gases"> Sync gases</label>
+        <label><input type="checkbox" id="default-propagate-deletes"> Propagate deletes</label>
       </form>
+      <p class="muted">Propagate deletes: delete the linked dive on the other side when one is deleted here. Only ever acted on during a full sync - an incremental (only-new) run has no reliable way to tell "deleted" apart from "outside this run's date window", so it never deletes on an incremental run regardless of this setting.</p>
+    </section>
+
+    <section class="card">
+      <h2>Failure alerts</h2>
+      <p class="muted">A webhook POSTed a short plain-text message when a scheduled or manual sync run fails. Works with ntfy (paste your topic URL, e.g. https://ntfy.sh/your-topic) and most generic webhook receivers; Gotify needs its endpoint to accept a raw text body.</p>
+      <div class="inline-form">
+        <label>Webhook URL <input type="text" id="notify-url" placeholder="https://ntfy.sh/your-topic" style="min-width:320px"></label>
+        <div class="actions">
+          <button type="button" id="notify-test">Test</button>
+          <button type="button" id="notify-save">Save</button>
+        </div>
+        <span id="notify-message" class="muted"></span>
+      </div>
     </section>
 
     <section class="card">
