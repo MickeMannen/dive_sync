@@ -539,6 +539,63 @@ def test_garmin_reads_utc_and_zone_and_stamps_uploads_with_a_real_zone():
     assert g2._map_from_unified(foreign)["timeZoneUnitDTO"] == {"unitKey": "Asia/Kuala_Lumpur"}
 
 
+def test_garmin_update_dive_sends_minimal_summary_dto_not_full_echo():
+    """update_dive() must never echo the whole existing summaryDTO back: a
+    real dive's minElevation is negative (depth under the surface), and
+    Garmin's PUT re-validates every field it receives, rejecting a negative
+    minElevation with 400 MEASUREMENT_NOT_VALID even though it's the dive's
+    own unchanged value. Discovered live 2026-09-23 (docs/garmin_diving_api.md);
+    this is also what makes water temperature (D4) writable through the same
+    call. Only the fields that actually changed may be sent."""
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    g.logged_in = True
+    g.cooldown_seconds = 0
+
+    current_raw = {
+        "activityId": "1",
+        "activityName": "Dive",
+        "summaryDTO": {
+            "startLatitude": 4.805835, "startLongitude": 103.686585,
+            "minElevation": -8.8, "maxElevation": 0.2,
+            "minTemperature": 29.0, "maxTemperature": 30.0, "averageTemperature": 29.0,
+            "maxDepth": 24.0,
+        },
+        "diveInfo": {},
+    }
+    put_calls = []
+
+    class FakeApiClient:
+        @staticmethod
+        def put(_domain, _path, json=None, api=None):
+            put_calls.append(json)
+            return {}
+
+    class FakeClient:
+        client = FakeApiClient()
+
+        def connectapi(self, url, params=None):
+            return current_raw
+
+    g.client = FakeClient()
+
+    new_dive = UnifiedDive(
+        date_time=datetime(2026, 6, 27, 11, 24), duration=2884, max_depth=24.0,
+        location="Dive", lat=4.805935, lng=103.686585, temp_min=29.3, temp_max=30.3, temp_avg=29.3,
+    )
+    assert g.update_dive("1", new_dive) is True
+    assert len(put_calls) == 1
+    summary_dto = put_calls[0]["summaryDTO"]
+    # lng is unchanged, but travels alongside lat anyway: Garmin silently
+    # no-ops a lone startLatitude with no startLongitude (also found live
+    # 2026-09-23, see docs/garmin_diving_api.md).
+    assert summary_dto == {
+        "startLatitude": 4.805935, "startLongitude": 103.686585,
+        "minTemperature": 29.3, "maxTemperature": 30.3, "averageTemperature": 29.3,
+    }
+    assert "minElevation" not in summary_dto and "maxElevation" not in summary_dto
+
+
 def test_engine_passes_zone_override_to_garmin(tmp_path):
     import json, os
     from src.core.sync_engine import SyncEngine

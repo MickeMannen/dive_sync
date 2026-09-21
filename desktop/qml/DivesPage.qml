@@ -91,8 +91,27 @@ ColumnLayout {
     }
 
     Card {
+        id: detailCard
         title: "Dive data"
         property var sel: controller.selected
+        ListModel { id: tankModel }
+        function loadTanks() {
+            tankModel.clear()
+            var list = detailCard.sel.tanks_detail || []
+            for (var i = 0; i < list.length; i++) {
+                var t = list[i]
+                tankModel.append({
+                    tank_name: t.tank_name || "",
+                    oxygen: (t.oxygen !== undefined && t.oxygen !== null) ? String(t.oxygen) : "",
+                    helium: (t.helium !== undefined && t.helium !== null) ? String(t.helium) : "",
+                    volume: (t.volume !== undefined && t.volume !== null) ? String(t.volume) : "",
+                    start_pressure: (t.start_pressure !== undefined && t.start_pressure !== null) ? String(t.start_pressure) : "",
+                    end_pressure: (t.end_pressure !== undefined && t.end_pressure !== null) ? String(t.end_pressure) : ""
+                })
+            }
+        }
+        onSelChanged: loadTanks()
+
         Text {
             text: sel.filename ? (sel.date_time + " — " + (sel.location || "Unnamed dive")) : "No dive selected"
             color: Theme.text
@@ -109,12 +128,13 @@ ColumnLayout {
             LabeledField { id: fDuration; label: "Duration (min)"; fieldWidth: 100; text: sel.duration || "" }
             LabeledField { id: fMaxDepth; label: "Max depth (m)"; fieldWidth: 100; text: sel.max_depth || "" }
             LabeledField { label: "Avg depth (m)"; fieldWidth: 100; readOnly: true; text: sel.avg_depth || "" }
-            LabeledField { label: "Water temp"; fieldWidth: 120; readOnly: true; text: sel.water_temp || "" }
+            LabeledField { id: fWaterTemp; label: "Water temp (°C)"; fieldWidth: 100; text: sel.water_temp_value !== undefined && sel.water_temp_value !== null ? String(sel.water_temp_value) : "" }
             LabeledField { id: fLocation; label: "Location"; fieldWidth: 260; text: sel.location || "" }
             LabeledField { id: fWeight; label: "Weight"; fieldWidth: 100; text: sel.weight || "" }
             LabeledField { id: fVisibility; label: "Visibility"; fieldWidth: 100; text: sel.visibility || "" }
             LabeledField { id: fBuddy; label: "Buddy"; fieldWidth: 160; text: sel.buddy || "" }
-            LabeledField { label: "Tanks"; fieldWidth: 320; readOnly: true; text: sel.tanks || "" }
+            LabeledField { id: fLat; label: "Latitude"; fieldWidth: 100; text: sel.lat !== undefined && sel.lat !== null ? String(sel.lat) : "" }
+            LabeledField { id: fLng; label: "Longitude"; fieldWidth: 100; text: sel.lng !== undefined && sel.lng !== null ? String(sel.lng) : "" }
         }
         ColumnLayout {
             spacing: 2
@@ -126,16 +146,84 @@ ColumnLayout {
                 TextArea { id: fNotes; text: sel.notes || ""; wrapMode: TextEdit.Wrap; selectByMouse: true }
             }
         }
+        ColumnLayout {
+            spacing: 4
+            enabled: !!sel.filename
+            RowLayout {
+                spacing: 8
+                Text { text: "Tanks / gases"; color: Theme.muted; font.pixelSize: 11 }
+                Text {
+                    visible: !controller.tanksEditable
+                    text: "(read-only — " + controller.serviceName + " does not accept gas edits)"
+                    color: Theme.muted
+                    font.pixelSize: 11
+                    font.italic: true
+                }
+            }
+            Text { visible: !controller.tanksEditable; text: sel.tanks || "—"; color: Theme.text }
+            ColumnLayout {
+                visible: controller.tanksEditable
+                spacing: 4
+                RowLayout {
+                    spacing: 6
+                    Text { text: "Name"; Layout.preferredWidth: 90; color: Theme.muted; font.pixelSize: 11 }
+                    Text { text: "O2 %"; Layout.preferredWidth: 60; color: Theme.muted; font.pixelSize: 11 }
+                    Text { text: "He %"; Layout.preferredWidth: 60; color: Theme.muted; font.pixelSize: 11 }
+                    Text { text: "Vol (L)"; Layout.preferredWidth: 60; color: Theme.muted; font.pixelSize: 11 }
+                    Text { text: "Start (bar)"; Layout.preferredWidth: 70; color: Theme.muted; font.pixelSize: 11 }
+                    Text { text: "End (bar)"; Layout.preferredWidth: 70; color: Theme.muted; font.pixelSize: 11 }
+                }
+                Repeater {
+                    model: tankModel
+                    RowLayout {
+                        spacing: 6
+                        required property int index
+                        required property string tank_name
+                        required property string oxygen
+                        required property string helium
+                        required property string volume
+                        required property string start_pressure
+                        required property string end_pressure
+                        TextField { Layout.preferredWidth: 90; text: tank_name; onEditingFinished: tankModel.setProperty(index, "tank_name", text) }
+                        TextField { Layout.preferredWidth: 60; text: oxygen; onEditingFinished: tankModel.setProperty(index, "oxygen", text) }
+                        TextField { Layout.preferredWidth: 60; text: helium; onEditingFinished: tankModel.setProperty(index, "helium", text) }
+                        TextField { Layout.preferredWidth: 60; text: volume; onEditingFinished: tankModel.setProperty(index, "volume", text) }
+                        TextField { Layout.preferredWidth: 70; text: start_pressure; onEditingFinished: tankModel.setProperty(index, "start_pressure", text) }
+                        TextField { Layout.preferredWidth: 70; text: end_pressure; onEditingFinished: tankModel.setProperty(index, "end_pressure", text) }
+                        Button { text: "Remove"; onClicked: tankModel.remove(index) }
+                    }
+                }
+                Button {
+                    text: "Add tank"
+                    onClicked: tankModel.append({tank_name: "", oxygen: "21", helium: "0", volume: "", start_pressure: "", end_pressure: ""})
+                }
+            }
+        }
         RowLayout {
             spacing: 8
             Button {
                 text: "Save"
                 enabled: !!sel.filename && !controller.busy
-                onClicked: controller.save({
-                    dive_number: fDiveNumber.text, date: fDate.text, time: fTime.text, duration: fDuration.text,
-                    max_depth: fMaxDepth.text, location: fLocation.text, notes: fNotes.text,
-                    weight: fWeight.text, visibility: fVisibility.text, buddy: fBuddy.text
-                })
+                onClicked: {
+                    var payload = {
+                        dive_number: fDiveNumber.text, date: fDate.text, time: fTime.text, duration: fDuration.text,
+                        max_depth: fMaxDepth.text, location: fLocation.text, notes: fNotes.text,
+                        weight: fWeight.text, visibility: fVisibility.text, buddy: fBuddy.text,
+                        lat: fLat.text, lng: fLng.text, water_temp: fWaterTemp.text
+                    }
+                    if (controller.tanksEditable) {
+                        var tanks = []
+                        for (var i = 0; i < tankModel.count; i++) {
+                            var row = tankModel.get(i)
+                            tanks.push({
+                                tank_name: row.tank_name, oxygen: row.oxygen, helium: row.helium,
+                                volume: row.volume, start_pressure: row.start_pressure, end_pressure: row.end_pressure
+                            })
+                        }
+                        payload.tanks = tanks
+                    }
+                    controller.save(payload)
+                }
             }
             Button {
                 text: "Delete"

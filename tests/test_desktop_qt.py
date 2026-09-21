@@ -107,6 +107,35 @@ def test_dives_controller_loads_cache_and_persists_prefs(qapp, scratch_data_dir,
     assert wait_until(qapp, lambda: c.status == "Saved."), c.status
     assert calls["filename"] == "2.json" and calls["date_time"] == "2026-06-24 09:00:00"
     assert calls["duration"] == 45 and calls["max_depth"] == 18.5 and calls["dive_number"] == "7"
+    assert calls["lat"] is None and calls["lng"] is None and calls["water_temp"] is None
+    assert "tanks" not in calls  # garmin: tanksEditable is False, so it's never sent at all
+
+    assert c.tanksEditable is False
+
+
+def test_dives_controller_save_passes_gps_water_temp_and_tanks(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    from desktop.controllers.dives import DivesController
+    from src.core import dive_cache
+    rows = [{"date": "2026-06-22", "time": "10:00:00", "date_time": "2026-06-22 10:00:00", "dive_number": 1,
+             "location": "Reef", "filename": "1.json", "buddy": "A"}]
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda: rows)
+    calls = {}
+    monkeypatch.setattr(dive_cache, "update_dive_fields", lambda service, filename, **kw: calls.update(service=service, filename=filename, **kw) or "/tmp/x.json")
+    monkeypatch.setattr(dive_cache, "push_remote_update", lambda service, filepath: True)
+
+    c = DivesController("divelogs")
+    assert c.tanksEditable is True
+    c.load()
+    c.select(0)
+    c.save({
+        "dive_number": "1", "date": "2026-06-22", "time": "10:00:00", "duration": "45", "max_depth": "18.5",
+        "location": "Reef", "notes": "", "weight": "", "visibility": "", "buddy": "A",
+        "lat": "4.805935", "lng": "103.686585", "water_temp": "28.5",
+        "tanks": [{"tank_name": "T1", "oxygen": "32", "helium": "0", "volume": "12", "start_pressure": "200", "end_pressure": "50"}],
+    })
+    assert wait_until(qapp, lambda: c.status == "Saved."), c.status
+    assert calls["lat"] == 4.805935 and calls["lng"] == 103.686585 and calls["water_temp"] == 28.5
+    assert calls["tanks"] == [{"tank_name": "T1", "oxygen": 32.0, "helium": 0.0, "volume": 12.0, "start_pressure": 200.0, "end_pressure": 50.0}]
 
 
 # ---------------------------------------------------------------- sync controller
@@ -156,8 +185,10 @@ def test_mapping_controller_board_operations(qapp, scratch_data_dir, fake_keyrin
     site = next(l for l in m.links if l["id"] == "site")
     assert site["source"] == ["garmin.locationName", "garmin.notes"] and "{garmin.notes}" in site["template"]
     assert m.selectedId == "site" and m.preview and m.preview != "–" and m.dirty
-    assert m.createLink("garmin.temp_min", "divelogs.temp_min")
-    assert next(l for l in m.links if l["id"] == "temp_min")["direction"] == "to_target"
+    assert m.createLink("garmin.date_time", "divelogs.date_time")     # garmin.date_time is read-only -> one-way
+    assert next(l for l in m.links if l["id"] == "date_time")["direction"] == "to_target"
+    assert m.createLink("garmin.temp_min", "divelogs.temp_min")       # both writable now (rework.md D4/E5) -> bidirectional
+    assert next(l for l in m.links if l["id"] == "temp_min")["direction"] == "bidirectional"
     m.selectLink("buddy")
     assert {d["value"] for d in m.allowedDirections} == {"bidirectional", "to_target", "to_source", "off"}
     assert m.updateLink({"id": "buddy", "direction": "to_target", "conflict": "manual", "match_order": "", "separator": ", ", "template": ""}) == ""
@@ -166,11 +197,11 @@ def test_mapping_controller_board_operations(qapp, scratch_data_dir, fake_keyrin
     m.askApplyToAll.connect(lambda: asked.append(True))
     assert m.save() == "" and not m.dirty and asked == [True]
     saved = ConfigManager.load_settings()
-    assert len(saved.field_links) == 10 and next(l for l in saved.field_links if l.id == "buddy").conflict == "manual"
+    assert len(saved.field_links) == 11 and next(l for l in saved.field_links if l.id == "buddy").conflict == "manual"
     m.deleteLink("notes")
     assert m.dirty
     m.cancel()
-    assert len(m.links) == 10 and not m.dirty
+    assert len(m.links) == 11 and not m.dirty
     m.resetToDefaults()
     assert len(m.links) == 9 and m.dirty
     m.savePairOptions("to_divelogs", 30)
@@ -234,3 +265,45 @@ def test_qml_front_end_loads_without_warnings(qapp, scratch_data_dir, fake_keyri
     assert warnings == [], warnings
     engine.deleteLater()
     wait(qapp, 50)
+
+
+# ---------------------------------------------------------------- D7: quit cleanup
+
+def test_cleanup_on_quit_syncs_garmin_token_and_clears_materialized_files(scratch_data_dir, fake_keyring, monkeypatch):
+    """desktop/app.py::cleanup_on_quit is wired to QGuiApplication.aboutToQuit
+    (see main()), which Qt fires on Cmd+Q / the Quit menu as well as a normal
+    window close - unlike Toga, whose shell had no such hook at all. This
+    exercises the cleanup logic itself (the same materialize/sync/clear
+    primitives Track D's begin_operation/end_operation already covers);
+    only the literal "choose Quit from the real macOS menu" step is still a
+    manual, hands-on check (rework.md D7)."""
+    import keyring
+    from desktop import app as desktop_app
+    from desktop import credentials as creds_store
+    from src.core.config import CredentialsModel, GarminCredentials, CREDENTIALS_FILE
+    from src.core.services.garmin import safe_token_filename
+
+    creds_file = CREDENTIALS_FILE  # already pointed at scratch_data_dir by the fixture
+    token_dir = str(scratch_data_dir / "tokens" / "garmin")
+    creds_store.save_credentials_model(
+        CredentialsModel(garmin=GarminCredentials(username="diver1", password="secret1", token_dir=token_dir))
+    )
+    keyring.set_password(creds_store.SERVICE_NAME, creds_store._garmin_token_key("diver1"), '{"cached": true}')
+
+    # Simulate begin_operation() having materialized the token file, then
+    # garth refreshing it during the (now-finished) sync.
+    creds_store.materialize_local_cache()
+    creds_store.materialize_garmin_token("diver1", token_dir)
+    token_path = os.path.join(token_dir, safe_token_filename("diver1"))
+    assert os.path.exists(creds_file) and os.path.exists(token_path)
+    with open(token_path, "w") as f:
+        f.write('{"cached": true, "refreshed": true}')
+
+    desktop_app.cleanup_on_quit()
+
+    assert not os.path.exists(creds_file), "materialized credentials.json must not outlive the app"
+    assert not os.path.exists(token_path), "materialized Garmin token file must not outlive the app"
+    assert (
+        keyring.get_password(creds_store.SERVICE_NAME, creds_store._garmin_token_key("diver1"))
+        == '{"cached": true, "refreshed": true}'
+    ), "the refreshed token must be synced back to the keychain before the file is cleared"

@@ -156,6 +156,12 @@ class DivesController(QObject):
     def serviceName(self) -> str:
         return {"garmin": "Garmin Connect", "divelogs": "Divelogs.org"}.get(self.service, self.service)
 
+    @Property(bool, constant=True)
+    def tanksEditable(self) -> bool:
+        # Garmin's gas API is read-only (rework.md E4); Divelogs accepts a
+        # full tank list on every update.
+        return self.service != "garmin"
+
     @Property(str, notify=statusChanged)
     def status(self) -> str:
         return self._status
@@ -318,7 +324,22 @@ class DivesController(QObject):
             weight=str(fields.get("weight", "")),
             visibility=str(fields.get("visibility", "")),
             buddy=str(fields.get("buddy", "")),
+            lat=self._optional_float(str(fields.get("lat", ""))),
+            lng=self._optional_float(str(fields.get("lng", ""))),
+            water_temp=self._optional_float(str(fields.get("water_temp", ""))),
         )
+        if self.tanksEditable and fields.get("tanks") is not None:
+            kwargs["tanks"] = [
+                {
+                    "tank_name": str(t.get("tank_name", "")) or None,
+                    "oxygen": self._optional_float(str(t.get("oxygen", ""))),
+                    "helium": self._optional_float(str(t.get("helium", ""))),
+                    "volume": self._optional_float(str(t.get("volume", ""))),
+                    "start_pressure": self._optional_float(str(t.get("start_pressure", ""))),
+                    "end_pressure": self._optional_float(str(t.get("end_pressure", ""))),
+                }
+                for t in fields.get("tanks")
+            ]
         self._set("_busy", True, self.busyChanged)
         self._set("_status", "Saving…", self.statusChanged)
 

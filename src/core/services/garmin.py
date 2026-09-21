@@ -42,7 +42,8 @@ class GarminAdapter(BaseDiveAdapter):
     def field_catalog(cls) -> List[FieldSpec]:
         """What _map_to_unified reads and what update_dive can push. Garmin's
         update endpoint accepts name, description, dive number, buddy, weight,
-        visibility and coordinates; profile samples and gases are read-only
+        visibility, coordinates and water temperature (min/max/avg, all set
+        together - see update_dive); profile samples and gases are read-only
         here (gas writes are Track E, step E4)."""
         return [
             FieldSpec(key="garmin.date_time", label="Start time", type="datetime", unified="date_time", writable=False),
@@ -50,9 +51,9 @@ class GarminAdapter(BaseDiveAdapter):
             FieldSpec(key="garmin.duration", label="Duration", type="number", unified="duration", unit="s", writable=False),
             FieldSpec(key="garmin.max_depth", label="Max depth", type="number", unified="max_depth", unit="m", writable=False),
             FieldSpec(key="garmin.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m", writable=False),
-            FieldSpec(key="garmin.temp_min", label="Min temperature", type="number", unified="temp_min", unit="°C", writable=False),
-            FieldSpec(key="garmin.temp_max", label="Max temperature", type="number", unified="temp_max", unit="°C", writable=False),
-            FieldSpec(key="garmin.temp_avg", label="Average temperature", type="number", unified="temp_avg", unit="°C", writable=False),
+            FieldSpec(key="garmin.temp_min", label="Min temperature", type="number", unified="temp_min", unit="°C"),
+            FieldSpec(key="garmin.temp_max", label="Max temperature", type="number", unified="temp_max", unit="°C"),
+            FieldSpec(key="garmin.temp_avg", label="Average temperature", type="number", unified="temp_avg", unit="°C"),
             FieldSpec(key="garmin.dive_number", label="Dive number", type="number", unified="dive_number"),
             FieldSpec(key="garmin.activityName", label="Activity name", type="text"),
             FieldSpec(key="garmin.locationName", label="Location name", type="text"),
@@ -418,25 +419,37 @@ class GarminAdapter(BaseDiveAdapter):
                 else:
                     payload["diveInfo"] = dive_info_payload
 
-            # Check summaryDTO coordinates changes
-            if dive.lat != current_dive.lat or dive.lng != current_dive.lng:
-                summary_dto = {}
-                existing_summary = current_raw.get("summaryDTO") or {}
-                if isinstance(existing_summary, dict):
-                    summary_dto = dict(existing_summary)
-                
-                if dive.lat is not None:
-                    summary_dto["startLatitude"] = dive.lat
-                else:
-                    summary_dto.pop("startLatitude", None)
-                    
-                if dive.lng is not None:
-                    summary_dto["startLongitude"] = dive.lng
-                else:
-                    summary_dto.pop("startLongitude", None)
-                    
+            # Check summaryDTO changes (coordinates, water temperature). Sent
+            # as a partial summaryDTO with only the changed keys, never the
+            # whole echoed-back object: Garmin's PUT re-validates every field
+            # it receives, and a real dive's existing minElevation (negative,
+            # since it's depth under the surface) fails "MEASUREMENT_NOT_VALID"
+            # when echoed back unchanged - discovered empirically 2026-09-23
+            # against the owner's test account (see docs/garmin_diving_api.md).
+            summary_dto: Dict[str, Any] = {}
+
+            # startLatitude/startLongitude must travel together: sending only
+            # the one that changed returns 204 but silently does not persist
+            # (confirmed empirically 2026-09-23 - see docs/garmin_diving_api.md).
+            lat_changed = dive.lat != current_dive.lat and dive.lat is not None
+            lng_changed = dive.lng != current_dive.lng and dive.lng is not None
+            if lat_changed or lng_changed:
+                new_lat = dive.lat if dive.lat is not None else current_dive.lat
+                new_lng = dive.lng if dive.lng is not None else current_dive.lng
+                if new_lat is not None and new_lng is not None:
+                    summary_dto["startLatitude"] = new_lat
+                    summary_dto["startLongitude"] = new_lng
+
+            if dive.temp_min != current_dive.temp_min and dive.temp_min is not None:
+                summary_dto["minTemperature"] = dive.temp_min
+            if dive.temp_max != current_dive.temp_max and dive.temp_max is not None:
+                summary_dto["maxTemperature"] = dive.temp_max
+            if dive.temp_avg != current_dive.temp_avg and dive.temp_avg is not None:
+                summary_dto["averageTemperature"] = dive.temp_avg
+
+            if summary_dto:
                 payload["summaryDTO"] = summary_dto
-                
+
             # If no differences are found, skip update
             if len(payload) <= 1:
                 logger.info("No changed fields detected for Garmin Connect Activity ID %s. Skipping update.", external_id)

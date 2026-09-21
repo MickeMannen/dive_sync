@@ -92,7 +92,50 @@ credentials is outside what dive_sync can do legitimately.
 **Decision (rework.md E4):** the Garmin adapter stays read-only for tanks and
 gases. Dives uploaded to Garmin arrive without tanks; the README says so.
 
-## 4. Things worth using later
+## 4. `activity-service` PUT re-validates every field it receives
+
+Discovered 2026-09-23 while adding GPS/water-temperature editing to the
+desktop dive editor (rework.md D4). `PUT /activity-service/activity/{id}`
+looks like a merge-patch (send only the keys you want to change), and that's
+true for the top-level payload - but any nested object you include, such as
+`summaryDTO`, is **replaced wholesale and fully re-validated**, not merged
+key-by-key. The existing `GarminAdapter.update_dive()` GPS-write code built
+its `summaryDTO` by copying the *entire* freshly-fetched object and only
+overwriting `startLatitude`/`startLongitude` - which looked safe (every
+other field was the dive's own unchanged value) but wasn't: a real dive's
+`minElevation` is negative (it's the dive's own depth below the surface),
+and echoing it back verbatim gets rejected:
+
+```
+PUT .../activity-service/activity/{id}  {"summaryDTO": {...all fields unchanged except lat/lng...}}
+-> 400 [{"field":"minElevation","validationCode":"MEASUREMENT_NOT_VALID","success":false}]
+```
+
+This meant the GPS-write path was silently broken for any real scuba dive
+(it would only have succeeded on a dive with a non-negative `minElevation`,
+which a dive under water never has). The fix: build `summaryDTO` (and any
+other nested object you're updating through this endpoint) from scratch with
+*only* the keys that actually changed, never by copying-then-overwriting the
+existing object. Verified live against the owner's test account: a minimal
+`{"summaryDTO": {"startLatitude": ..., "startLongitude": ...}}` PUT returns
+204 and persists; the same request with the full object attached fails as
+above. This also confirmed `minTemperature`/`maxTemperature`/
+`averageTemperature` are writable through the same minimal-`summaryDTO`
+mechanism as GPS - they live in `summaryDTO` too, so the field catalogue's
+`garmin.temp_min/max/avg` are no longer marked read-only (D4).
+
+**`startLatitude`/`startLongitude` must always travel together.** Sending
+only the one that changed (e.g. `{"summaryDTO": {"startLatitude": ...}}`
+alone, with `startLongitude` correctly omitted because it hadn't changed)
+still returns 204, but the value **does not persist** - a follow-up GET
+shows the old latitude, silently. Sending both keys together, even when only
+one of the two values actually changed, does persist. Confirmed live
+2026-09-23 by writing lat-only (no-op), then lat+lng together (persists) on
+the same dive. `update_dive()` now always includes both keys together
+whenever either coordinate changes, filling in the unchanged one from the
+current dive.
+
+## 5. Things worth using later
 
 - The diving-service summary is one request for the whole account with time
   zone, gas roles and dive numbers; `fetch_recent_dives` and C15 could use it

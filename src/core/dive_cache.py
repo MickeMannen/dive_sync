@@ -232,6 +232,14 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
             except (TypeError, ValueError):
                 max_depth_display = max_depth
 
+            lat = sum_dto.get("startLatitude")
+            lng = sum_dto.get("startLongitude")
+            water_temp_value = sum_dto.get("averageTemperature")
+            if water_temp_value is None:
+                water_temp_value = sum_dto.get("minTemperature")
+            if water_temp_value is None:
+                water_temp_value = sum_dto.get("maxTemperature")
+
             date_part, time_part = _split_date_time(date_time)
             dives.append({
                 "id": str(summary.get("activityId") or ""),
@@ -243,7 +251,12 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
                 "max_depth": max_depth_display,
                 "avg_depth": avg_depth_display,
                 "water_temp": water_temp,
+                "water_temp_value": water_temp_value,
                 "tanks": _format_tanks(tanks),
+                "tanks_detail": tanks,
+                "tanks_editable": False,  # Garmin's gas API is read-only (rework.md E4)
+                "lat": lat,
+                "lng": lng,
                 "location": location,
                 "notes": notes,
                 "weight": weight_str,
@@ -318,6 +331,11 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
             visibility_str = str(data.get("visibility") or "")
             buddy = data.get("buddy") or ""
 
+            lat_val = data.get("lat")
+            lng_val = data.get("lng")
+            if lat_val in (0, 0.0) and lng_val in (0, 0.0):
+                lat_val = lng_val = None
+
             normalized_date_time = _normalize_date_time(f"{date} {time}")
             date_part, time_part = _split_date_time(normalized_date_time)
             dives.append({
@@ -330,7 +348,12 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
                 "max_depth": data.get("maxdepth") or 0.0,
                 "avg_depth": avg_depth_display,
                 "water_temp": water_temp,
+                "water_temp_value": depthtemp,
                 "tanks": _format_tanks(tanks),
+                "tanks_detail": tanks,
+                "tanks_editable": True,
+                "lat": lat_val,
+                "lng": lng_val,
                 "location": location,
                 "notes": data.get("notes") or "",
                 "garmin_id": garmin_id,
@@ -368,6 +391,10 @@ def update_dive_fields(
     weight: Optional[str] = None,
     visibility: Optional[str] = None,
     buddy: Optional[str] = None,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    water_temp: Optional[float] = None,
+    tanks: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Apply the given (non-None) field overrides to the cached dive file and
     write it back. Returns the filepath that was written, for the caller to
@@ -376,7 +403,17 @@ def update_dive_fields(
 
     `duration` is in minutes (matching the dive list/edit form's display -
     see _seconds_to_minutes_display) and is converted to seconds here before
-    being written, since that's what both services' raw JSON stores."""
+    being written, since that's what both services' raw JSON stores.
+
+    `water_temp` sets minTemperature/maxTemperature/averageTemperature (Garmin)
+    or depthtemp (Divelogs) all to the one entered value - both services can
+    model a min/max/avg range, but the edit form only offers one number, so a
+    manual edit here always collapses to a single reading.
+
+    `tanks` (a list of {oxygen, helium, start_pressure, end_pressure, volume,
+    tank_name} dicts, replacing the cached list wholesale) is a no-op for
+    Garmin: its gas API is read-only (rework.md E4), so the desktop editor
+    never offers tank editing for a Garmin-sourced dive in the first place."""
     filepath = _find_dive_file(service, filename, username, base_dir)
     if not filepath:
         raise FileNotFoundError(f"Dive file not found: {service}/{filename}")
@@ -425,6 +462,25 @@ def update_dive_fields(
             details["maxDepth"] = max_depth
             summary["summaryDTO"]["maxDepth"] = max_depth
             details["summaryDTO"]["maxDepth"] = max_depth
+
+        if lat is not None or lng is not None:
+            summary.setdefault("summaryDTO", {})
+            details.setdefault("summaryDTO", {})
+            if lat is not None:
+                summary["summaryDTO"]["startLatitude"] = lat
+                details["summaryDTO"]["startLatitude"] = lat
+            if lng is not None:
+                summary["summaryDTO"]["startLongitude"] = lng
+                details["summaryDTO"]["startLongitude"] = lng
+
+        if water_temp is not None:
+            summary.setdefault("summaryDTO", {})
+            details.setdefault("summaryDTO", {})
+            for key in ("minTemperature", "maxTemperature", "averageTemperature"):
+                summary["summaryDTO"][key] = water_temp
+                details["summaryDTO"][key] = water_temp
+
+        # tanks: no-op here, Garmin's gas API is read-only (rework.md E4)
 
         if location is not None:
             summary["activityName"] = location
@@ -532,6 +588,27 @@ def update_dive_fields(
 
         if buddy is not None:
             dive_data["buddy"] = buddy
+
+        if lat is not None:
+            dive_data["lat"] = lat
+        if lng is not None:
+            dive_data["lng"] = lng
+
+        if water_temp is not None:
+            dive_data["depthtemp"] = water_temp
+
+        if tanks is not None:
+            dive_data["tanks"] = [
+                {
+                    "o2": t.get("oxygen"),
+                    "he": t.get("helium"),
+                    "start_pressure": t.get("start_pressure"),
+                    "end_pressure": t.get("end_pressure"),
+                    "vol": t.get("volume"),
+                    "tankname": t.get("tank_name"),
+                }
+                for t in tanks
+            ]
 
     else:
         raise ValueError(f"Unknown service: {service!r}")

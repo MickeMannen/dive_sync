@@ -174,6 +174,57 @@ def test_update_dive_fields_divelogs(cache_dirs):
     assert data["visibility"] == "4"
 
 
+def test_update_dive_fields_garmin_gps_and_water_temp(cache_dirs):
+    filepath = dive_cache.update_dive_fields(
+        "garmin", "1.json", base_dir=cache_dirs, lat=4.805835, lng=103.686585, water_temp=28.5,
+    )
+    with open(filepath) as f:
+        data = json.load(f)
+
+    for side in ("summary", "details"):
+        assert data[side]["summaryDTO"]["startLatitude"] == 4.805835
+        assert data[side]["summaryDTO"]["startLongitude"] == 103.686585
+        assert data[side]["summaryDTO"]["minTemperature"] == 28.5
+        assert data[side]["summaryDTO"]["maxTemperature"] == 28.5
+        assert data[side]["summaryDTO"]["averageTemperature"] == 28.5
+
+    dives = dive_cache.list_garmin_dives(base_dir=cache_dirs)
+    assert dives[0]["lat"] == 4.805835 and dives[0]["lng"] == 103.686585
+    assert dives[0]["water_temp_value"] == 28.5
+    assert dives[0]["tanks_editable"] is False
+
+
+def test_update_dive_fields_garmin_tanks_is_a_no_op(cache_dirs):
+    """Garmin's gas API is read-only (rework.md E4) - a tanks override must
+    not raise and must not appear anywhere in the written file."""
+    filepath = dive_cache.update_dive_fields(
+        "garmin", "1.json", base_dir=cache_dirs,
+        tanks=[{"oxygen": 32, "helium": 0, "start_pressure": 200, "end_pressure": 50, "volume": 12, "tank_name": "T1"}],
+    )
+    with open(filepath) as f:
+        data = json.load(f)
+    assert "tanks" not in data["summary"] and "tanks" not in data["details"]
+
+
+def test_update_dive_fields_divelogs_gps_water_temp_and_tanks(cache_dirs):
+    filepath = dive_cache.update_dive_fields(
+        "divelogs", "1.json", base_dir=cache_dirs, lat=4.805835, lng=103.686585, water_temp=28.5,
+        tanks=[{"oxygen": 32.0, "helium": 0.0, "start_pressure": 200.0, "end_pressure": 50.0, "volume": 12.0, "tank_name": "T1"}],
+    )
+    with open(filepath) as f:
+        data = json.load(f)
+
+    assert data["lat"] == 4.805835 and data["lng"] == 103.686585
+    assert data["depthtemp"] == 28.5
+    assert data["tanks"] == [{"o2": 32.0, "he": 0.0, "start_pressure": 200.0, "end_pressure": 50.0, "vol": 12.0, "tankname": "T1"}]
+
+    dives = dive_cache.list_divelogs_dives(base_dir=cache_dirs)
+    assert dives[0]["lat"] == 4.805835 and dives[0]["lng"] == 103.686585
+    assert dives[0]["water_temp_value"] == 28.5
+    assert dives[0]["tanks_editable"] is True
+    assert dives[0]["tanks_detail"] == [{"oxygen": 32.0, "helium": 0.0, "start_pressure": 200.0, "end_pressure": 50.0, "volume": 12.0, "tank_name": "T1"}]
+
+
 def test_update_dive_fields_converts_duration_minutes_to_seconds_garmin(cache_dirs):
     filepath = dive_cache.update_dive_fields("garmin", "1.json", base_dir=cache_dirs, duration=50)
     with open(filepath) as f:
