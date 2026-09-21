@@ -16,7 +16,11 @@ class SyncFilters(BaseModel):
     date_to: Optional[str] = Field(None, description="Sync end date, format YYYY-MM-DD")
     only_new: bool = Field(True, description="Sync only new dives since last run")
     sync_gases: bool = Field(True, description="Sync detailed gas mixtures (alias for 'the tanks links are not off')")
-    sync_fit: bool = Field(False, description="Sync FIT files")
+    # rework.md E6: no UI exposes this any more (it never did anything for a
+    # regular sync - only SyncEngine.backup() reads it, for the CLI --backup
+    # FIT-file extraction); still settable by hand in settings.json or via
+    # POST /api/settings for that one purpose.
+    sync_fit: bool = Field(False, description="Include FIT files in a --backup export")
 
 class SyncScheduleSlot(BaseModel):
     hour: int = Field(..., ge=0, le=23)
@@ -32,12 +36,13 @@ class CronJobModel(BaseModel):
     interval_minutes: int = Field(60, ge=1, description="Interval in minutes if frequency is custom_minutes")
     only_new: bool = Field(True, description="Sync only new dives since last run")
     sync_gases: bool = Field(True, description="Sync detailed gas mixtures")
-    sync_fit: bool = Field(False, description="Sync FIT files")
     enabled: bool = Field(True, description="Whether this job is active")
     field_links: Optional[List[FieldLink]] = Field(
         None, description="Optional per-job mapping board; None means the global field_links apply"
     )
     pair: Optional[str] = Field(None, description="Id of a configured sync pair; None = Garmin -> Divelogs")
+    garmin_username: Optional[str] = Field(None, description="Which configured Garmin account to use; None picks the only one, or errors if several are configured")
+    divelogs_username: Optional[str] = Field(None, description="Which configured Divelogs account to use; None picks the only one, or errors if several are configured")
 
 class SyncPairModel(BaseModel):
     """One source/target pair the engine can run (rework.md F3). A service

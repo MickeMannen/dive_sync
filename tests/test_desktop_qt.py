@@ -151,23 +151,23 @@ def test_sync_controller_runs_scheduler_off_thread(qapp, scratch_data_dir, fake_
     def fake_run(dry_run, custom_settings=None):
         seen.update(dry_run=dry_run, custom=custom_settings)
         logging.getLogger("dive_sync.test").info("hello from the sync")
-        scheduler.last_sync_results = {"matched_count": 1}
+        scheduler.last_sync_results = {"Manual": {"matched_count": 1}}
     monkeypatch.setattr(scheduler, "run_sync_thread", fake_run)
     monkeypatch.setattr(scheduler, "is_sync_running", False)
     c = SyncController(log_queue)
     lines = []
     c.logLine.connect(lines.append)
     assert c.pairs[0]["id"] == "" and c.directionsFor("")[1]["value"] == "to_divelogs"
-    c.runSync(True, "to_garmin", False, True, False, "")
+    c.runSync(True, "to_garmin", False, True, "")
     assert c.running is True
     assert wait_until(qapp, lambda: not c.running)
     assert c.status == "Dry run complete." and seen["dry_run"] is True and seen["custom"]["directionality"] == "to_garmin"
     assert any("hello from the sync" in l for l in lines)
 
     def failing(dry_run, custom_settings=None):
-        scheduler.last_sync_results = {"error": "kaboom"}
+        scheduler.last_sync_results = {"Manual": {"error": "kaboom"}}
     monkeypatch.setattr(scheduler, "run_sync_thread", failing)
-    c.runSync(False, "bidirectional", True, True, False, "")
+    c.runSync(False, "bidirectional", True, True, "")
     assert wait_until(qapp, lambda: not c.running) and c.status == "Failed: kaboom"
 
 
@@ -216,17 +216,19 @@ def test_mapping_controller_board_operations(qapp, scratch_data_dir, fake_keyrin
 def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratch_data_dir, fake_keyring):
     from desktop.controllers.settings import SettingsController
     from src.core.config import ConfigManager
+    import desktop.credentials as creds_store
     s = SettingsController()
     assert s.hasCredentials is False
-    s.save("g@x", "pw", "", "d", "pw2", "me@x.org", "pw3",
-           "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "secret", False, "")
-    assert s.hasCredentials and s.garminUsername == "g@x" and s.subsurfaceEmail == "me@x.org" and s.message == "Saved to keychain."
-    assert fake_keyring.store[("DiveSync", "divelogs_password")] == "pw2"
+    s.saveGarminAccounts([{"username": "g@x", "password": "pw", "token_dir": ""}])
+    s.saveDivelogsAccounts([{"username": "d", "password": "pw2"}])
+    s.save("me@x.org", "pw3", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "secret", False, "")
+    assert s.hasCredentials and s.garminAccounts == [{"username": "g@x", "token_dir": creds_store.DEFAULT_GARMIN_TOKEN_DIR}]
+    assert s.divelogsAccounts == [{"username": "d"}] and s.subsurfaceEmail == "me@x.org" and s.message == "Saved to keychain."
     assert s.submersionBucket == "my-bucket" and fake_keyring.store[("DiveSync", "submersion_secret_access_key")] == "secret"
     # keeping a blank password keeps the stored one
-    s.save("g@x", "", "", "d", "", "me@x.org", "",
-           "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "", False, "")
-    assert fake_keyring.store[("DiveSync", "garmin_password")] == "pw"
+    s.saveGarminAccounts([{"username": "g@x", "password": "", "token_dir": ""}])
+    s.save("me@x.org", "", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "", False, "")
+    assert creds_store.load_credentials_model().get_garmin_accounts()[0].password == "pw"
     assert fake_keyring.store[("DiveSync", "submersion_secret_access_key")] == "secret"
 
     path = str(scratch_data_dir / "profile.json")

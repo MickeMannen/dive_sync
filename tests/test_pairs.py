@@ -94,7 +94,7 @@ def test_cron_job_names_a_pair(tmp_path, monkeypatch):
     monkeypatch.setattr(ConfigManager, "load_settings", lambda path=None: SettingsModel(
         sync_pairs=[SyncPairModel(id="p1", source="garmin", target="uddf:x.uddf")]))
     scheduler.run_sync_thread(False, CronJobModel(id="j", pair="p1", directionality="to_garmin", only_new=False).model_dump())
-    assert scheduler.last_sync_results == {"ok": True}
+    assert scheduler.last_sync_results["j"] == {"ok": True}
     assert captured["direction_override"] == "to_uddf"      # the pair's direction wins over the job's default
     assert captured["only_new_override"] is False and captured["dry_run"] is False
 

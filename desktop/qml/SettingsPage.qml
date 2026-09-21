@@ -18,21 +18,82 @@ ColumnLayout {
                   : "Welcome! Enter your Garmin Connect and/or Divelogs.org credentials below to get started - they're stored in your OS keychain, not in a plain file."
         }
         Card {
+            id: garminCard
             title: "Garmin Connect"
-            LabeledField { id: gUser; label: "Username"; fieldWidth: 320; text: settingsController.garminUsername }
-            LabeledField { id: gPass; label: "Password (leave blank to keep the saved one)"; fieldWidth: 320; secret: true }
-            LabeledField { id: gToken; label: "Token directory"; fieldWidth: 420; text: settingsController.garminTokenDir }
+            ListModel { id: garminAccountsModel }
+            function reload() {
+                garminAccountsModel.clear()
+                var accounts = settingsController.garminAccounts
+                for (var i = 0; i < accounts.length; i++)
+                    garminAccountsModel.append({username: accounts[i].username, password: "", token_dir: accounts[i].token_dir})
+                if (accounts.length === 0) garminAccountsModel.append({username: "", password: "", token_dir: ""})
+            }
+            Component.onCompleted: reload()
+            Connections { target: settingsController; function onCredentialsChanged() { garminCard.reload() } }
+            Repeater {
+                model: garminAccountsModel
+                delegate: ColumnLayout {
+                    required property int index
+                    required property string username
+                    required property string password
+                    required property string token_dir
+                    RowLayout {
+                        LabeledField { fieldWidth: 220; label: "Username"; text: username; onEditingFinished: garminAccountsModel.setProperty(index, "username", text) }
+                        LabeledField { fieldWidth: 220; label: "Password (leave blank to keep the saved one)"; secret: true; text: password; onEditingFinished: garminAccountsModel.setProperty(index, "password", text) }
+                        LabeledField { fieldWidth: 320; label: "Token directory"; text: token_dir; onEditingFinished: garminAccountsModel.setProperty(index, "token_dir", text) }
+                        Button { text: "Test"; onClicked: settingsController.testGarmin(username, password, token_dir) }
+                        Button { text: "Remove"; flat: true; onClicked: garminAccountsModel.remove(index) }
+                    }
+                }
+            }
             RowLayout {
-                Button { text: "Test"; onClicked: settingsController.testGarmin(gUser.text, gPass.text, gToken.text) }
+                Button { text: "Add Garmin account"; flat: true; onClicked: garminAccountsModel.append({username: "", password: "", token_dir: ""}) }
+                Button {
+                    text: "Save Garmin accounts"
+                    onClicked: {
+                        var rows = []
+                        for (var i = 0; i < garminAccountsModel.count; i++) rows.push(garminAccountsModel.get(i))
+                        settingsController.saveGarminAccounts(rows)
+                    }
+                }
                 Text { text: settingsController.garminStatus; color: Theme.muted }
             }
         }
         Card {
+            id: divelogsCard
             title: "Divelogs.org"
-            LabeledField { id: dUser; label: "Username"; fieldWidth: 320; text: settingsController.divelogsUsername }
-            LabeledField { id: dPass; label: "Password (leave blank to keep the saved one)"; fieldWidth: 320; secret: true }
+            ListModel { id: divelogsAccountsModel }
+            function reload() {
+                divelogsAccountsModel.clear()
+                var accounts = settingsController.divelogsAccounts
+                for (var i = 0; i < accounts.length; i++)
+                    divelogsAccountsModel.append({username: accounts[i].username, password: ""})
+                if (accounts.length === 0) divelogsAccountsModel.append({username: "", password: ""})
+            }
+            Component.onCompleted: reload()
+            Connections { target: settingsController; function onCredentialsChanged() { divelogsCard.reload() } }
+            Repeater {
+                model: divelogsAccountsModel
+                delegate: RowLayout {
+                    required property int index
+                    required property string username
+                    required property string password
+                    LabeledField { fieldWidth: 220; label: "Username"; text: username; onEditingFinished: divelogsAccountsModel.setProperty(index, "username", text) }
+                    LabeledField { fieldWidth: 220; label: "Password (leave blank to keep the saved one)"; secret: true; text: password; onEditingFinished: divelogsAccountsModel.setProperty(index, "password", text) }
+                    Button { text: "Test"; onClicked: settingsController.testDivelogs(username, password) }
+                    Button { text: "Remove"; flat: true; onClicked: divelogsAccountsModel.remove(index) }
+                }
+            }
             RowLayout {
-                Button { text: "Test"; onClicked: settingsController.testDivelogs(dUser.text, dPass.text) }
+                Button { text: "Add Divelogs account"; flat: true; onClicked: divelogsAccountsModel.append({username: "", password: ""}) }
+                Button {
+                    text: "Save Divelogs accounts"
+                    onClicked: {
+                        var rows = []
+                        for (var i = 0; i < divelogsAccountsModel.count; i++) rows.push(divelogsAccountsModel.get(i))
+                        settingsController.saveDivelogsAccounts(rows)
+                    }
+                }
                 Text { text: settingsController.divelogsStatus; color: Theme.muted }
             }
         }

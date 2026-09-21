@@ -48,6 +48,14 @@ class SyncController(QObject):
                             "source": pair.source, "target": pair.target})
         return out
 
+    @Property("QVariantList", constant=True)
+    def garminAccounts(self):
+        return [a.username for a in credentials.load_credentials_model().get_garmin_accounts()]
+
+    @Property("QVariantList", constant=True)
+    def divelogsAccounts(self):
+        return [a.username for a in credentials.load_credentials_model().get_divelogs_accounts()]
+
     @Slot(str, result="QVariantList")
     def directionsFor(self, pair_id: str):
         for pair in self.pairs:
@@ -75,14 +83,19 @@ class SyncController(QObject):
 
     # -- actions ----------------------------------------------------------
 
-    @Slot(bool, str, bool, bool, bool, str)
-    def runSync(self, dry_run: bool, direction: str, only_new: bool, sync_gases: bool, sync_fit: bool, pair_id: str) -> None:
+    @Slot(bool, str, bool, bool, str, str, str)
+    def runSync(self, dry_run: bool, direction: str, only_new: bool, sync_gases: bool, pair_id: str,
+                garmin_username: str = "", divelogs_username: str = "") -> None:
         if self._busy():
             self._set_status("A sync or download is already running.")
             return
-        custom = {"directionality": direction, "only_new": only_new, "sync_gases": sync_gases, "sync_fit": sync_fit}
+        custom = {"directionality": direction, "only_new": only_new, "sync_gases": sync_gases}
         if pair_id:
             custom["pair"] = pair_id
+        if garmin_username:
+            custom["garmin_username"] = garmin_username
+        if divelogs_username:
+            custom["divelogs_username"] = divelogs_username
         self._start("Running…", lambda: self._run_sync(dry_run, custom),
                     lambda: "Dry run complete." if dry_run else "Sync complete.")
 
@@ -133,7 +146,9 @@ class SyncController(QObject):
             scheduler.run_sync_thread(dry_run, custom)
         finally:
             credentials.end_operation()
-        return dict(scheduler.last_sync_results)
+        # last_sync_results is keyed by job id (rework.md A7); a manual
+        # desktop run never sets "id", so it always lands under "Manual".
+        return dict(scheduler.last_sync_results.get(custom.get("id") or "Manual", {}))
 
     @staticmethod
     def _run_download(overwrite: bool, include_garmin: bool, include_divelogs: bool) -> dict:

@@ -29,23 +29,77 @@ body {
   color: var(--text);
 }
 
-header {
+.app-shell {
   display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--border);
+  align-items: flex-start;
+  min-height: 100vh;
 }
 
-header h1 { margin: 0; font-size: 1.25rem; }
+.sidebar {
+  flex: 0 0 200px;
+  width: 200px;
+  min-height: 100vh;
+  background: #1f2937;
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+}
+
+.sidebar-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-header h1 { margin: 0; font-size: 1.15rem; color: #fff; }
+.sidebar-header .muted { color: #9ca3af; }
+
+.nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: #e5e7eb;
+  border: none;
+  border-radius: 0;
+  padding: 0.6rem 1.25rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.nav-item:hover { background: rgba(255, 255, 255, 0.06); }
+.nav-item.active { background: #0ea5a4; color: #fff; }
 
 main {
+  flex: 1;
+  min-width: 0;
   max-width: 900px;
-  margin: 0 auto;
   padding: 1.5rem;
+}
+
+.page {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.page[hidden] { display: none; }
+
+@media (max-width: 700px) {
+  .app-shell { flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    min-height: auto;
+    flex-direction: row;
+    align-items: center;
+    position: static;
+    overflow-x: auto;
+  }
+  .sidebar-header { border-bottom: none; margin-bottom: 0; white-space: nowrap; }
+  .nav-item { width: auto; white-space: nowrap; }
 }
 
 .card {
@@ -119,6 +173,18 @@ input, select {
 }
 
 .inline-form label { max-width: 220px; }
+
+.account-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-row:last-child { border-bottom: none; }
+.account-row label { max-width: 220px; margin: 0; flex: 1 1 160px; }
 
 button {
   padding: 0.45rem 0.9rem;

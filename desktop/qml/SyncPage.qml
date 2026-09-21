@@ -34,13 +34,30 @@ ColumnLayout {
                     valueRole: "value"
                 }
             }
+            ColumnLayout {
+                spacing: 2
+                Text { text: "Garmin account"; color: Theme.muted; font.pixelSize: 11 }
+                ComboBox {
+                    id: garminAccountBox
+                    Layout.preferredWidth: 180
+                    model: ["Default account"].concat(syncController.garminAccounts)
+                }
+            }
+            ColumnLayout {
+                spacing: 2
+                Text { text: "Divelogs account"; color: Theme.muted; font.pixelSize: 11 }
+                ComboBox {
+                    id: divelogsAccountBox
+                    Layout.preferredWidth: 180
+                    model: ["Default account"].concat(syncController.divelogsAccounts)
+                }
+            }
         }
         RowLayout {
             spacing: 16
             CheckBox { id: dryRun; text: "Dry run" }
             CheckBox { id: onlyNew; text: "Only new dives"; checked: true }
             CheckBox { id: gases; text: "Sync gases"; checked: true }
-            CheckBox { id: fit; text: "Sync FIT files" }
         }
         RowLayout {
             spacing: 8
@@ -59,7 +76,9 @@ ColumnLayout {
                 text: "Sync now"
                 enabled: !syncController.running
                 onClicked: syncController.runSync(dryRun.checked, directionBox.currentValue || "bidirectional",
-                                                  onlyNew.checked, gases.checked, fit.checked, pairBox.currentValue || "")
+                                                  onlyNew.checked, gases.checked, pairBox.currentValue || "",
+                                                  garminAccountBox.currentIndex > 0 ? garminAccountBox.currentText : "",
+                                                  divelogsAccountBox.currentIndex > 0 ? divelogsAccountBox.currentText : "")
             }
             Button {
                 text: "Download dives"

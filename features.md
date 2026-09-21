@@ -37,7 +37,7 @@ Verified against the code on 2026-09-20 (branch `feature_branch`, commit `4b234a
 | 1.18 | Date-range filters (`date_from` / `date_to`) | ✅ | Settings or CLI override |
 | 1.19 | Dry-run mode (no remote writes, no state update) | ✅ | CLI `--dry-run`, status page toggle, desktop switch |
 | 1.20 | API cooldown between requests (`api_cooldown_seconds`) | ✅ | Applied in both adapters; Garmin login 429 is logged with a wait hint |
-| 1.21 | Multi-account credentials (list of Garmin and/or Divelogs accounts) | 🚧 | Supported by `CredentialsModel`; account selection only via CLI `--garmin` / `--divelogs`. Scheduler, status page and desktop app use the single configured account and raise if more than one is present |
+| 1.21 | Multi-account credentials (list of Garmin and/or Divelogs accounts) | ✅ | `CredentialsModel` plus CLI `--garmin`/`--divelogs`, and since 2026-09-21 (rework.md A8/E7) also the scheduler (`CronJobModel` account fields), the status page (repeatable account rows, cron/trigger dropdowns) and the desktop app (keychain rebuilt for N accounts per service, `SettingsPage.qml`/`SyncPage.qml`) |
 | 1.22 | Per-account sync state and data directories | ✅ | `sync_state_<garmin>_<divelogs>.json`, `data/garmin/<user>/`, `data/divelogs/<user>/` |
 | 1.23 | FIT file download from Garmin (`fetch_fit_file`) | 🚧 | Only used by `--backup` when `sync_fit` is on. `sync_fit` has no effect on a normal sync run |
 | 1.24 | Full-history backup to flat JSON (`--backup`) | ✅ | `sync_engine.py:backup` |
@@ -50,7 +50,7 @@ Verified against the code on 2026-09-20 (branch `feature_branch`, commit `4b234a
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
 | 2.1 | Background asyncio watcher, checks settings every minute | ✅ | No FastAPI dependency; reusable from any entry point |
-| 2.2 | Cron-like jobs: hourly / daily / weekly / custom-minute interval | ✅ | `CronJobModel` — per-job direction, only_new, sync_gases, sync_fit, enabled, optional `field_links`. Per-job values are now passed as explicit `run_sync` overrides (they used to be lost to the settings reload) |
+| 2.2 | Cron-like jobs: hourly / daily / weekly / custom-minute interval | ✅ | `CronJobModel` — per-job direction, only_new, sync_gases, account selection (`garmin_username`/`divelogs_username`, rework.md A8), enabled, optional `field_links`. Per-job values are now passed as explicit `run_sync` overrides (they used to be lost to the settings reload). `sync_fit` removed from here 2026-09-21 (E6) - it never affected a normal sync run |
 | 2.3 | Legacy daily time slots (`schedule: [{hour, minute}]`) | ✅ | Still honoured alongside cron jobs |
 | 2.4 | Skip a job when a sync is already running | ✅ | Single global `is_sync_running` flag |
 | 2.5 | Next-run estimate for status display | ✅ | `get_next_scheduled_run` |
@@ -81,7 +81,7 @@ Verified against the code on 2026-09-20 (branch `feature_branch`, commit `4b234a
 | 4.3 | Manual "Sync now" with dry-run toggle (409 if already running) | ✅ | `POST /api/sync/trigger` accepts direction/filter overrides |
 | 4.4 | Live log tail via Server-Sent Events | ✅ | `GET /api/logs/stream` |
 | 4.5 | Credentials form: save + test Garmin/Divelogs/Subsurface Cloud/Submersion login | 🚧 | `POST /api/credentials` writes a single Garmin/Divelogs account and overwrites any multi-account list; Subsurface Cloud and Submersion (store type, S3 fields or folder path) each have their own form fieldset wired to save/test (rework.md F13, done 2026-09-22) |
-| 4.6 | Default sync settings form (direction, grace window, cooldown, only_new, sync_gases, sync_fit) | ✅ | `GET/POST /api/settings`; the payload also carries `field_links` and `sync_pairs` (validated on save, kept when omitted) |
+| 4.6 | Default sync settings form (direction, grace window, cooldown, only_new, sync_gases) | ✅ | `GET/POST /api/settings`; the payload also carries `field_links` and `sync_pairs` (validated on save, kept when omitted). No `sync_fit` control since 2026-09-21 (E6) - the stored value passes through unchanged on save |
 | 4.12 | Mapping board: per-pair drag-and-drop field linking, link editor (direction, conflict, match key, template with live preview), Save/Cancel/Reset, apply-to-all prompt, read-only Test mapping on the newest 10 dives | ✅ | 2026-09-22, rework.md C6/C20 |
 | 4.13 | Conflicts table with resolve buttons; sync pairs table; profile export/import with diff summary | ✅ | 2026-09-22, rework.md C6/C10/F5 |
 | 4.7 | Scheduled jobs table: add / edit / remove cron jobs | ✅ | |
@@ -129,8 +129,7 @@ Verified against the code on 2026-09-20 (branch `feature_branch`, commit `4b234a
 - Profile samples flow only Garmin→Divelogs.
 - In bidirectional mode Garmin wins every field conflict (buddy, notes, weight, visibility) on the **default** mapping board, and site names are not compared on matched dives. Per-link direction and conflict policy exist in `settings.json` (`field_links`) since 2026-09-21, but there is no UI to edit them yet (B11).
 - Docker and desktop syncing the same account from different machines have no shared lock; back-to-back runs can hit Garmin rate limits.
-- Multi-account works only from the CLI. Scheduler, status page and desktop app assume one account each.
-- `sync_fit` only affects `--backup`.
+- `sync_fit` only affects `--backup`; no UI sets it any more (rework.md E6) - use `POST /api/settings` or hand-edit `settings.json`.
 - Gases and tanks cannot be written to Garmin Connect through its API (creation or update); see rework.md E4 for the 2026-09-22 investigation.
 
 ---
@@ -141,15 +140,15 @@ Seeded from `todo_txt` and `rework.md`. Add new requests here; move them into th
 
 | # | Request | Priority | Status | Notes |
 |---|---------|----------|--------|-------|
-| B1 | Telemetry graphs in the desktop dive editor | | 📝 | rework.md phase 2 |
-| B2 | Windows and Linux desktop builds | | 📝 | rework.md phase 2 |
-| B3 | macOS signing and notarisation | | 📝 | rework.md phase 2 |
+| B1 | Telemetry graphs in the desktop dive editor | | ✅ | 2026-09-21 (rework.md E1): depth/temperature profile in `DivesPage.qml`, drawn on a QML `Canvas` rather than QtCharts (crashes this environment - see E1 note) |
+| B2 | Windows and Linux desktop builds | | 🚧 | rework.md E2: Briefcase config + CI workflow added 2026-09-21, not yet verified by an actual run (needs the owner to trigger it) |
+| B3 | macOS signing and notarisation | | 📝 | rework.md E3; deferred, owner has no Apple Developer account yet |
 | B4 | Sync gas mixtures / tank data Divelogs→Garmin | | 📝 | todo_txt: "check how to handle dive gases" |
 | B5 | Multi-tank data to Divelogs | | 📝 | todo_txt: "multi tank to divelogs - tank data" |
 | B6 | More verification / test coverage, especially Divelogs→Garmin | | 📝 | todo_txt: "add more verification" |
 | B7 | Sync with Subsurface (Subsurface Cloud git storage; `.ssrf` XML optional) | | ✅ | Git-storage adapter (rework.md F4) and Subsurface Cloud clone/commit/push (F6) done 2026-09-22: `subsurface:<dir>` for a checkout, `subsurface-cloud` for the account in `credentials.json`. Desktop UI for it is Track D |
-| B8 | Account selection for scheduled jobs, status page and desktop app | | 📝 | Closes gaps 1.21 / 2.7 / 4.5 / 5.17 |
-| B9 | Per-account last-sync status on the status page | | 📝 | Closes 4.10 |
+| B8 | Account selection for scheduled jobs, status page and desktop app | | ✅ | 2026-09-21 (rework.md A8/E7): `CronJobModel`/manual triggers carry optional `garmin_username`/`divelogs_username`; status page and desktop credentials forms take repeatable account rows instead of one account each; cron rows, the status-page "Sync now" trigger and desktop `SyncPage.qml` all show an always-visible account dropdown. Closes gaps 1.21 / 2.7 / 4.5 / 5.17 |
+| B9 | Per-account last-sync status on the status page | | ✅ | 2026-09-21 (rework.md A7): `scheduler.last_sync_results` keyed by job id; status page shows one row per job. Closes 4.10 |
 | B10 | Fix README `setup.py` reference and refresh `DOCKERHUB.md` feature list | | ✅ | 2026-09-22 |
 | B11 | Per-field sync rules defined by **linking fields** on a drag-and-drop mapping board (same board on the status page and in the desktop app): each link has a direction (bidirectional / to_target / to_source / off) and a conflict policy (source_wins / target_wins / prefer_non_empty / manual); adapters publish a field catalogue; manual conflicts queued to `conflicts.json` and resolved in either UI | | 🚧 | Engine, templates, conflict queue, CLI (2026-09-21) and the status-page board with Test mapping (2026-09-22, rework.md C6/C20) done. Pending: desktop board (C7, after Track D), docs (C8). Touches 1.11–1.14, 4.6, 5.2 |
 | B13 | Sync with Submersion by joining its cloud changeset log as a peer device (S3-compatible bucket, Dropbox or iCloud folder; Google Drive is not reachable by third parties). UDDF file exchange as fallback | | 🚧 | Codec, store/merge and peer adapter done 2026-09-22 (rework.md F10–F12): `submersion` spec, reads/writes an S3 or folder store, byte-verified against a real export. UI config done 2026-09-22 (F13: status page + desktop). Pending: confirm a real device consumes our base, incremental changesets, heartbeat |

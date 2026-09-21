@@ -15,6 +15,18 @@ def test_trigger_sync(monkeypatch):
     assert res.json()["status"] == "success"
 
 
+def test_trigger_sync_passes_account_overrides(monkeypatch):
+    client = TestClient(app)
+
+    called = []
+    monkeypatch.setattr(scheduler, "run_sync_thread", lambda dry_run, custom_settings=None: called.append((dry_run, custom_settings)))
+
+    res = client.post("/api/sync/trigger", json={"dry_run": True, "garmin_username": "alice", "divelogs_username": "bob"})
+    assert res.status_code == 200
+    assert called[0][1]["garmin_username"] == "alice"
+    assert called[0][1]["divelogs_username"] == "bob"
+
+
 def test_trigger_sync_rejects_when_already_running(monkeypatch):
     client = TestClient(app)
     monkeypatch.setattr(scheduler, "is_sync_running", True)
@@ -58,11 +70,8 @@ def test_credentials_api(tmp_path, monkeypatch):
 
     # Save credentials
     save_payload = {
-        "garmin_username": "test@garmin.com",
-        "garmin_password": "garminpassword",
-        "garmin_token_dir": "tokens/garmin",
-        "divelogs_username": "test_divelogs",
-        "divelogs_password": "divelogspassword"
+        "garmin_accounts": [{"username": "test@garmin.com", "password": "garminpassword", "token_dir": "tokens/garmin"}],
+        "divelogs_accounts": [{"username": "test_divelogs", "password": "divelogspassword"}],
     }
     res = client.post("/api/credentials", json=save_payload)
     assert res.status_code == 200
@@ -78,6 +87,21 @@ def test_credentials_api(tmp_path, monkeypatch):
     assert res.json()["garmin_accounts"] == ["test@garmin.com"]
     assert res.json()["divelogs_accounts"] == ["test_divelogs"]
 
+    # A second account can be added without retyping the first one's password
+    save_payload = {
+        "garmin_accounts": [
+            {"username": "test@garmin.com", "password": "", "token_dir": "tokens/garmin"},
+            {"username": "second@garmin.com", "password": "secondpw", "token_dir": "tokens/garmin"},
+        ],
+        "divelogs_accounts": [{"username": "test_divelogs", "password": "divelogspassword"}],
+    }
+    res = client.post("/api/credentials", json=save_payload)
+    assert res.status_code == 200
+    stored = original_load(creds_file)
+    stored_by_username = {a.username: a for a in stored.get_garmin_accounts()}
+    assert stored_by_username["test@garmin.com"].password == "garminpassword"
+    assert stored_by_username["second@garmin.com"].password == "secondpw"
+
 
 def test_credentials_test_api(monkeypatch):
     client = TestClient(app)
@@ -89,15 +113,13 @@ def test_credentials_test_api(monkeypatch):
     monkeypatch.setattr(DivelogsAdapter, "login", lambda self: True)
 
     payload = {
-        "garmin_username": "user",
-        "garmin_password": "pass",
-        "divelogs_username": "user",
-        "divelogs_password": "pass"
+        "garmin_accounts": [{"username": "user", "password": "pass"}],
+        "divelogs_accounts": [{"username": "user", "password": "pass"}],
     }
     res = client.post("/api/credentials/test", json=payload)
     assert res.status_code == 200
-    assert res.json()["garmin"] is True
-    assert res.json()["divelogs"] is True
+    assert res.json()["garmin"] == [{"username": "user", "ok": True}]
+    assert res.json()["divelogs"] == [{"username": "user", "ok": True}]
 
 
 def test_cron_jobs_api(tmp_path, monkeypatch):
@@ -140,8 +162,9 @@ def test_cron_jobs_api(tmp_path, monkeypatch):
                 "interval_minutes": 60,
                 "only_new": True,
                 "sync_gases": False,
-                "sync_fit": True,
-                "enabled": True
+                "enabled": True,
+                "garmin_username": "alice",
+                "divelogs_username": "bob"
             }
         ]
     }
@@ -161,8 +184,9 @@ def test_cron_jobs_api(tmp_path, monkeypatch):
     assert cron_jobs[0]["hour"] == 12
     assert cron_jobs[0]["minute"] == 30
     assert cron_jobs[0]["sync_gases"] is False
-    assert cron_jobs[0]["sync_fit"] is True
     assert cron_jobs[0]["enabled"] is True
+    assert cron_jobs[0]["garmin_username"] == "alice"
+    assert cron_jobs[0]["divelogs_username"] == "bob"
 
     # 4. Status reflects the next scheduled run once a job is configured
     res = client.get("/api/status")
@@ -244,7 +268,7 @@ def test_settings_api_carries_field_links(tmp_path, monkeypatch):
     payload = _base_settings_payload()
     payload["cron_jobs"] = [{
         "id": "job", "directionality": "to_divelogs", "frequency": "daily", "hour": 1, "minute": 0,
-        "day_of_week": 0, "interval_minutes": 60, "only_new": True, "sync_gases": True, "sync_fit": False,
+        "day_of_week": 0, "interval_minutes": 60, "only_new": True, "sync_gases": True,
         "enabled": True, "field_links": [{"id": "x", "source": ["garmin.nope"], "target": "divelogs.buddy"}],
     }]
     res = client.post("/api/settings", json=payload)
@@ -283,7 +307,7 @@ def test_credentials_api_preserves_subsurface_and_submersion(tmp_path, monkeypat
     subsurface = {"email": "me@x.org", "password": "pw"}
     submersion = {"endpoint_url": "https://s3.eu-central-003.backblazeb2.com", "region": "eu-central-003",
                   "bucket": "dives", "access_key_id": "id", "secret_access_key": "key"}
-    res = client.post("/api/credentials", json={"garmin_username": "g", "garmin_password": "p",
+    res = client.post("/api/credentials", json={"garmin_accounts": [{"username": "g", "password": "p"}],
                                                  "subsurface": subsurface, "submersion": submersion})
     assert res.status_code == 200
     status = client.get("/api/credentials/status").json()
@@ -292,7 +316,7 @@ def test_credentials_api_preserves_subsurface_and_submersion(tmp_path, monkeypat
     assert "password" not in status and "secret_access_key" not in str(status)
 
     # a Garmin/Divelogs-only save (the current form) keeps them
-    res = client.post("/api/credentials", json={"garmin_username": "g2", "garmin_password": "p"})
+    res = client.post("/api/credentials", json={"garmin_accounts": [{"username": "g2", "password": "p"}]})
     assert res.status_code == 200
     status = client.get("/api/credentials/status").json()
     assert status["garmin_username"] == "g2" and status["subsurface_configured"] and status["submersion_configured"]

@@ -141,6 +141,64 @@ def test_read_raw_dive_not_found(cache_dirs):
         dive_cache.read_raw_dive("garmin", "missing.json", base_dir=cache_dirs)
 
 
+def test_get_samples_garmin(tmp_path):
+    garmin_dir = tmp_path / "garmin"
+    garmin_dir.mkdir()
+    (garmin_dir / "1.json").write_text(json.dumps({
+        "summary": {"activityId": "1"},
+        "details": {},
+        "activityDetails": {
+            "metricDescriptors": [
+                {"key": "sumDuration", "metricsIndex": 0},
+                {"key": "directDepth", "metricsIndex": 1},
+                {"key": "directAirTemperature", "metricsIndex": 2},
+            ],
+            "activityDetailMetrics": [
+                {"metrics": [0, 0.0, 26.5]},
+                {"metrics": [30, 5.2, 25.0]},
+                {"metrics": [60, None, 24.5]},   # no depth -> dropped
+            ],
+        },
+    }))
+
+    samples = dive_cache.get_samples("garmin", "1.json", base_dir=str(tmp_path))
+
+    assert samples == [
+        {"time": 0, "depth": 0.0, "temp": 26.5},
+        {"time": 30, "depth": 5.2, "temp": 25.0},
+    ]
+
+
+def test_get_samples_garmin_no_activity_details(tmp_path):
+    garmin_dir = tmp_path / "garmin"
+    garmin_dir.mkdir()
+    (garmin_dir / "1.json").write_text(json.dumps({"summary": {"activityId": "1"}, "details": {}}))
+
+    assert dive_cache.get_samples("garmin", "1.json", base_dir=str(tmp_path)) == []
+
+
+def test_get_samples_divelogs(tmp_path):
+    divelogs_dir = tmp_path / "divelogs"
+    divelogs_dir.mkdir()
+    (divelogs_dir / "1.json").write_text(json.dumps({
+        "id": "1",
+        "samplerate": 30,
+        "sampledata": [{"d": 0.0, "t": 26.5}, {"d": 5.2, "t": 25.0}, {"d": 8.1}],
+    }))
+
+    samples = dive_cache.get_samples("divelogs", "1.json", base_dir=str(tmp_path))
+
+    assert samples == [
+        {"time": 0, "depth": 0.0, "temp": 26.5},
+        {"time": 30, "depth": 5.2, "temp": 25.0},
+        {"time": 60, "depth": 8.1, "temp": None},
+    ]
+
+
+def test_get_samples_divelogs_no_sampledata(cache_dirs):
+    assert dive_cache.get_samples("divelogs", "1.json", base_dir=cache_dirs) == []
+
+
 def test_update_dive_fields_garmin(cache_dirs):
     filepath = dive_cache.update_dive_fields(
         "garmin", "1.json", base_dir=cache_dirs,

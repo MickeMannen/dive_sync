@@ -12,7 +12,7 @@ def test_run_sync_thread_success(monkeypatch):
     scheduler.run_sync_thread(dry_run=True)
 
     assert scheduler.is_sync_running is False
-    assert scheduler.last_sync_results == {"status": "ok"}
+    assert scheduler.last_sync_results["Manual"] == {"status": "ok"}
 
 
 def test_run_sync_thread_records_error(monkeypatch):
@@ -26,7 +26,37 @@ def test_run_sync_thread_records_error(monkeypatch):
     scheduler.run_sync_thread(dry_run=False)
 
     assert scheduler.is_sync_running is False
-    assert scheduler.last_sync_results == {"error": "kaboom"}
+    assert scheduler.last_sync_results["Manual"] == {"error": "kaboom"}
+
+
+def test_run_sync_thread_keys_results_by_job_id(monkeypatch):
+    from src.core.sync_engine import SyncEngine
+
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False, **overrides: {"status": "ok"})
+
+    scheduler.run_sync_thread(dry_run=True, custom_settings={"id": "job-a"})
+    scheduler.run_sync_thread(dry_run=True)
+
+    assert scheduler.last_sync_results["job-a"] == {"status": "ok"}
+    assert scheduler.last_sync_results["Manual"] == {"status": "ok"}
+
+
+def test_run_sync_thread_passes_account_overrides(monkeypatch):
+    from src.core.sync_engine import SyncEngine
+
+    captured = {}
+
+    def fake_init(self, *args, garmin_username=None, divelogs_username=None, **kwargs):
+        captured["garmin_username"] = garmin_username
+        captured["divelogs_username"] = divelogs_username
+        self.run_overrides = {}
+
+    monkeypatch.setattr(SyncEngine, "__init__", fake_init)
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False, **overrides: {"status": "ok"})
+
+    scheduler.run_sync_thread(dry_run=True, custom_settings={"id": "job-a", "garmin_username": "alice", "divelogs_username": "bob"})
+
+    assert captured == {"garmin_username": "alice", "divelogs_username": "bob"}
 
 
 def test_run_download_thread_success(monkeypatch, tmp_path):

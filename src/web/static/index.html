@@ -7,31 +7,45 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header>
-    <h1>Dive Sync</h1>
-    <span id="version" class="muted"></span>
-  </header>
+  <div class="app-shell">
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <h1>Dive Sync</h1>
+        <span id="version" class="muted"></span>
+      </div>
+      <button type="button" class="nav-item" data-page="sync">Sync</button>
+      <button type="button" class="nav-item" data-page="mapping">Mapping</button>
+      <button type="button" class="nav-item" data-page="accounts">Accounts</button>
+    </nav>
 
-  <main>
+    <main>
+    <div class="page" data-page="sync">
     <section class="card">
       <h2>Status</h2>
       <div class="status-grid">
         <div><span class="label">Sync running</span><span id="status-running">–</span></div>
         <div><span class="label">Next scheduled run</span><span id="status-next">–</span></div>
-        <div><span class="label">Last result</span><span id="status-last">–</span></div>
       </div>
       <div class="actions">
         <label class="inline-checkbox"><input type="checkbox" id="trigger-dry-run"> Dry run</label>
+        <label>Garmin account <select id="trigger-garmin-account"></select></label>
+        <label>Divelogs account <select id="trigger-divelogs-account"></select></label>
         <button type="button" id="trigger-sync">Sync now</button>
         <span id="trigger-message" class="muted"></span>
       </div>
+      <table id="job-results-table">
+        <thead><tr><th>Job</th><th>Last result</th></tr></thead>
+        <tbody id="job-results-body"></tbody>
+      </table>
     </section>
 
     <section class="card">
       <h2>Live log</h2>
       <pre id="log-tail"></pre>
     </section>
+    </div>
 
+    <div class="page" data-page="mapping" hidden>
     <section class="card" id="board-card">
       <h2>Mapping board <span id="board-dirty" class="dirty" title="Unsaved changes" hidden>●</span></h2>
       <div class="board-toolbar">
@@ -117,20 +131,21 @@
       </div>
       <span id="conflicts-message" class="muted"></span>
     </section>
+    </div>
 
+    <div class="page" data-page="accounts" hidden>
     <section class="card">
       <h2>Credentials</h2>
       <form id="credentials-form">
         <fieldset>
           <legend>Garmin Connect <span id="garmin-configured" class="badge"></span></legend>
-          <label>Username <input type="text" id="garmin-username"></label>
-          <label>Password <input type="password" id="garmin-password"></label>
-          <label>Token dir <input type="text" id="garmin-token-dir" value="tokens/garmin"></label>
+          <div id="garmin-accounts-rows"></div>
+          <div class="actions"><button type="button" class="secondary" id="garmin-add-account">Add Garmin account</button></div>
         </fieldset>
         <fieldset>
           <legend>Divelogs.org <span id="divelogs-configured" class="badge"></span></legend>
-          <label>Username <input type="text" id="divelogs-username"></label>
-          <label>Password <input type="password" id="divelogs-password"></label>
+          <div id="divelogs-accounts-rows"></div>
+          <div class="actions"><button type="button" class="secondary" id="divelogs-add-account">Add Divelogs account</button></div>
         </fieldset>
         <fieldset>
           <legend>Subsurface Cloud <span id="subsurface-configured" class="badge"></span></legend>
@@ -165,7 +180,9 @@
         <span id="credentials-message" class="muted"></span>
       </form>
     </section>
+    </div>
 
+    <div class="page" data-page="sync" hidden>
     <section class="card">
       <h2>Default sync settings</h2>
       <form id="defaults-form" class="inline-form">
@@ -180,7 +197,6 @@
         <label>API cooldown (sec) <input type="number" step="0.1" id="api-cooldown" min="0"></label>
         <label><input type="checkbox" id="default-only-new"> Only new dives</label>
         <label><input type="checkbox" id="default-sync-gases"> Sync gases</label>
-        <label><input type="checkbox" id="default-sync-fit"> Sync FIT files</label>
       </form>
     </section>
 
@@ -206,7 +222,8 @@
           <thead>
             <tr>
               <th>ID</th><th>Pair</th><th>Direction</th><th>Frequency</th><th>Hour</th><th>Min</th>
-              <th>Day</th><th>Interval (min)</th><th>Only new</th><th>Gases</th><th>FIT</th><th>Enabled</th><th></th>
+              <th>Day</th><th>Interval (min)</th><th>Only new</th><th>Gases</th><th>Enabled</th>
+              <th>Garmin account</th><th>Divelogs account</th><th></th>
             </tr>
           </thead>
           <tbody id="cron-body"></tbody>
@@ -231,7 +248,9 @@
       <pre id="profile-summary" class="summary" hidden></pre>
       <span id="profile-message" class="muted"></span>
     </section>
-  </main>
+    </div>
+    </main>
+  </div>
 
   <script src="/static/script.js"></script>
 </body>

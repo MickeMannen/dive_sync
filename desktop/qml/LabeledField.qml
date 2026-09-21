@@ -10,6 +10,7 @@ ColumnLayout {
     property alias readOnly: input.readOnly
     property bool secret: false
     property int fieldWidth: 220
+    signal editingFinished()
     spacing: 2
     Text { text: field.label; color: Theme.muted; font.pixelSize: 11 }
     TextField {
@@ -17,5 +18,6 @@ ColumnLayout {
         Layout.preferredWidth: field.fieldWidth
         echoMode: field.secret ? TextInput.Password : TextInput.Normal
         selectByMouse: true
+        onEditingFinished: field.editingFinished()
     }
 }

@@ -591,7 +591,6 @@ class SyncEngine:
     def run_sync(self, dry_run: bool = False, date_from_override: Optional[str] = None,
                  date_to_override: Optional[str] = None, only_new_override: Optional[bool] = None,
                  direction_override: Optional[str] = None, sync_gases_override: Optional[bool] = None,
-                 sync_fit_override: Optional[bool] = None,
                  field_links_override: Optional[List[FieldLink]] = None,
                  grace_window_override: Optional[int] = None) -> Dict[str, Any]:
         """Perform bidirectional or directional synchronization.
@@ -615,8 +614,6 @@ class SyncEngine:
             self.settings.directionality = direction_override
         if sync_gases_override is not None:
             self.settings.sync_filters.sync_gases = sync_gases_override
-        if sync_fit_override is not None:
-            self.settings.sync_filters.sync_fit = sync_fit_override
         if field_links_override is not None:
             self.settings.field_links = list(field_links_override)
         if grace_window_override is not None:

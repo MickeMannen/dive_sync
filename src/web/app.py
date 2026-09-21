@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, CredentialsModel, CronJobModel, SyncPairModel
 from src.core.fields import FieldLink, build_catalog
@@ -77,10 +77,11 @@ class CronJobSchema(BaseModel):
     interval_minutes: int
     only_new: bool
     sync_gases: bool
-    sync_fit: bool
     enabled: bool
     field_links: Optional[List[FieldLink]] = None
     pair: Optional[str] = None
+    garmin_username: Optional[str] = None
+    divelogs_username: Optional[str] = None
 
 class SettingsSchema(BaseModel):
     directionality: str
@@ -101,14 +102,18 @@ class SyncTriggerRequest(BaseModel):
     date_to: Optional[str] = None
     only_new: Optional[bool] = None
     sync_gases: Optional[bool] = None
-    sync_fit: Optional[bool] = None
+    garmin_username: Optional[str] = None
+    divelogs_username: Optional[str] = None
 
 class CredentialsSchema(BaseModel):
-    garmin_username: str = ""
-    garmin_password: str = ""
-    garmin_token_dir: str = "tokens/garmin"
-    divelogs_username: str = ""
-    divelogs_password: str = ""
+    # Repeatable rows (rework.md A8): the Garmin/Divelogs sections of the
+    # form are always fully submitted, so these lists fully replace what was
+    # stored (an empty list means "no accounts"), same as the old single
+    # username/password fields did. A row's password left blank keeps the
+    # stored password for an existing account with the same username (see
+    # save_credentials) rather than wiping it.
+    garmin_accounts: List[GarminCredentials] = Field(default_factory=list)
+    divelogs_accounts: List[DivelogsCredentials] = Field(default_factory=list)
     # Optional sections; omitted (None) means "leave what is stored".
     subsurface: Optional[SubsurfaceCredentials] = None
     submersion: Optional[SubmersionCredentials] = None
@@ -136,10 +141,11 @@ def save_settings(data: SettingsSchema):
                 interval_minutes=job.interval_minutes,
                 only_new=job.only_new,
                 sync_gases=job.sync_gases,
-                sync_fit=job.sync_fit,
                 enabled=job.enabled,
                 field_links=job.field_links,
                 pair=job.pair,
+                garmin_username=job.garmin_username,
+                divelogs_username=job.divelogs_username,
             )
             for job in data.cron_jobs
         ]
@@ -254,6 +260,11 @@ def get_credentials_status():
         "divelogs_username": divelogs_users[0] if divelogs_users else "",
         "garmin_accounts": garmin_users,
         "divelogs_accounts": divelogs_users,
+        # Structured rows (no passwords) for the repeatable-account-row
+        # credentials form; garmin_accounts/divelogs_accounts above stay a
+        # flat username list for dropdown-style consumers (cron job editor).
+        "garmin_account_rows": [{"username": a.username, "token_dir": a.token_dir} for a in garmin_accounts if a.username],
+        "divelogs_account_rows": [{"username": a.username} for a in divelogs_accounts if a.username],
         "subsurface_configured": creds.subsurface.configured,
         "subsurface_email": creds.subsurface.email,
         "submersion_configured": creds.submersion.configured,
@@ -269,6 +280,19 @@ def get_credentials_status():
     }
 
 
+def _merge_passwords(submitted: list, existing: list):
+    """A row with a blank password whose username matches an already-stored
+    account keeps that account's stored password, so adding/removing one
+    account doesn't force retyping every other account's password."""
+    existing_by_username = {a.username: a for a in existing if a.username}
+    merged = []
+    for account in submitted:
+        if not account.password and account.username in existing_by_username:
+            account = account.model_copy(update={"password": existing_by_username[account.username].password})
+        merged.append(account)
+    return merged
+
+
 @app.post("/api/credentials")
 def save_credentials(data: CredentialsSchema):
     try:
@@ -276,15 +300,8 @@ def save_credentials(data: CredentialsSchema):
         # Subsurface / Submersion entries survive a Garmin/Divelogs save.
         current = ConfigManager.load_credentials()
         creds = current.model_copy(update={
-            "garmin": GarminCredentials(
-                username=data.garmin_username,
-                password=data.garmin_password,
-                token_dir=data.garmin_token_dir
-            ),
-            "divelogs": DivelogsCredentials(
-                username=data.divelogs_username,
-                password=data.divelogs_password
-            ),
+            "garmin": _merge_passwords(data.garmin_accounts, current.get_garmin_accounts()),
+            "divelogs": _merge_passwords(data.divelogs_accounts, current.get_divelogs_accounts()),
         })
         if data.subsurface is not None:
             creds = creds.model_copy(update={"subsurface": data.subsurface})
@@ -299,34 +316,47 @@ def save_credentials(data: CredentialsSchema):
 
 @app.post("/api/credentials/test")
 def test_credentials(data: CredentialsSchema):
+    """Per-account results (rework.md A8): only rows with both a username
+    and a password can actually be tested - a row kept via the blank-password
+    merge in save_credentials has no password here to test with."""
     results = {"garmin": None, "divelogs": None}
 
-    if data.garmin_username and data.garmin_password:
-        try:
-            from src.core.services.garmin import GarminAdapter
-            adapter = GarminAdapter(
-                username=data.garmin_username,
-                password=data.garmin_password,
-                token_dir=data.garmin_token_dir,
-                cooldown_seconds=1.0
-            )
-            results["garmin"] = adapter.login()
-        except Exception as e:
-            logger.error("Garmin credential test failed: %s", e)
-            results["garmin"] = False
+    garmin_rows = [a for a in data.garmin_accounts if a.username and a.password]
+    if garmin_rows:
+        from src.core.services.garmin import GarminAdapter
+        garmin_results = []
+        for account in garmin_rows:
+            try:
+                adapter = GarminAdapter(
+                    username=account.username,
+                    password=account.password,
+                    token_dir=account.token_dir,
+                    cooldown_seconds=1.0
+                )
+                ok = adapter.login()
+            except Exception as e:
+                logger.error("Garmin credential test failed for %s: %s", account.username, e)
+                ok = False
+            garmin_results.append({"username": account.username, "ok": ok})
+        results["garmin"] = garmin_results
 
-    if data.divelogs_username and data.divelogs_password:
-        try:
-            from src.core.services.divelogs import DivelogsAdapter
-            adapter = DivelogsAdapter(
-                username=data.divelogs_username,
-                password=data.divelogs_password,
-                cooldown_seconds=1.0
-            )
-            results["divelogs"] = adapter.login()
-        except Exception as e:
-            logger.error("Divelogs credential test failed: %s", e)
-            results["divelogs"] = False
+    divelogs_rows = [a for a in data.divelogs_accounts if a.username and a.password]
+    if divelogs_rows:
+        from src.core.services.divelogs import DivelogsAdapter
+        divelogs_results = []
+        for account in divelogs_rows:
+            try:
+                adapter = DivelogsAdapter(
+                    username=account.username,
+                    password=account.password,
+                    cooldown_seconds=1.0
+                )
+                ok = adapter.login()
+            except Exception as e:
+                logger.error("Divelogs credential test failed for %s: %s", account.username, e)
+                ok = False
+            divelogs_results.append({"username": account.username, "ok": ok})
+        results["divelogs"] = divelogs_results
 
     if data.subsurface is not None and data.subsurface.configured:
         from src.core.services.subsurface_cloud import check_cloud_login

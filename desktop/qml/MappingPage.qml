@@ -195,11 +195,12 @@ ColumnLayout {
 
         // test result
         ColumnLayout {
+            id: testResultBox
             visible: mappingController.testResult.ok === true
             property var result: mappingController.testResult
-            Text { text: result.ok ? ("Fetched " + JSON.stringify(result.fetched) + ", " + result.matched + " matched pair(s). Read-only: nothing was written.") : ""; color: Theme.muted; font.pixelSize: 11 }
+            Text { text: testResultBox.result.ok ? ("Fetched " + JSON.stringify(testResultBox.result.fetched) + ", " + testResultBox.result.matched + " matched pair(s). Read-only: nothing was written.") : ""; color: Theme.muted; font.pixelSize: 11 }
             Repeater {
-                model: result.rows || []
+                model: testResultBox.result.rows || []
                 delegate: RowLayout {
                     required property var modelData
                     Text { text: modelData.dive_time; color: Theme.muted; Layout.preferredWidth: 140; font.pixelSize: 11 }

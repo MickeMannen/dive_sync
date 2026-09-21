@@ -62,20 +62,40 @@ class SettingsController(QObject):
     def hasCredentials(self) -> bool:
         return creds_store.has_any_credentials()
 
-    @Property(str, notify=credentialsChanged)
-    def garminUsername(self) -> str:
-        accounts = self._model.get_garmin_accounts()
-        return accounts[0].username if accounts else ""
+    @Property("QVariantList", notify=credentialsChanged)
+    def garminAccounts(self):
+        """Usernames and token dirs only - never the password, same as the
+        status page's account rows (rework.md E7)."""
+        return [{"username": a.username, "token_dir": a.token_dir} for a in self._model.get_garmin_accounts()]
 
-    @Property(str, notify=credentialsChanged)
-    def garminTokenDir(self) -> str:
-        accounts = self._model.get_garmin_accounts()
-        return (accounts[0].token_dir if accounts else "") or creds_store.DEFAULT_GARMIN_TOKEN_DIR
+    @Property("QVariantList", notify=credentialsChanged)
+    def divelogsAccounts(self):
+        return [{"username": a.username} for a in self._model.get_divelogs_accounts()]
 
-    @Property(str, notify=credentialsChanged)
-    def divelogsUsername(self) -> str:
-        accounts = self._model.get_divelogs_accounts()
-        return accounts[0].username if accounts else ""
+    @Slot("QVariantList")
+    def saveGarminAccounts(self, rows) -> None:
+        from src.core.config import GarminCredentials
+        accounts = [
+            GarminCredentials(username=str(r.get("username", "")).strip(), password=str(r.get("password", "")),
+                              token_dir=str(r.get("token_dir", "")).strip() or creds_store.DEFAULT_GARMIN_TOKEN_DIR)
+            for r in rows if str(r.get("username", "")).strip()
+        ]
+        creds_store._save_accounts("garmin", accounts)
+        self._model = creds_store.load_credentials_model()
+        self.credentialsChanged.emit()
+        self._set("_message", "Saved to keychain.", self.messageChanged)
+
+    @Slot("QVariantList")
+    def saveDivelogsAccounts(self, rows) -> None:
+        from src.core.config import DivelogsCredentials
+        accounts = [
+            DivelogsCredentials(username=str(r.get("username", "")).strip(), password=str(r.get("password", "")))
+            for r in rows if str(r.get("username", "")).strip()
+        ]
+        creds_store._save_accounts("divelogs", accounts)
+        self._model = creds_store.load_credentials_model()
+        self.credentialsChanged.emit()
+        self._set("_message", "Saved to keychain.", self.messageChanged)
 
     @Property(str, notify=credentialsChanged)
     def subsurfaceEmail(self) -> str:
@@ -128,9 +148,9 @@ class SettingsController(QObject):
 
     @Slot(str, str, str)
     def testGarmin(self, username: str, password: str, token_dir: str) -> None:
-        accounts = self._model.get_garmin_accounts()
-        password = password or (accounts[0].password if accounts else "")
-        token_dir = token_dir or creds_store.DEFAULT_GARMIN_TOKEN_DIR
+        stored = next((a for a in self._model.get_garmin_accounts() if a.username == username), None)
+        password = password or (stored.password if stored else "")
+        token_dir = token_dir or (stored.token_dir if stored else "") or creds_store.DEFAULT_GARMIN_TOKEN_DIR
         if not username or not password:
             self._set("_garmin_status", "Enter a username and password first.", self.garminStatusChanged)
             return
@@ -143,8 +163,8 @@ class SettingsController(QObject):
 
     @Slot(str, str)
     def testDivelogs(self, username: str, password: str) -> None:
-        accounts = self._model.get_divelogs_accounts()
-        password = password or (accounts[0].password if accounts else "")
+        stored = next((a for a in self._model.get_divelogs_accounts() if a.username == username), None)
+        password = password or (stored.password if stored else "")
         if not username or not password:
             self._set("_divelogs_status", "Enter a username and password first.", self.divelogsStatusChanged)
             return
@@ -197,34 +217,31 @@ class SettingsController(QObject):
 
     # -- save -------------------------------------------------------------
 
-    @Slot(str, str, str, str, str, str, str, str, str, str, str, str, str, str, bool, str)
-    def save(self, garmin_user: str, garmin_pw: str, token_dir: str, divelogs_user: str, divelogs_pw: str,
-             subsurface_email: str, subsurface_pw: str,
+    @Slot(str, str, str, str, str, str, str, str, str, bool, str)
+    def save(self, subsurface_email: str, subsurface_pw: str,
              submersion_store_type: str, submersion_endpoint_url: str, submersion_region: str,
              submersion_bucket: str, submersion_prefix: str, submersion_access_key_id: str,
              submersion_secret_access_key: str, submersion_path_style: bool, submersion_folder_path: str) -> None:
-        from src.core.config import CredentialsModel, DivelogsCredentials, GarminCredentials, SubsurfaceCredentials, SubmersionCredentials
-        g_accounts = self._model.get_garmin_accounts()
-        d_accounts = self._model.get_divelogs_accounts()
-        model = CredentialsModel(
-            garmin=GarminCredentials(username=garmin_user, password=garmin_pw or (g_accounts[0].password if g_accounts else ""),
-                                     token_dir=token_dir or creds_store.DEFAULT_GARMIN_TOKEN_DIR),
-            divelogs=DivelogsCredentials(username=divelogs_user, password=divelogs_pw or (d_accounts[0].password if d_accounts else "")),
-            subsurface=SubsurfaceCredentials(email=subsurface_email, password=subsurface_pw or self._model.subsurface.password,
-                                             base_url=self._model.subsurface.base_url),
-            submersion=SubmersionCredentials(
-                store_type=submersion_store_type or "s3",
-                endpoint_url=submersion_endpoint_url,
-                region=submersion_region,
-                bucket=submersion_bucket,
-                prefix=submersion_prefix or SubmersionCredentials().prefix,
-                access_key_id=submersion_access_key_id,
-                secret_access_key=submersion_secret_access_key or self._model.submersion.secret_access_key,
-                path_style=submersion_path_style,
-                folder_path=submersion_folder_path,
-            ),
-        )
-        creds_store.save_credentials_model(model)
+        """Subsurface Cloud + Submersion only - Garmin/Divelogs accounts save
+        independently via saveGarminAccounts()/saveDivelogsAccounts() (E7),
+        since this writes those two sections directly rather than going
+        through save_credentials_model(), which would otherwise replace the
+        whole account list with whatever (nothing) this slot was given."""
+        creds_store._set("subsurface", "email", subsurface_email)
+        creds_store._set("subsurface", "password", subsurface_pw or self._model.subsurface.password)
+        creds_store._set("subsurface", "base_url", self._model.subsurface.base_url if subsurface_email else "")
+
+        from src.core.config import SubmersionCredentials
+        creds_store._set("submersion", "store_type", submersion_store_type or "s3")
+        creds_store._set("submersion", "endpoint_url", submersion_endpoint_url)
+        creds_store._set("submersion", "region", submersion_region)
+        creds_store._set("submersion", "bucket", submersion_bucket)
+        creds_store._set("submersion", "prefix", submersion_prefix or SubmersionCredentials().prefix)
+        creds_store._set("submersion", "access_key_id", submersion_access_key_id)
+        creds_store._set("submersion", "secret_access_key", submersion_secret_access_key or self._model.submersion.secret_access_key)
+        creds_store._set("submersion", "path_style", "1" if submersion_path_style else "")
+        creds_store._set("submersion", "folder_path", submersion_folder_path)
+
         self._model = creds_store.load_credentials_model()
         self.credentialsChanged.emit()
         self._set("_message", "Saved to keychain.", self.messageChanged)

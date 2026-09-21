@@ -113,7 +113,7 @@ ColumnLayout {
         onSelChanged: loadTanks()
 
         Text {
-            text: sel.filename ? (sel.date_time + " — " + (sel.location || "Unnamed dive")) : "No dive selected"
+            text: detailCard.sel.filename ? (detailCard.sel.date_time + " — " + (detailCard.sel.location || "Unnamed dive")) : "No dive selected"
             color: Theme.text
             font.bold: true
         }
@@ -121,34 +121,34 @@ ColumnLayout {
             columns: 4
             columnSpacing: 12
             rowSpacing: 6
-            enabled: !!sel.filename
-            LabeledField { id: fDiveNumber; label: "Dive #"; fieldWidth: 90; text: sel.dive_number || "" }
-            LabeledField { id: fDate; label: "Date"; fieldWidth: 120; text: sel.date || "" }
-            LabeledField { id: fTime; label: "Time"; fieldWidth: 100; text: sel.time || "" }
-            LabeledField { id: fDuration; label: "Duration (min)"; fieldWidth: 100; text: sel.duration || "" }
-            LabeledField { id: fMaxDepth; label: "Max depth (m)"; fieldWidth: 100; text: sel.max_depth || "" }
-            LabeledField { label: "Avg depth (m)"; fieldWidth: 100; readOnly: true; text: sel.avg_depth || "" }
-            LabeledField { id: fWaterTemp; label: "Water temp (°C)"; fieldWidth: 100; text: sel.water_temp_value !== undefined && sel.water_temp_value !== null ? String(sel.water_temp_value) : "" }
-            LabeledField { id: fLocation; label: "Location"; fieldWidth: 260; text: sel.location || "" }
-            LabeledField { id: fWeight; label: "Weight"; fieldWidth: 100; text: sel.weight || "" }
-            LabeledField { id: fVisibility; label: "Visibility"; fieldWidth: 100; text: sel.visibility || "" }
-            LabeledField { id: fBuddy; label: "Buddy"; fieldWidth: 160; text: sel.buddy || "" }
-            LabeledField { id: fLat; label: "Latitude"; fieldWidth: 100; text: sel.lat !== undefined && sel.lat !== null ? String(sel.lat) : "" }
-            LabeledField { id: fLng; label: "Longitude"; fieldWidth: 100; text: sel.lng !== undefined && sel.lng !== null ? String(sel.lng) : "" }
+            enabled: !!detailCard.sel.filename
+            LabeledField { id: fDiveNumber; label: "Dive #"; fieldWidth: 90; text: detailCard.sel.dive_number || "" }
+            LabeledField { id: fDate; label: "Date"; fieldWidth: 120; text: detailCard.sel.date || "" }
+            LabeledField { id: fTime; label: "Time"; fieldWidth: 100; text: detailCard.sel.time || "" }
+            LabeledField { id: fDuration; label: "Duration (min)"; fieldWidth: 100; text: detailCard.sel.duration || "" }
+            LabeledField { id: fMaxDepth; label: "Max depth (m)"; fieldWidth: 100; text: detailCard.sel.max_depth || "" }
+            LabeledField { label: "Avg depth (m)"; fieldWidth: 100; readOnly: true; text: detailCard.sel.avg_depth || "" }
+            LabeledField { id: fWaterTemp; label: "Water temp (°C)"; fieldWidth: 100; text: detailCard.sel.water_temp_value !== undefined && detailCard.sel.water_temp_value !== null ? String(detailCard.sel.water_temp_value) : "" }
+            LabeledField { id: fLocation; label: "Location"; fieldWidth: 260; text: detailCard.sel.location || "" }
+            LabeledField { id: fWeight; label: "Weight"; fieldWidth: 100; text: detailCard.sel.weight || "" }
+            LabeledField { id: fVisibility; label: "Visibility"; fieldWidth: 100; text: detailCard.sel.visibility || "" }
+            LabeledField { id: fBuddy; label: "Buddy"; fieldWidth: 160; text: detailCard.sel.buddy || "" }
+            LabeledField { id: fLat; label: "Latitude"; fieldWidth: 100; text: detailCard.sel.lat !== undefined && detailCard.sel.lat !== null ? String(detailCard.sel.lat) : "" }
+            LabeledField { id: fLng; label: "Longitude"; fieldWidth: 100; text: detailCard.sel.lng !== undefined && detailCard.sel.lng !== null ? String(detailCard.sel.lng) : "" }
         }
         ColumnLayout {
             spacing: 2
-            enabled: !!sel.filename
+            enabled: !!detailCard.sel.filename
             Text { text: "Notes"; color: Theme.muted; font.pixelSize: 11 }
             ScrollView {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 80
-                TextArea { id: fNotes; text: sel.notes || ""; wrapMode: TextEdit.Wrap; selectByMouse: true }
+                TextArea { id: fNotes; text: detailCard.sel.notes || ""; wrapMode: TextEdit.Wrap; selectByMouse: true }
             }
         }
         ColumnLayout {
             spacing: 4
-            enabled: !!sel.filename
+            enabled: !!detailCard.sel.filename
             RowLayout {
                 spacing: 8
                 Text { text: "Tanks / gases"; color: Theme.muted; font.pixelSize: 11 }
@@ -160,7 +160,7 @@ ColumnLayout {
                     font.italic: true
                 }
             }
-            Text { visible: !controller.tanksEditable; text: sel.tanks || "—"; color: Theme.text }
+            Text { visible: !controller.tanksEditable; text: detailCard.sel.tanks || "—"; color: Theme.text }
             ColumnLayout {
                 visible: controller.tanksEditable
                 spacing: 4
@@ -199,11 +199,108 @@ ColumnLayout {
                 }
             }
         }
+        ColumnLayout {
+            id: profileSection
+            spacing: 4
+            visible: (detailCard.sel.samples || []).length > 1
+            function hasTemperature(samples) {
+                for (var i = 0; i < samples.length; i++) {
+                    if (samples[i].temp !== null && samples[i].temp !== undefined) return true
+                }
+                return false
+            }
+            RowLayout {
+                spacing: 12
+                Text { text: "Depth profile"; color: Theme.muted; font.pixelSize: 11 }
+                Text { text: "● depth"; color: Theme.accent; font.pixelSize: 11 }
+                Text { text: "● temperature"; color: "#e07b39"; font.pixelSize: 11; visible: profileSection.hasTemperature(detailCard.sel.samples || []) }
+            }
+            Canvas {
+                id: profileCanvas
+                Layout.fillWidth: true
+                Layout.preferredHeight: 160
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+                Connections { target: detailCard; function onSelChanged() { profileCanvas.requestPaint() } }
+                onPaint: {
+                    var ctx = getContext("2d")
+                    ctx.clearRect(0, 0, width, height)
+                    var samples = detailCard.sel.samples || []
+                    if (samples.length < 2 || width <= 0 || height <= 0) return
+
+                    var pad = { left: 40, right: 44, top: 10, bottom: 20 }
+                    var plotW = width - pad.left - pad.right
+                    var plotH = height - pad.top - pad.bottom
+                    if (plotW <= 0 || plotH <= 0) return
+
+                    var maxTime = samples[samples.length - 1].time || 0
+                    var maxDepth = 0
+                    var temps = []
+                    for (var i = 0; i < samples.length; i++) {
+                        if (samples[i].depth > maxDepth) maxDepth = samples[i].depth
+                        if (samples[i].temp !== null && samples[i].temp !== undefined) temps.push(samples[i].temp)
+                    }
+                    if (maxDepth <= 0) maxDepth = 1
+                    if (maxTime <= 0) maxTime = 1
+                    var minTemp = temps.length ? Math.min.apply(null, temps) : 0
+                    var maxTemp = temps.length ? Math.max.apply(null, temps) : 0
+                    if (maxTemp === minTemp) { maxTemp += 1; minTemp -= 1 }
+
+                    function xAt(t) { return pad.left + (t / maxTime) * plotW }
+                    function yDepth(d) { return pad.top + (d / maxDepth) * plotH }
+                    function yTemp(t) { return pad.top + (1 - (t - minTemp) / (maxTemp - minTemp)) * plotH }
+
+                    ctx.strokeStyle = Theme.border
+                    ctx.lineWidth = 1
+                    ctx.beginPath()
+                    ctx.moveTo(pad.left, pad.top)
+                    ctx.lineTo(pad.left, pad.top + plotH)
+                    ctx.lineTo(pad.left + plotW, pad.top + plotH)
+                    ctx.stroke()
+
+                    ctx.strokeStyle = Theme.accent
+                    ctx.lineWidth = 1.5
+                    ctx.beginPath()
+                    for (var j = 0; j < samples.length; j++) {
+                        var x = xAt(samples[j].time || 0)
+                        var y = yDepth(samples[j].depth)
+                        if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+                    }
+                    ctx.stroke()
+
+                    if (temps.length > 1) {
+                        ctx.strokeStyle = "#e07b39"
+                        ctx.lineWidth = 1.5
+                        ctx.beginPath()
+                        var started = false
+                        for (var k = 0; k < samples.length; k++) {
+                            var s = samples[k]
+                            if (s.temp === null || s.temp === undefined) continue
+                            var tx = xAt(s.time || 0)
+                            var ty = yTemp(s.temp)
+                            if (!started) { ctx.moveTo(tx, ty); started = true } else ctx.lineTo(tx, ty)
+                        }
+                        ctx.stroke()
+                    }
+
+                    ctx.fillStyle = Theme.muted
+                    ctx.font = "10px sans-serif"
+                    ctx.fillText("0 m", 4, pad.top + 8)
+                    ctx.fillText(maxDepth.toFixed(1) + " m", 4, pad.top + plotH)
+                    ctx.fillText(Math.round(maxTime / 60) + " min", pad.left + plotW - 26, height - 4)
+                    if (temps.length) {
+                        ctx.fillStyle = "#e07b39"
+                        ctx.fillText(maxTemp.toFixed(1) + "°", width - pad.right + 4, pad.top + 8)
+                        ctx.fillText(minTemp.toFixed(1) + "°", width - pad.right + 4, pad.top + plotH)
+                    }
+                }
+            }
+        }
         RowLayout {
             spacing: 8
             Button {
                 text: "Save"
-                enabled: !!sel.filename && !controller.busy
+                enabled: !!detailCard.sel.filename && !controller.busy
                 onClicked: {
                     var payload = {
                         dive_number: fDiveNumber.text, date: fDate.text, time: fTime.text, duration: fDuration.text,
@@ -227,7 +324,7 @@ ColumnLayout {
             }
             Button {
                 text: "Delete"
-                enabled: !!sel.filename && !controller.busy
+                enabled: !!detailCard.sel.filename && !controller.busy
                 onClicked: deleteDialog.open()
             }
         }

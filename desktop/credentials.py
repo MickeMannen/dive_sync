@@ -23,8 +23,10 @@ once at startup, clean up on exit" would leave the file behind. The Qt app
 additionally clears everything on aboutToQuit (desktop/app.py).
 """
 import os
+import json
 import logging
 import threading
+from typing import List
 
 import keyring
 
@@ -62,19 +64,93 @@ def _set(service: str, field: str, value: str) -> None:
         pass
 
 
+# --- multi-account storage (rework.md E7) ---------------------------------
+#
+# A service's account usernames live as a JSON array under one keychain
+# entry ("garmin_usernames" / "divelogs_usernames"); each account's own
+# fields live under a key scoped by safe_account_id(username) so usernames
+# with odd characters (dots, @, ...) stay valid keyring key material - the
+# same sanitizer the Garmin token cache filename uses, so both stay in sync
+# by construction rather than by convention.
+
+def _account_usernames(service: str) -> List[str]:
+    raw = _get(service, "usernames")
+    if not raw:
+        return []
+    try:
+        return [u for u in json.loads(raw) if u]
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _set_account_usernames(service: str, usernames: List[str]) -> None:
+    _set(service, "usernames", json.dumps(usernames) if usernames else "")
+
+
+def _account_field(service: str, username: str, field: str) -> str:
+    return f"account_{safe_account_id(username)}_{field}"
+
+
+def _migrate_legacy_single_account(service: str) -> List[str]:
+    """One-time upgrade path: before E7, each service kept exactly one
+    account under a bare "<service>_username"/"<service>_password" key. If
+    that's all that's there, adopt it into the new list-of-accounts scheme
+    (and clear the old keys) instead of the account silently disappearing
+    the first time this runs post-upgrade."""
+    legacy_username = _get(service, "username")
+    if not legacy_username:
+        return []
+    _set(service, _account_field(service, legacy_username, "password"), _get(service, "password"))
+    if service == "garmin":
+        _set(service, _account_field(service, legacy_username, "token_dir"), _get(service, "token_dir") or DEFAULT_GARMIN_TOKEN_DIR)
+    _set_account_usernames(service, [legacy_username])
+    _set(service, "username", "")
+    _set(service, "password", "")
+    if service == "garmin":
+        _set(service, "token_dir", "")
+    return [legacy_username]
+
+
+def _load_accounts(service: str, cls):
+    usernames = _account_usernames(service) or _migrate_legacy_single_account(service)
+    accounts = []
+    for username in usernames:
+        kwargs = {"username": username, "password": _get(service, _account_field(service, username, "password"))}
+        if service == "garmin":
+            kwargs["token_dir"] = _get(service, _account_field(service, username, "token_dir")) or DEFAULT_GARMIN_TOKEN_DIR
+        accounts.append(cls(**kwargs))
+    return accounts
+
+
+def _save_accounts(service: str, accounts) -> None:
+    """Full replace: accounts not present in ``accounts`` are dropped from
+    the keychain, same semantics as the status page's credentials form. An
+    account with a blank password whose username already had one stored
+    keeps that stored password (same rationale as save_credentials in
+    src/web/app.py: adding/removing one account shouldn't force retyping
+    every other account's password)."""
+    previous = set(_account_usernames(service))
+    new_usernames = [a.username for a in accounts if a.username]
+    for username in previous - set(new_usernames):
+        _set(service, _account_field(service, username, "password"), "")
+        if service == "garmin":
+            _set(service, _account_field(service, username, "token_dir"), "")
+    for account in accounts:
+        if not account.username:
+            continue
+        password = account.password or (_get(service, _account_field(service, account.username, "password")) if account.username in previous else "")
+        _set(service, _account_field(service, account.username, "password"), password)
+        if service == "garmin":
+            _set(service, _account_field(service, account.username, "token_dir"), account.token_dir or DEFAULT_GARMIN_TOKEN_DIR)
+    _set_account_usernames(service, new_usernames)
+
+
 def load_credentials_model():
     from src.core.config import CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials
 
     return CredentialsModel(
-        garmin=GarminCredentials(
-            username=_get("garmin", "username"),
-            password=_get("garmin", "password"),
-            token_dir=_get("garmin", "token_dir") or DEFAULT_GARMIN_TOKEN_DIR,
-        ),
-        divelogs=DivelogsCredentials(
-            username=_get("divelogs", "username"),
-            password=_get("divelogs", "password"),
-        ),
+        garmin=_load_accounts("garmin", GarminCredentials),
+        divelogs=_load_accounts("divelogs", DivelogsCredentials),
         subsurface=SubsurfaceCredentials(
             email=_get("subsurface", "email"),
             password=_get("subsurface", "password"),
@@ -95,16 +171,8 @@ def load_credentials_model():
 
 
 def save_credentials_model(model) -> None:
-    garmin_accounts = model.get_garmin_accounts()
-    divelogs_accounts = model.get_divelogs_accounts()
-    garmin = garmin_accounts[0] if garmin_accounts else None
-    divelogs = divelogs_accounts[0] if divelogs_accounts else None
-
-    _set("garmin", "username", garmin.username if garmin else "")
-    _set("garmin", "password", garmin.password if garmin else "")
-    _set("garmin", "token_dir", (garmin.token_dir if garmin else "") or DEFAULT_GARMIN_TOKEN_DIR)
-    _set("divelogs", "username", divelogs.username if divelogs else "")
-    _set("divelogs", "password", divelogs.password if divelogs else "")
+    _save_accounts("garmin", model.get_garmin_accounts())
+    _save_accounts("divelogs", model.get_divelogs_accounts())
     subsurface = getattr(model, "subsurface", None)
     _set("subsurface", "email", subsurface.email if subsurface else "")
     _set("subsurface", "password", subsurface.password if subsurface else "")
@@ -126,7 +194,9 @@ def save_credentials_model(model) -> None:
 
 def has_any_credentials() -> bool:
     return bool(
-        _get("garmin", "username")
+        _account_usernames("garmin")
+        or _account_usernames("divelogs")
+        or _get("garmin", "username")    # pre-E7 single account, not yet migrated
         or _get("divelogs", "username")
         or _get("subsurface", "email")
         or _get("submersion", "bucket")
@@ -215,18 +285,21 @@ _active_operations = 0
 
 def begin_operation() -> None:
     """Call before any sync/edit operation that needs SyncEngine/dive_cache
-    to authenticate - materializes the credentials file and Garmin token
-    file if this is the first concurrent operation that needs them. Always
-    pair with a matching end_operation() in a `finally` block."""
+    to authenticate - materializes the credentials file and every configured
+    Garmin account's token file (rework.md E7: an operation may target any
+    one of several accounts, and materializing only the first would force a
+    fresh username/password login - risking Garmin's 429 rate limit - for
+    every other account) if this is the first concurrent operation that
+    needs them. Always pair with a matching end_operation() in a `finally`
+    block."""
     global _active_operations
     with _operation_lock:
         _active_operations += 1
         if _active_operations == 1:
             materialize_local_cache()
             model = load_credentials_model()
-            garmin_accounts = model.get_garmin_accounts()
-            if garmin_accounts:
-                materialize_garmin_token(garmin_accounts[0].username, garmin_accounts[0].token_dir)
+            for account in model.get_garmin_accounts():
+                materialize_garmin_token(account.username, account.token_dir)
 
 
 def end_operation() -> None:
@@ -238,9 +311,7 @@ def end_operation() -> None:
         _active_operations = max(0, _active_operations - 1)
         if _active_operations == 0:
             model = load_credentials_model()
-            garmin_accounts = model.get_garmin_accounts()
-            if garmin_accounts:
-                username, token_dir = garmin_accounts[0].username, garmin_accounts[0].token_dir
-                sync_garmin_token_from_file(username, token_dir)
-                clear_garmin_token_file(username, token_dir)
+            for account in model.get_garmin_accounts():
+                sync_garmin_token_from_file(account.username, account.token_dir)
+                clear_garmin_token_file(account.username, account.token_dir)
             clear_local_cache()

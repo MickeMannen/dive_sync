@@ -4,6 +4,7 @@ Toga B5/B6/B9 editor). Column choice and sort order persist through
 ``desktop/preferences.py`` exactly as before."""
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +21,8 @@ from PySide6.QtCore import (
 from desktop import credentials, preferences
 from desktop.jobs import Worker
 from src.core import dive_cache, scheduler
+
+logger = logging.getLogger("dive_sync.desktop.dives")
 
 # (key, heading, numeric)
 ALL_COLUMNS = [
@@ -219,6 +222,12 @@ class DivesController(QObject):
     @Slot(int)
     def select(self, row: int) -> None:
         self._selected = self._model.row(row) if row >= 0 else {}
+        if self._selected.get("filename"):
+            try:
+                self._selected["samples"] = dive_cache.get_samples(self.service, self._selected["filename"])
+            except Exception as e:
+                logger.warning("Failed to load samples for %s: %s", self._selected["filename"], e)
+                self._selected["samples"] = []
         self.selectedChanged.emit()
 
     @Slot("QVariantList")

@@ -47,10 +47,12 @@ def test_default_token_dir_is_anchored_to_the_app_data_dir():
 def test_load_credentials_model_falls_back_to_default_token_dir(fake_keyring):
     loaded = creds_store.load_credentials_model()
     assert loaded.get_garmin_accounts() == []
-    # No account exists yet (blank username), but the model's own token_dir
-    # field still gets the properly-anchored default rather than a bare
-    # relative "tokens/garmin".
-    assert loaded.garmin.token_dir == creds_store.DEFAULT_GARMIN_TOKEN_DIR
+
+    # An account saved with no explicit token_dir gets the properly-anchored
+    # default rather than a bare relative "tokens/garmin".
+    creds_store.save_credentials_model(CredentialsModel(garmin=[GarminCredentials(username="diver1", password="pw", token_dir="")]))
+    account = creds_store.load_credentials_model().get_garmin_accounts()[0]
+    assert account.token_dir == creds_store.DEFAULT_GARMIN_TOKEN_DIR
 
 
 def test_save_and_load_round_trip(fake_keyring):
@@ -79,8 +81,56 @@ def test_save_clearing_password_deletes_it(fake_keyring):
         CredentialsModel(garmin=GarminCredentials(username="", password=""))
     )
 
-    assert creds_store._get("garmin", "username") == ""
-    assert creds_store._get("garmin", "password") == ""
+    assert creds_store.load_credentials_model().get_garmin_accounts() == []
+
+
+def test_multiple_garmin_accounts_round_trip(fake_keyring):
+    model = CredentialsModel(garmin=[
+        GarminCredentials(username="diver1", password="secret1", token_dir="tokens/diver1"),
+        GarminCredentials(username="diver2@example.com", password="secret2", token_dir="tokens/diver2"),
+    ])
+    creds_store.save_credentials_model(model)
+
+    loaded = {a.username: a for a in creds_store.load_credentials_model().get_garmin_accounts()}
+    assert loaded["diver1"].password == "secret1" and loaded["diver1"].token_dir == "tokens/diver1"
+    assert loaded["diver2@example.com"].password == "secret2"
+
+
+def test_saving_blank_password_keeps_existing_one(fake_keyring):
+    creds_store.save_credentials_model(CredentialsModel(garmin=[GarminCredentials(username="diver1", password="secret1")]))
+    creds_store.save_credentials_model(CredentialsModel(garmin=[
+        GarminCredentials(username="diver1", password=""),
+        GarminCredentials(username="diver2", password="secret2"),
+    ]))
+
+    loaded = {a.username: a for a in creds_store.load_credentials_model().get_garmin_accounts()}
+    assert loaded["diver1"].password == "secret1"
+    assert loaded["diver2"].password == "secret2"
+
+
+def test_removed_account_is_dropped(fake_keyring):
+    creds_store.save_credentials_model(CredentialsModel(garmin=[
+        GarminCredentials(username="diver1", password="secret1"),
+        GarminCredentials(username="diver2", password="secret2"),
+    ]))
+    creds_store.save_credentials_model(CredentialsModel(garmin=[GarminCredentials(username="diver1", password="secret1")]))
+
+    usernames = [a.username for a in creds_store.load_credentials_model().get_garmin_accounts()]
+    assert usernames == ["diver1"]
+
+
+def test_legacy_single_account_migrates_on_load(fake_keyring):
+    # Simulates a keychain written by the pre-E7 single-account code path.
+    creds_store._set("garmin", "username", "diver1")
+    creds_store._set("garmin", "password", "secret1")
+    creds_store._set("garmin", "token_dir", "tokens/garmin")
+
+    loaded = creds_store.load_credentials_model()
+    assert [a.username for a in loaded.get_garmin_accounts()] == ["diver1"]
+    assert loaded.get_garmin_accounts()[0].password == "secret1"
+    # The migration is self-healing: the new list-based keys now exist, so a
+    # second load doesn't depend on the legacy keys any more.
+    assert creds_store._account_usernames("garmin") == ["diver1"]
 
 
 def test_materialize_local_cache_writes_via_config_manager(fake_keyring, monkeypatch):

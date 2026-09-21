@@ -14,7 +14,10 @@ logger = logging.getLogger("dive_sync.scheduler")
 logger.setLevel(logging.INFO)
 
 is_sync_running = False
-last_sync_results: Dict[str, Any] = {}
+# Keyed by job id ("Manual" for an on-demand trigger with no cron job), so
+# concurrent-looking jobs (different accounts/pairs) don't clobber each
+# other's last-run status on the status page (rework.md A7).
+last_sync_results: Dict[str, Dict[str, Any]] = {}
 
 is_download_running = False
 last_download_results: Dict[str, Any] = {}
@@ -63,16 +66,18 @@ def run_download_thread(
 def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = None):
     global is_sync_running, last_sync_results
     is_sync_running = True
-    job_id = custom_settings.get("id") if custom_settings else "Manual"
+    job_id = (custom_settings or {}).get("id") or "Manual"
+    garmin_username = (custom_settings or {}).get("garmin_username") or None
+    divelogs_username = (custom_settings or {}).get("divelogs_username") or None
     logger.info("Synchronization started for job '%s' (Dry Run: %s)", job_id, dry_run)
     try:
         if custom_settings and custom_settings.get("pair"):
             from src.core.config import ConfigManager
             from src.core.pairs import engine_for_pair, find_pair
             pair = find_pair(ConfigManager.load_settings(), custom_settings["pair"])
-            engine = engine_for_pair(pair)
+            engine = engine_for_pair(pair, garmin_username=garmin_username, divelogs_username=divelogs_username)
         else:
-            engine = SyncEngine()
+            engine = SyncEngine(garmin_username=garmin_username, divelogs_username=divelogs_username)
             engine.run_overrides = {}
         if custom_settings:
             # run_sync re-reads settings.json before every run, so per-job
@@ -85,8 +90,6 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
                 overrides["only_new_override"] = bool(custom_settings["only_new"])
             if "sync_gases" in custom_settings and custom_settings["sync_gases"] is not None:
                 overrides["sync_gases_override"] = bool(custom_settings["sync_gases"])
-            if "sync_fit" in custom_settings and custom_settings["sync_fit"] is not None:
-                overrides["sync_fit_override"] = bool(custom_settings["sync_fit"])
             if "date_from" in custom_settings:
                 overrides["date_from_override"] = custom_settings["date_from"]
             if "date_to" in custom_settings:
@@ -99,11 +102,11 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
             results = engine.run_sync(dry_run=dry_run, **overrides)
         else:
             results = engine.run_sync(dry_run=dry_run)
-        last_sync_results = results
+        last_sync_results[job_id] = results
         logger.info("Synchronization completed successfully.")
     except Exception as e:
         logger.error("Sync run encountered an error: %s", e)
-        last_sync_results = {"error": str(e)}
+        last_sync_results[job_id] = {"error": str(e)}
     finally:
         is_sync_running = False
 

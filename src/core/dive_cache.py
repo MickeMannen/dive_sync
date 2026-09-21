@@ -377,6 +377,96 @@ def read_raw_dive(service: str, filename: str, username: Optional[str] = None, b
         return json.load(f)
 
 
+def _parse_garmin_samples(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Depth/temperature profile points from the raw cache file's
+    ``activityDetails`` (rework.md E1). A second, simplified read of the same
+    shape GarminAdapter._map_to_unified parses for sync - kept separate
+    rather than shared, same as every other field in this module: this path
+    reads the local cache directly (no adapter/login involved), matching the
+    module's own documented purpose."""
+    activity_details = (raw or {}).get("activityDetails")
+    if not isinstance(activity_details, dict):
+        return []
+    descriptors = activity_details.get("metricDescriptors") or []
+    metrics_data = activity_details.get("activityDetailMetrics") or []
+    if not isinstance(descriptors, list) or not isinstance(metrics_data, list):
+        return []
+
+    duration_idx = depth_idx = temp_idx = None
+    for desc in descriptors:
+        if not isinstance(desc, dict):
+            continue
+        key = desc.get("key")
+        idx = desc.get("metricsIndex")
+        if key == "sumDuration":
+            duration_idx = idx
+        elif key == "directDepth" or (isinstance(key, str) and "depth" in key.lower()):
+            if depth_idx is None or key == "directDepth":
+                depth_idx = idx
+        elif isinstance(key, str) and ("temperature" in key.lower() or "temp" in key.lower()):
+            if temp_idx is None or key == "directAirTemperature":
+                temp_idx = idx
+
+    samples = []
+    for item in metrics_data:
+        if not isinstance(item, dict):
+            continue
+        m_list = item.get("metrics")
+        if not m_list or not isinstance(m_list, list):
+            continue
+        if depth_idx is None or depth_idx >= len(m_list):
+            continue
+        depth_val = m_list[depth_idx]
+        if depth_val is None:
+            continue
+        time_sec = None
+        if duration_idx is not None and duration_idx < len(m_list) and m_list[duration_idx] is not None:
+            time_sec = int(round(float(m_list[duration_idx])))
+        temp_c = None
+        if temp_idx is not None and temp_idx < len(m_list) and m_list[temp_idx] is not None:
+            temp_c = float(m_list[temp_idx])
+        samples.append({"time": time_sec, "depth": float(depth_val), "temp": temp_c})
+    return samples
+
+
+def _parse_divelogs_samples(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Depth/temperature profile points from the raw cache file's
+    ``sampledata`` (rework.md E1). Values are read as stored, with no
+    imperial-to-metric conversion - same as every other numeric field this
+    module reads from a Divelogs raw file (e.g. max_depth in
+    list_divelogs_dives above); DivelogsAdapter.to_unified is the one place
+    that knows the account's unit preference, and it isn't involved here."""
+    sampledata = (raw or {}).get("sampledata")
+    if not isinstance(sampledata, list):
+        return []
+    try:
+        samplerate = int(raw.get("samplerate")) if raw.get("samplerate") not in (None, "") else 1
+    except (TypeError, ValueError):
+        samplerate = 1
+    samplerate = samplerate if samplerate > 0 else 1
+
+    samples = []
+    for i, p in enumerate(sampledata):
+        d_val = t_val = None
+        if isinstance(p, dict):
+            d_val, t_val = p.get("d"), p.get("t")
+        elif isinstance(p, (int, float)):
+            d_val = p
+        if d_val is None:
+            continue
+        samples.append({"time": i * samplerate, "depth": float(d_val), "temp": float(t_val) if t_val is not None else None})
+    return samples
+
+
+def get_samples(service: str, filename: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Depth/temperature profile for one cached dive, for the desktop
+    editor's graph (rework.md E1). Empty list if the dive has none cached."""
+    raw = read_raw_dive(service, filename, username, base_dir)
+    if service == "garmin":
+        return _parse_garmin_samples(raw)
+    return _parse_divelogs_samples(raw)
+
+
 def update_dive_fields(
     service: str,
     filename: str,
