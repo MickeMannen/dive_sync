@@ -98,6 +98,7 @@ def test_mock_sync_offline_mode(tmp_path):
         },
         "grace_window_minutes": 15,
         "api_cooldown_seconds": 0.0,
+        "create_on_garmin": True,  # this test verifies both upload directions (rework.md C16 is off by default)
         "schedule": []
     }
     settings_path = os.path.join(mock_data_dir, "settings.json")

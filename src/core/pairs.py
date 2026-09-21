@@ -165,6 +165,8 @@ def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] 
             overrides["grace_window_override"] = pair.grace_window_minutes
         if pair.propagate_deletes is not None:
             overrides["propagate_deletes_override"] = pair.propagate_deletes
+        if pair.create_on_garmin is not None:
+            overrides["create_on_garmin_override"] = pair.create_on_garmin
         overrides["field_links_override"] = pair.field_links if pair.field_links is not None else default_links_for(source_id, target_id)
     elif (source_id, target_id) != ("garmin", "divelogs"):
         overrides["field_links_override"] = default_links_for(source_id, target_id)

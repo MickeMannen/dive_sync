@@ -9,14 +9,25 @@ Divelogs fields). Standard Python format specs apply: ``{divelogs.dive_number:03
 render in dive local time. A rendered text longer than the target's
 ``max_length`` is truncated and a warning is returned alongside the text.
 
+A templated link is normally one-way (``to_target``/``off``): the composite
+is a display convenience, not a fact to sync back. Setting ``reverse`` (a
+regex with named groups matching source field names, C21) lifts that
+restriction — ``reverse_parse`` splits an edited target back into its
+sources when the pattern fully matches it, and the direction may then also
+be ``bidirectional``/``to_source``. Only text-typed sources are supported,
+since recovering a number or datetime from free text needs a format the
+regex alone can't express reliably.
+
 ``validate_links`` is the full save-time check for a board: the structural
 checks from ``fields.validate_field_links`` plus template validation (unknown
 keys, keys outside the link's sources, unused sources, format spec vs field
-type, non-text target) and loop detection (a composite's target feeding back
-into one of its own sources through other links).
+type, non-text target), reverse-pattern validation (unknown or out-of-source
+group names), and loop detection (a composite's target feeding back into one
+of its own sources through other links).
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from string import Formatter
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -159,8 +170,9 @@ def validate_template(link: FieldLink, catalog: Dict[str, FieldSpec]) -> List[st
     target = catalog.get(link.target)
     if target is not None and target.type != "text":
         problems.append(f"{prefix} a templated link must target a text field, not {target.type}")
-    if link.direction not in ("to_target", "off"):
-        problems.append(f"{prefix} a templated link can only write its target (direction 'to_target' or 'off')")
+    if link.direction not in ("to_target", "off") and not link.reverse:
+        problems.append(f"{prefix} a templated link can only write its target (direction 'to_target' or 'off') "
+                         f"unless it has a 'reverse' pattern")
     try:
         keys = template_keys(link, catalog)
     except TemplateError as e:
@@ -185,6 +197,66 @@ def validate_template(link: FieldLink, catalog: Dict[str, FieldSpec]) -> List[st
     unused = [s for s in link.source if s not in used]
     if unused:
         problems.append(f"{prefix} source field(s) {', '.join(unused)} are not used in the template")
+    return problems
+
+
+def reverse_keys(link: FieldLink, catalog: Dict[str, FieldSpec]) -> List[Tuple[str, Optional[str]]]:
+    """``(group name, resolved catalogue key or None)`` for every named group
+    in ``link.reverse``. Empty when the link has no reverse pattern."""
+    if not link.reverse:
+        return []
+    try:
+        pattern = re.compile(link.reverse)
+    except re.error as e:
+        raise TemplateError(f"Link '{link.id}': malformed reverse pattern: {e}") from e
+    return [(name, resolve_key(name, link, catalog)) for name in pattern.groupindex]
+
+
+def reverse_parse(link: FieldLink, text: Any, catalog: Dict[str, FieldSpec]) -> Optional[Dict[str, str]]:
+    """Split ``text`` (the target field's current value) back into the link's
+    sources using ``link.reverse``. Only text-typed sources are supported, so
+    every recovered value is the raw captured string. Returns ``None`` when
+    there is no reverse pattern, the value is not text, or the pattern does
+    not match the whole value (a target edited into some unrelated shape is
+    left alone rather than guessed at)."""
+    if not link.reverse or not isinstance(text, str):
+        return None
+    try:
+        pattern = re.compile(link.reverse)
+    except re.error:
+        return None
+    match = pattern.fullmatch(text)
+    if not match:
+        return None
+    out: Dict[str, str] = {}
+    for name, value in match.groupdict().items():
+        if value is None:
+            continue
+        resolved = resolve_key(name, link, catalog)
+        if resolved is None or resolved not in link.source:
+            continue
+        out[resolved] = value
+    return out or None
+
+
+def validate_reverse(link: FieldLink, catalog: Dict[str, FieldSpec]) -> List[str]:
+    """Problems with one link's reverse pattern; empty when it has none or it
+    is fine."""
+    if not link.reverse:
+        return []
+    prefix = f"Link '{link.id}':"
+    try:
+        keys = reverse_keys(link, catalog)
+    except TemplateError as e:
+        return [f"{prefix} {e}"]
+    if not keys:
+        return [f"{prefix} reverse pattern has no named group, e.g. (?P<{link.source[0].split('.', 1)[-1]}>...)"]
+    problems: List[str] = []
+    for written, resolved in keys:
+        if resolved is None:
+            problems.append(f"{prefix} unknown field ({written}) in reverse pattern")
+        elif resolved not in link.source:
+            problems.append(f"{prefix} reverse pattern group ({written}) is not one of the link's source fields")
     return problems
 
 
@@ -236,6 +308,7 @@ def validate_links(links: List[FieldLink], catalog: Dict[str, FieldSpec]) -> Lis
         if link.id in bad:
             continue
         problems.extend(validate_template(link, catalog))
+        problems.extend(validate_reverse(link, catalog))
     problems.extend(detect_loops([l for l in links if l.id not in bad]))
     return problems
 
@@ -279,7 +352,7 @@ def preview(link: FieldLink, catalog: Dict[str, FieldSpec],
             dive_by_service: Optional[Dict[str, UnifiedDive]] = None) -> Dict[str, Any]:
     """Validation problems plus a rendered sample for one link, for the UIs'
     live preview. Uses ``dive_by_service`` when given, else example dives."""
-    problems = validate_template(link, catalog)
+    problems = validate_template(link, catalog) + validate_reverse(link, catalog)
     unknown = [k for k in link.source + [link.target] if k not in catalog]
     if unknown:
         problems.insert(0, f"Link '{link.id}': unknown field(s) {', '.join(unknown)}")
@@ -290,4 +363,10 @@ def preview(link: FieldLink, catalog: Dict[str, FieldSpec],
         service = key.split(".", 1)[0]
         dives.setdefault(service, example_dive(service))
     text, warnings = render(link, dives, catalog)
-    return {"ok": True, "problems": [], "text": text, "warnings": warnings}
+    out = {"ok": True, "problems": [], "text": text, "warnings": warnings}
+    if link.reverse:
+        # Self-check: parsing the link's own rendered text should recover
+        # every source the reverse pattern names, proving it actually
+        # inverts the template rather than just looking plausible.
+        out["reverse_sample"] = reverse_parse(link, text, catalog)
+    return out

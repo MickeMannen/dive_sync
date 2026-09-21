@@ -53,6 +53,7 @@
         <label>Direction <select id="pair-direction"></select></label>
         <label>Grace window (min) <input type="number" id="pair-grace" min="0"></label>
         <label class="inline-checkbox"><input type="checkbox" id="pair-propagate-deletes"> Propagate deletes</label>
+        <label class="inline-checkbox"><input type="checkbox" id="pair-create-on-garmin"> Create on Garmin</label>
         <span class="muted" id="board-matchkeys"></span>
       </div>
       <div class="board" id="board">
@@ -96,6 +97,11 @@
           </div>
           <div class="preview"><span class="label">Preview</span> <code id="editor-preview">–</code></div>
           <div id="editor-problems" class="problems"></div>
+        </div>
+        <div id="editor-reverse-block">
+          <label>Reverse pattern (regex, named groups; makes the link bidirectional)
+            <textarea id="editor-reverse" rows="1" placeholder="(?P&lt;field&gt;.+)"></textarea>
+          </label>
         </div>
         <div class="actions">
           <button type="button" id="editor-apply">Apply</button>
@@ -199,8 +205,10 @@
         <label><input type="checkbox" id="default-only-new"> Only new dives</label>
         <label><input type="checkbox" id="default-sync-gases"> Sync gases</label>
         <label><input type="checkbox" id="default-propagate-deletes"> Propagate deletes</label>
+        <label><input type="checkbox" id="default-create-on-garmin"> Create on Garmin</label>
       </form>
       <p class="muted">Propagate deletes: delete the linked dive on the other side when one is deleted here. Only ever acted on during a full sync - an incremental (only-new) run has no reliable way to tell "deleted" apart from "outside this run's date window", so it never deletes on an incremental run regardless of this setting.</p>
+      <p class="muted">Create on Garmin: off by default. A dive found only on the other side is created on Garmin only when this is on; matched-dive field updates are never affected. Uploads the other way (to Divelogs, or to a non-Garmin pair) are unaffected either way.</p>
     </section>
 
     <section class="card">

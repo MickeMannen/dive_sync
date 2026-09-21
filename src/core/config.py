@@ -57,6 +57,7 @@ class SyncPairModel(BaseModel):
     grace_window_minutes: Optional[int] = Field(None, description="Per-pair override of the matching window")
     field_links: Optional[List[FieldLink]] = Field(None, description="Per-pair board; None = the defaults for this pair")
     propagate_deletes: Optional[bool] = Field(None, description="Per-pair override of whether a dive deleted on one side is deleted on the other (rework.md C13); None = the global default")
+    create_on_garmin: Optional[bool] = Field(None, description="Per-pair override of whether a new dive found only on the other side is created on Garmin (rework.md C16); None = the global default. Matched-dive updates are never affected")
 
 class SettingsModel(BaseModel):
     directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
@@ -88,6 +89,10 @@ class SettingsModel(BaseModel):
     backup_retention_count: int = Field(
         10,
         description="How many automatic pre-write backups (DATA_DIR/backups/<timestamp>/<service>.json, one per run, skipped in dry-run) to keep before the oldest are deleted (rework.md C14). 0 keeps none",
+    )
+    create_on_garmin: bool = Field(
+        False,
+        description="Default for the implicit Garmin<->Divelogs pair, and the fallback for any pair without its own override: a new dive found only on the other side is uploaded to create a matching Garmin dive (rework.md C16). Off by default - Garmin dive creation from another source is opt-in. Matched-dive field updates are never affected by this switch",
     )
 
 class GarminCredentials(BaseModel):
@@ -232,6 +237,7 @@ PROFILE_SECTIONS = (
     "notify_url",
     "propagate_deletes",
     "backup_retention_count",
+    "create_on_garmin",
 )
 
 

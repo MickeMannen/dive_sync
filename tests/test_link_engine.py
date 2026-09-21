@@ -372,6 +372,55 @@ def test_dry_run_reports_without_writing(tmp_path):
     assert engine.target.updated == [] and not os.path.exists(engine.state_file)
 
 
+def test_create_on_garmin_off_by_default_skips_new_garmin_dives(tmp_path):
+    """rework.md C16: a dive found only on Divelogs (or any other source) is
+    not created on Garmin unless create_on_garmin is on for the pair."""
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, [], d)  # create_on_garmin defaults to off
+
+    res = engine.run_sync(dry_run=False)
+
+    assert res["uploaded_to_garmin"] == []
+    assert engine.source.added == []
+    assert res["skipped"] == [{"reason": "create_on_garmin_off", "time": str(d[0].date_time)}]
+
+
+def test_create_on_garmin_on_allows_new_garmin_dives(tmp_path):
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, [], d, create_on_garmin=True)
+
+    res = engine.run_sync(dry_run=False)
+
+    assert len(res["uploaded_to_garmin"]) == 1
+    assert len(engine.source.added) == 1
+
+
+def test_create_on_garmin_does_not_affect_uploads_to_divelogs(tmp_path):
+    """The switch is Garmin-specific: a dive found only on Garmin still
+    uploads to Divelogs with create_on_garmin left off."""
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
+    engine = _engine(tmp_path, g, [])  # create_on_garmin defaults to off
+
+    res = engine.run_sync(dry_run=False)
+
+    assert len(res["uploaded_to_divelogs"]) == 1
+    assert res["skipped"] == []
+
+
+def test_create_on_garmin_does_not_affect_matched_dive_updates(tmp_path):
+    """Only new-dive creation is gated - an already-matched pair's field
+    links still apply with create_on_garmin off."""
+    g = [_dive(external_ids={"garmin": "1"}, buddy=None)]
+    d = [_dive(external_ids={"divelogs": "1"}, buddy="A")]
+    engine = _engine(tmp_path, g, d)  # create_on_garmin defaults to off
+
+    res = engine.run_sync(dry_run=False)
+
+    assert res["skipped"] == []
+    assert len(res["updated_on_garmin"]) == 1
+    assert engine.source.updated[0][1].buddy == "A"
+
+
 def test_pre_sync_backup_snapshots_what_was_fetched(tmp_path):
     """rework.md C14: a JSON snapshot of the fetched dives per side, written
     before any write, next to the state file."""
@@ -475,6 +524,27 @@ def test_match_key_hit_needs_start_times_within_a_day(tmp_path):
     assert [x.external_ids["garmin"] for x in ug] == ["16"]
 
 
+def test_grace_window_override_changes_matching_outcome(tmp_path):
+    """rework.md C15 "still open" item: a per-pair grace_window_minutes
+    override (SyncPairModel -> pairs.py::engine_for -> run_sync's
+    grace_window_override, exercised structurally in test_pairs.py) must
+    actually change tier-3 matching, not just get threaded through as an
+    inert number. Two dives 20 minutes apart: a 10-minute window misses,
+    a 30-minute window catches them - proven via the same run_sync()
+    keyword argument a real pair's override arrives through, not by
+    presetting settings.grace_window_minutes directly."""
+    g = [_dive(date_time=datetime(2026, 6, 22, 12, 0), external_ids={"garmin": "1"})]
+    d = [_dive(date_time=datetime(2026, 6, 22, 12, 20), external_ids={"divelogs": "2"})]
+
+    engine = _engine(tmp_path, g, d, grace_window_minutes=60)  # base default irrelevant; override wins
+    narrow = engine.run_sync(dry_run=True, grace_window_override=10)
+    assert narrow["matched_count"] == 0
+
+    engine2 = _engine(tmp_path, g, d, grace_window_minutes=60)
+    wide = engine2.run_sync(dry_run=True, grace_window_override=30)
+    assert wide["matched_count"] == 1
+
+
 def test_matching_uses_utc_when_both_sides_have_it(tmp_path):
     # Local times 8 h apart (different zones), same instant
     g = [_dive(date_time=datetime(2026, 6, 1, 20), date_time_utc=datetime(2026, 6, 1, 12), external_ids={"garmin": "1"})]
@@ -491,7 +561,7 @@ def test_matching_uses_utc_when_both_sides_have_it(tmp_path):
 def test_engine_results_and_aliases_follow_service_ids(tmp_path):
     g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
     d = [_dive(date_time=datetime(2026, 7, 1, 12), external_ids={"divelogs": "2"})]
-    engine = _engine(tmp_path, g, d)
+    engine = _engine(tmp_path, g, d, create_on_garmin=True)
     assert engine.source_id == "garmin" and engine.target_id == "divelogs"
     assert engine.garmin is engine.source and engine.divelogs is engine.target
     res = engine.run_sync(dry_run=False)
@@ -566,12 +636,38 @@ def test_composite_link_on_matched_pair(tmp_path):
     assert g.service_fields["activityName"] == "Old name" and not res["updated_on_garmin"]
 
 
+SITE_REVERSIBLE_LINK = FieldLink(id="site_to_garmin", source=["divelogs.location", "divelogs.divesite"],
+                                 target="garmin.activityName", direction="bidirectional", conflict="target_wins",
+                                 template="{divelogs.divesite} ({divelogs.location})",
+                                 reverse=r"(?P<divesite>.+) \((?P<location>.+)\)")
+
+
+def test_composite_reverse_parses_edited_target_back_into_sources(tmp_path):
+    g, d = _pair({"service_fields": {"activityName": "Zenobia (Larnaca)"}},
+                 {"service_fields": {"location": "Larnaca", "divesite": "Zenobia"}})
+    engine = _engine(tmp_path, [g], [d], field_links=[SITE_REVERSIBLE_LINK])
+    res = engine.run_sync(dry_run=False)
+    assert not res["updated_on_divelogs"] and not res["updated_on_garmin"]  # already in agreement
+
+    # the diver renames the Garmin activity to something the pattern still describes
+    g.service_fields["activityName"] = "Wreck Alpha (Malmo)"
+    res = engine.run_sync(dry_run=False)
+    assert d.service_fields["location"] == "Malmo" and d.service_fields["divesite"] == "Wreck Alpha"
+    assert res["updated_on_divelogs"]
+
+    # a rename that no longer fits the pattern can't be guessed at -> left alone
+    g.service_fields["activityName"] = "totally different"
+    res = engine.run_sync(dry_run=False)
+    assert d.service_fields["location"] == "Malmo" and d.service_fields["divesite"] == "Wreck Alpha"
+    assert not res["updated_on_divelogs"]
+
+
 def test_upload_renders_composite_and_service_links(tmp_path):
     d = _dive(external_ids={"divelogs": "2"}, dive_number=7, location="Larnaca, Zenobia",
               service_fields={"location": "Larnaca", "divesite": "Zenobia"},
               gas_mixtures=[GasMixture(oxygen=32.0, tank_name="left")])
     board = [l for l in default_field_links() if l.id != "activity_name"] + [SITE_LINK]
-    engine = _engine(tmp_path, [], [d], field_links=board)
+    engine = _engine(tmp_path, [], [d], field_links=board, create_on_garmin=True)
     engine.run_sync(dry_run=False)
     added = engine.source.added[0]
     assert added.service_fields["activityName"] == "Larnaca, Zenobia #007"
@@ -758,7 +854,7 @@ def test_deletion_only_logged_when_propagate_deletes_off(tmp_path):
     engine = _engine(tmp_path, g, d)
     engine.run_sync(dry_run=False)
 
-    engine2 = _engine(tmp_path, [], d)  # propagate_deletes defaults to off
+    engine2 = _engine(tmp_path, [], d, create_on_garmin=True)  # propagate_deletes defaults to off
     res = engine2.run_sync(dry_run=False)
 
     assert engine2.target.deleted == []
@@ -776,7 +872,7 @@ def test_deletion_not_checked_on_incremental_sync(tmp_path):
     engine = _engine(tmp_path, g, d)
     engine.run_sync(dry_run=False)
 
-    engine2 = _engine(tmp_path, [], d, propagate_deletes=True, sync_filters=SyncFilters(only_new=True))
+    engine2 = _engine(tmp_path, [], d, propagate_deletes=True, create_on_garmin=True, sync_filters=SyncFilters(only_new=True))
     res = engine2.run_sync(dry_run=False)
 
     assert engine2.target.deleted == []

@@ -210,6 +210,19 @@ def test_fields_api():
     assert tanks["writable"] is False and tanks["type"] == "tanks"
 
 
+def test_create_on_garmin_round_trips(tmp_path, monkeypatch):
+    _isolated_settings(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    assert client.get("/api/settings").json()["create_on_garmin"] is False  # off by default
+
+    payload = _base_settings_payload()
+    payload["create_on_garmin"] = True
+    res = client.post("/api/settings", json=payload)
+    assert res.status_code == 200
+    assert client.get("/api/settings").json()["create_on_garmin"] is True
+
+
 def test_notify_url_round_trips_and_is_kept_when_omitted(tmp_path, monkeypatch):
     _isolated_settings(tmp_path, monkeypatch)
     client = TestClient(app)

@@ -204,8 +204,9 @@ def test_mapping_controller_board_operations(qapp, scratch_data_dir, fake_keyrin
     assert len(m.links) == 11 and not m.dirty
     m.resetToDefaults()
     assert len(m.links) == 9 and m.dirty
-    m.savePairOptions("to_divelogs", 30, True)
-    assert m.pairDirection == "to_divelogs" and m.pairGrace == 30 and m.pairPropagateDeletes is True
+    m.savePairOptions("to_divelogs", 30, True, True)
+    assert m.pairDirection == "to_divelogs" and m.pairGrace == 30
+    assert m.pairPropagateDeletes is True and m.pairCreateOnGarmin is True
     m.applyToAll()
     state = json.load(open(scratch_data_dir / "sync_state.json"))
     assert state["full_compare_once"] is True

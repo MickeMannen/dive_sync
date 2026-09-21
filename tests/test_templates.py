@@ -1,6 +1,7 @@
 from datetime import datetime
 
 import pytest
+from pydantic import ValidationError
 
 from src.core.fields import FieldLink, FieldSpec, build_catalog, default_field_links
 from src.core.models import UnifiedDive
@@ -12,7 +13,10 @@ from src.core.templates import (
     example_dive,
     preview,
     render,
+    reverse_keys,
+    reverse_parse,
     validate_links,
+    validate_reverse,
     validate_template,
 )
 
@@ -138,6 +142,80 @@ def test_validate_links_is_the_full_check():
     assert "unknown field {nope}" in text and "feeds back" in text and "cannot link garmin.buddy" in text
 
 
+REVERSIBLE_SITE = SITE.model_copy(update={
+    "direction": "bidirectional",
+    "reverse": r"(?P<divesite>.+) \((?P<location>.+)\)",
+})
+
+
+def test_composite_direction_needs_a_reverse_pattern():
+    with pytest.raises(ValidationError, match="one-way"):
+        FieldLink(**{**SITE.model_dump(), "direction": "bidirectional"})
+    # a reverse pattern lifts the restriction
+    FieldLink(**{**SITE.model_dump(), "direction": "bidirectional",
+                "reverse": r"(?P<divesite>.+) \((?P<location>.+)\)"})
+    FieldLink(**{**SITE.model_dump(), "direction": "to_source", "reverse": r"(?P<divesite>.+)"})
+
+
+def test_reverse_keys_resolve_group_names():
+    cat = _catalog()
+    assert reverse_keys(REVERSIBLE_SITE, cat) == [
+        ("divesite", "divelogs.divesite"), ("location", "divelogs.location"),
+    ]
+    unknown = REVERSIBLE_SITE.model_copy(update={"reverse": r"(?P<nope>.+)"})
+    assert reverse_keys(unknown, cat) == [("nope", None)]
+    assert reverse_keys(SITE, cat) == []  # no reverse pattern
+
+
+def test_reverse_parse_splits_composite_back_into_sources():
+    cat = _catalog()
+    assert reverse_parse(REVERSIBLE_SITE, "Zenobia (Larnaca)", cat) == {
+        "divelogs.divesite": "Zenobia", "divelogs.location": "Larnaca",
+    }
+    # a target that no longer matches the pattern shape can't be guessed at
+    assert reverse_parse(REVERSIBLE_SITE, "Just some renamed dive", cat) is None
+    assert reverse_parse(REVERSIBLE_SITE, "", cat) is None
+    assert reverse_parse(REVERSIBLE_SITE, None, cat) is None
+    assert reverse_parse(SITE, "Zenobia (Larnaca)", cat) is None  # no reverse pattern
+    # a partial pattern only recovers the source(s) it names
+    one_field = REVERSIBLE_SITE.model_copy(update={"reverse": r"(?P<divesite>.+) \(.+\)"})
+    assert reverse_parse(one_field, "Zenobia (Larnaca)", cat) == {"divelogs.divesite": "Zenobia"}
+    # a group that resolves outside the link's own sources is ignored
+    outside = REVERSIBLE_SITE.model_copy(update={"reverse": r"(?P<notes>.+) \((?P<location>.+)\)"})
+    assert reverse_parse(outside, "Zenobia (Larnaca)", cat) == {"divelogs.location": "Larnaca"}
+
+
+def test_validate_reverse_problems():
+    cat = _catalog()
+    def problems(**kw):
+        base = dict(id="x", source=["divelogs.location", "divelogs.divesite"], target="garmin.activityName",
+                    direction="to_target", template="{divelogs.divesite} ({divelogs.location})")
+        base.update(kw)
+        return "\n".join(validate_reverse(FieldLink(**base), cat))
+    assert problems(reverse=r"(?P<divesite>.+) \((?P<location>.+)\)") == ""
+    assert problems(reverse=None) == ""
+    assert "malformed reverse pattern" in problems(reverse=r"(?P<divesite>.+ \(")
+    assert "has no named group" in problems(reverse=r".+ \(.+\)")
+    assert "unknown field (nope)" in problems(reverse=r"(?P<nope>.+)")
+    assert "not one of the link's source fields" in problems(reverse=r"(?P<notes>.+)")
+
+
+def test_validate_field_links_requires_text_sources_for_reverse():
+    cat = _catalog()
+    link = FieldLink(id="x", source=["divelogs.dive_number", "divelogs.divesite"], target="garmin.activityName",
+                     direction="bidirectional", template="#{dive_number} {divesite}",
+                     reverse=r"#(?P<dive_number>\d+) (?P<divesite>.+)")
+    text = "\n".join(validate_links([link], cat))
+    assert "reverse parsing only supports text source fields" in text and "divelogs.dive_number" in text
+
+
+def test_validate_links_includes_reverse_checks():
+    cat = _catalog()
+    assert validate_links([REVERSIBLE_SITE], cat) == []
+    bad = REVERSIBLE_SITE.model_copy(update={"reverse": r"(?P<nope>.+)"})
+    assert "unknown field (nope)" in "\n".join(validate_links([bad], cat))
+
+
 def test_preview_uses_example_dives_or_given_ones():
     cat = _catalog()
     out = preview(SITE, cat)
@@ -148,3 +226,14 @@ def test_preview_uses_example_dives_or_given_ones():
     assert not out["ok"] and out["text"] is None and out["problems"]
     assert example_dive("garmin").service_fields["activityName"]
     assert example_dive("other").service_fields == {}
+
+
+def test_preview_includes_reverse_self_check_when_reverse_is_set():
+    cat = _catalog()
+    out = preview(REVERSIBLE_SITE, cat)
+    assert out["ok"] and out["text"] == "Zenobia (Larnaca)"
+    assert out["reverse_sample"] == {"divelogs.divesite": "Zenobia", "divelogs.location": "Larnaca"}
+    assert "reverse_sample" not in preview(SITE, cat)
+    # a reverse pattern that doesn't actually invert the template shows as None, not a crash
+    mismatched = REVERSIBLE_SITE.model_copy(update={"reverse": r"nope (?P<location>.+)"})
+    assert preview(mismatched, cat)["reverse_sample"] is None

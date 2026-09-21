@@ -51,7 +51,17 @@ ColumnLayout {
                     Connections { target: mappingController; function onBoardChanged() { propagateDeletesBox.checked = mappingController.pairPropagateDeletes } }
                 }
             }
-            Button { text: "Save pair options"; onClicked: mappingController.savePairOptions(dirBox.currentValue, parseInt(graceField.text) || 0, propagateDeletesBox.checked) }
+            ColumnLayout {
+                spacing: 2
+                Text { text: " "; color: Theme.muted; font.pixelSize: 11 }
+                CheckBox {
+                    id: createOnGarminBox
+                    text: "Create on Garmin"
+                    checked: mappingController.pairCreateOnGarmin
+                    Connections { target: mappingController; function onBoardChanged() { createOnGarminBox.checked = mappingController.pairCreateOnGarmin } }
+                }
+            }
+            Button { text: "Save pair options"; onClicked: mappingController.savePairOptions(dirBox.currentValue, parseInt(graceField.text) || 0, propagateDeletesBox.checked, createOnGarminBox.checked) }
             Text { text: mappingController.matchKeys; color: Theme.muted; font.pixelSize: 11 }
         }
 
@@ -177,12 +187,26 @@ ColumnLayout {
                     Text { text: "Preview: " + mappingController.preview; color: Theme.text; font.family: "Menlo"; font.pixelSize: 11 }
                     Text { text: mappingController.previewProblems; color: Theme.danger; font.pixelSize: 11; visible: text !== ""; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                 }
+                ColumnLayout {
+                    spacing: 2
+                    visible: (editor.link.source || []).length > 1 || !!editor.link.template
+                    Text { text: "Reverse pattern (regex, named groups; makes the link bidirectional)"; color: Theme.muted; font.pixelSize: 11 }
+                    TextField {
+                        id: eReverse
+                        Layout.fillWidth: true
+                        text: editor.link.reverse || ""
+                        font.family: "Menlo"
+                        selectByMouse: true
+                        placeholderText: "(?P<" + ((editor.link.source || [""])[0].split(".").pop()) + ">.+)"
+                        onTextEdited: mappingController.previewReverse(text)
+                    }
+                }
                 RowLayout {
                     spacing: 8
                     Button {
                         text: "Apply"
                         onClicked: {
-                            var problem = mappingController.updateLink({ id: eId.text, direction: eDir.currentValue, conflict: eConflict.currentValue, match_order: eMatch.text, separator: eSep.text, template: eTemplate.text })
+                            var problem = mappingController.updateLink({ id: eId.text, direction: eDir.currentValue, conflict: eConflict.currentValue, match_order: eMatch.text, separator: eSep.text, template: eTemplate.text, reverse: eReverse.text })
                             if (problem) editorMessage.text = problem; else editorMessage.text = "Applied to the board (not saved yet)."
                         }
                     }

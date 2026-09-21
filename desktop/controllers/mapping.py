@@ -147,6 +147,13 @@ class MappingController(QObject):
         return pair.propagate_deletes if pair and pair.propagate_deletes is not None else self._settings.propagate_deletes
 
     @Property(bool, notify=boardChanged)
+    def pairCreateOnGarmin(self) -> bool:
+        if self._pair_id == "default":
+            return self._settings.create_on_garmin
+        pair = self._settings_pair()
+        return pair.create_on_garmin if pair and pair.create_on_garmin is not None else self._settings.create_on_garmin
+
+    @Property(bool, notify=boardChanged)
     def dirty(self) -> bool:
         return self._links != self._saved
 
@@ -173,13 +180,14 @@ class MappingController(QObject):
         catalog = self._catalog()
         target, source = catalog.get(link["target"]), catalog.get(link["source"][0])
         composite = len(link["source"]) > 1 or bool(link.get("template"))
+        reversible = composite and bool(link.get("reverse"))
         structural = (target and target.type in STRUCTURAL) or (source and source.type in STRUCTURAL)
         out = []
-        if not composite and not structural and target and target.writable and source and source.writable:
+        if (not composite or reversible) and not structural and target and target.writable and source and source.writable:
             out.append({"value": "bidirectional", "label": "Both ways"})
         if target and target.writable:
             out.append({"value": "to_target", "label": "Source → target"})
-        if not composite and source and source.writable:
+        if (not composite or reversible) and source and source.writable:
             out.append({"value": "to_source", "label": "Target → source"})
         out.append({"value": "off", "label": "Off (not synced)"})
         return out
@@ -347,6 +355,7 @@ class MappingController(QObject):
             "conflict": str(values.get("conflict") or link["conflict"]),
             "separator": str(values.get("separator") or ", "),
             "template": (str(values.get("template")).strip() or None) if values.get("template") is not None else link.get("template"),
+            "reverse": (str(values.get("reverse")).strip() or None) if values.get("reverse") is not None else link.get("reverse"),
             "match_order": None if match in (None, "", 0) else int(match),
         })
         self._selected = new_id
@@ -372,6 +381,15 @@ class MappingController(QObject):
         candidate = dict(link, template=template.strip() or None)
         self._render_preview(candidate)
 
+    @Slot(str)
+    def previewReverse(self, reverse: str) -> None:
+        """Live preview while typing: checks ``reverse`` splits the rendered text back apart."""
+        link = self._find(self._selected) if self._selected else None
+        if not link:
+            return
+        candidate = dict(link, reverse=reverse.strip() or None)
+        self._render_preview(candidate)
+
     @Slot()
     def updatePreview(self) -> None:
         link = self._find(self._selected) if self._selected else None
@@ -386,6 +404,9 @@ class MappingController(QObject):
                 out = preview_link(FieldLink(**link), self._catalog())
                 self._preview = (out["text"] or "(empty)") if out["ok"] else "–"
                 self._preview_problems = "\n".join(out["problems"] + out["warnings"])
+                if out.get("ok") and "reverse_sample" in out:
+                    sample = out["reverse_sample"]
+                    self._preview += "  |  reverse -> " + (str(sample) if sample else "(pattern does not match its own template output)")
             except Exception as e:
                 self._preview, self._preview_problems = "–", str(e)
         self.previewChanged.emit()
@@ -421,19 +442,21 @@ class MappingController(QObject):
             self.askApplyToAll.emit()
         return ""
 
-    @Slot(str, int, bool)
-    def savePairOptions(self, direction: str, grace: int, propagate_deletes: bool) -> None:
+    @Slot(str, int, bool, bool)
+    def savePairOptions(self, direction: str, grace: int, propagate_deletes: bool, create_on_garmin: bool) -> None:
         settings = ConfigManager.load_settings()
         if self._pair_id == "default":
             settings.directionality = direction
             settings.grace_window_minutes = grace
             settings.propagate_deletes = propagate_deletes
+            settings.create_on_garmin = create_on_garmin
         else:
             for pair in settings.sync_pairs:
                 if pair.id == self._pair_id:
                     pair.directionality = direction
                     pair.grace_window_minutes = grace
                     pair.propagate_deletes = propagate_deletes
+                    pair.create_on_garmin = create_on_garmin
         ConfigManager.save_settings(settings)
         self._settings = settings
         self.boardChanged.emit()

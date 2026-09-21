@@ -28,7 +28,7 @@ def test_export_contains_everything_but_secrets():
     assert profile["dive_sync_profile"] == PROFILE_VERSION
     assert set(profile) == {"dive_sync_profile", "directionality", "sync_filters", "grace_window_minutes",
                             "api_cooldown_seconds", "field_links", "garmin_timezone", "sync_pairs", "schedule",
-                            "cron_jobs", "notify_url", "propagate_deletes", "backup_retention_count"}
+                            "cron_jobs", "notify_url", "propagate_deletes", "backup_retention_count", "create_on_garmin"}
     text = json.dumps(profile)
     assert "password" not in text and "token" not in text
     assert profile["cron_jobs"][0]["id"] == "n" and len(profile["field_links"]) == 9

@@ -27,6 +27,7 @@ It features bidirectional syncing, detailed telemetry parsing (depth/temperature
 
 * **Bidirectional Syncing**: Synchronizes dive logs in both directions, or unidirectionally (to Garmin or to Divelogs).
 * **Telemetry & Gas Mapping**: Maps complex dive metrics, temperature profiles, start/end tank pressures, gas mixtures (Nitrox/Trimix), and telemetry graph coordinates.
+* **Field-Level Mapping Board**: A drag-and-drop editor (status page and desktop app) for exactly which field syncs which way, with a conflict policy per link, composite templates, and a queue for conflicts that need a manual pick.
 * **Scheduled Sync**: Configure one or more cron-like jobs (hourly/daily/weekly/custom interval, per-job direction and filters) that run unattended.
 * **Status Page**: A read-only web page showing whether a sync is running, the last result, the next scheduled run, and a live log tail — plus a small form for credentials and schedule configuration.
 * **Multi-Account Support**: Configure multiple Garmin and Divelogs credentials. Run the sync globally or target specific accounts using selection arguments.
@@ -176,7 +177,7 @@ python sync.py --source garmin --target subsurface-cloud --full-sync
 
 ### Mapping, conflicts and profiles
 
-Which field feeds which, in what direction and who wins a conflict is defined by the *mapping board*: the `field_links` list in `settings.json`. The shipped defaults fill blanks on either side and never overwrite a real value with another (differences are logged); tanks and profiles go to Divelogs only, Garmin's location name and Divelogs' dive site are the same field, and new Garmin dives are titled "location, dive site". A graphical editor is coming; until then these commands work with the board:
+Which field feeds which, in what direction, and who wins a conflict is defined by the *mapping board* — see the "🗺️ Mapping Board" section below for what that actually means. Edit it visually on the status page or in the desktop app, or from the CLI:
 
 ```bash
 # Show the board as a table (and any problems with it)
@@ -194,6 +195,36 @@ python sync.py --export-profile dive_sync_profile.json
 python sync.py --validate-profile dive_sync_profile.json
 python sync.py --import-profile dive_sync_profile.json     # shows a summary, asks before applying (--yes skips)
 ```
+
+---
+
+## 🗺️ Mapping Board (fields, links, templates and conflicts)
+
+Every synced field is controlled by the *mapping board* — one editable list of **links**, identical whether you edit it on the status page, in the desktop app, or by hand in `settings.json`. There's one board per sync pair: the implicit Garmin ↔ Divelogs pair, and one more for each pair you add (a UDDF file, a Subsurface checkout, Subsurface Cloud, Submersion).
+
+**Field catalogue.** Each service publishes what it can read and write (`GET /api/fields`) — a read-only field (e.g. Divelogs numbers its own dives) can never be a link's write target; the board UIs show these as locked.
+
+**A link** joins one or more source fields to one target field, and has:
+- **Direction** — `bidirectional`, `to_target`, `to_source`, or `off` (not synced at all).
+- **Conflict policy** — what happens when both sides already have a (different) value:
+  - `manual` *(the default for most fields)* — a blank side is filled for free; a genuine disagreement is queued in the **Conflicts** view for you to pick a winner. Nothing is ever silently overwritten.
+  - `prefer_non_empty` — the same "fill blanks, never overwrite a real value" behaviour as `manual`, except a real disagreement is just logged, not queued. Used for `samples` (a depth/temperature profile "conflict" is hundreds of points — nothing to usefully arbitrate one at a time).
+  - `prefer_source` — mirrors the source whenever it has a value, even overwriting a different value already on the target — but an *empty* source never blanks a target that already has data. Used for `tanks`, so the dive computer stays the source of truth for gas data even after a target has stale readings.
+  - `source_wins` / `target_wins` — one side always wins, blank or not. Available if you want stricter behaviour than `manual`.
+
+**Templates (composite links).** A link's target can be rendered from a small text template combining several source fields instead of copying one field verbatim. The shipped `activity_name` link is the example: it builds Garmin's activity title from Divelogs' region and dive site —
+```
+template: "{divelogs.location}, {divelogs.divesite}"
+```
+so a Divelogs dive with location `Larnaca` and dive site `Zenobia` uploads to Garmin titled `Larnaca, Zenobia`. Composite links are one-way (`to_target` only) by default. In either board UI, you build one by dropping a *second* field onto a target that's already linked; the editor shows a live preview as you edit the template.
+
+**Reverse parsing (bidirectional templates).** A composite can be made bidirectional by adding a `reverse` regex with named groups matching its source field names, e.g. `(?P<divesite>.+) \((?P<location>.+)\)` for a template of `{divesite} ({location})`. With `reverse` set, direction can be `bidirectional`/`to_source` too: whenever the target has been hand-edited to something the template no longer reproduces, the pattern is matched against the target's whole current value and, if it fully matches, splits it back into the named source fields (the usual conflict policy still decides which side wins overall). A target that no longer fits the pattern at all is left alone rather than guessed at. Only text-typed source fields are supported. Both board UIs show a live self-check next to the preview — "reverse -> {...}" — proving the pattern actually inverts the template on the example dive.
+
+**Shipped defaults (Garmin ↔ Divelogs).** Buddy, notes, weight, visibility, GPS, and site name sync both ways with `manual` conflict resolution; tanks and depth/temperature profiles sync Garmin → Divelogs only (Garmin's gas API can't be written, and can't record samples at all); Garmin's activity title is built from Divelogs' location/dive site for new dives (see the template above). A pair beyond Garmin ↔ Divelogs starts from a smaller, generic default board covering the fields both sides actually have. If you want the old pre-board behaviour (Garmin always wins every difference), that board is still available as `fields.legacy_field_links()`.
+
+**The conflict queue.** Any `manual`-policy link where both sides hold a value and they differ gets recorded (`conflicts.json`) instead of being resolved automatically. Resolve one from the status page or desktop app's **Conflicts** view (pick which side wins; the other side gets updated), or from the CLI (`--list-conflicts`, `--resolve <id> source|target`). An unresolved conflict is re-evaluated — and re-queued if it's still unresolved — on the next run that revisits that dive.
+
+**Editing the board.** Visually: drag a field onto a field in the other column to link them; click a line or a row to change direction, conflict policy, match-key order, or the template; **Save** asks whether to re-apply the changed mapping to every already-matched dive on the next run. By hand: `settings.json`'s `field_links` (the implicit pair) or `sync_pairs[].field_links` (a named pair), or `POST /api/settings`.
 
 ---
 
@@ -244,7 +275,7 @@ Open `http://localhost:8000` in your web browser.
 The status page provides:
 1. **Status**: whether a sync is currently running, the last result, the next scheduled run, and a manual "Sync now" trigger (with an optional dry-run toggle).
 2. **Live log**: a streamed tail of the scheduler's log output.
-3. **Mapping board**: one board per sync pair. The two columns list what each service can read and write (locked fields cannot be written). Drag a field onto a field on the other side to link them; click a line or a row to set the direction, the conflict policy (fill blanks, source wins, target wins, ask me), the match-key order and, for text targets, a `{field}` template with a live preview. Dropping a further field onto a linked target builds a composite. Save asks whether the changed mapping should be applied to all matched dives on the next run; Cancel and Reset to defaults are there too; **Test mapping** fetches the newest 10 dives from both services and shows what every link would do, without writing anything.
+3. **Mapping board**: one board per sync pair — see the "🗺️ Mapping Board" section above for what a link, its direction, conflict policy and templates actually mean. Drag a field onto a field on the other side to link them; click a line or a row to edit it, with a live template preview. Save, Cancel and Reset to defaults are there too; **Test mapping** fetches the newest 10 dives from both services and shows what every link would do, without writing anything.
 4. **Conflicts**: what links with the "ask me" policy have queued, with a button per side to resolve.
 5. **Credentials**: set/test Garmin, Divelogs.org and Subsurface Cloud credentials without editing `credentials.json` by hand.
 6. **Sync pairs** and **scheduled jobs**: pairs beyond Garmin ↔ Divelogs (UDDF file, Subsurface checkout, Subsurface Cloud), and cron-like jobs that can name a pair.

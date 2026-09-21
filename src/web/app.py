@@ -89,6 +89,7 @@ class SettingsSchema(BaseModel):
     grace_window_minutes: int
     api_cooldown_seconds: float
     propagate_deletes: bool = False
+    create_on_garmin: bool = False
     schedule: List[Dict[str, int]]
     cron_jobs: List[CronJobSchema] = []
     # Omitted (None) keeps the board / pairs currently on disk, so a settings
@@ -176,6 +177,7 @@ def save_settings(data: SettingsSchema):
             grace_window_minutes=data.grace_window_minutes,
             api_cooldown_seconds=data.api_cooldown_seconds,
             propagate_deletes=data.propagate_deletes,
+            create_on_garmin=data.create_on_garmin,
             schedule=schedule_slots,
             cron_jobs=cron_jobs,
             field_links=field_links,

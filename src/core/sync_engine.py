@@ -26,7 +26,7 @@ from src.core.fields import (
 )
 from src.core.models import UnifiedDive, GasMixture
 from src.core.conflicts import Conflict, ConflictStore, conflicts_path_for, pair_key
-from src.core.templates import render, validate_links
+from src.core.templates import render, reverse_parse, validate_links
 
 logger = logging.getLogger("dive_sync.sync_engine")
 
@@ -36,12 +36,12 @@ class LinkOutcome:
     __slots__ = ("modified", "conflict", "action", "source_value", "target_value", "warnings")
 
     def __init__(self, action: str, source_value: Any = None, target_value: Any = None,
-                 modified: Optional[str] = None, conflict: Optional[Conflict] = None,
+                 modified: Optional[Set[str]] = None, conflict: Optional[Conflict] = None,
                  warnings: Optional[List[str]] = None):
-        self.action = action          # "equal" | "not_writable" | "kept" | "conflict" | "write:<key>"
+        self.action = action          # "equal" | "not_writable" | "kept" | "conflict" | "reverse_unparsed" | "write:<key>[,<key>...]"
         self.source_value = source_value
         self.target_value = target_value
-        self.modified = modified      # service id whose dive changed, if any
+        self.modified = modified      # set of service ids whose dive changed, if any
         self.conflict = conflict
         self.warnings = warnings or []
 
@@ -505,7 +505,7 @@ class SyncEngine:
             return LinkOutcome("equal", *raw, warnings=warnings)
 
         can_write_tgt = link.direction in ("bidirectional", "to_target") and tgt_spec.service_id in writable
-        can_write_src = (not link.template and link.direction in ("bidirectional", "to_source")
+        can_write_src = ((not link.template or link.reverse) and link.direction in ("bidirectional", "to_source")
                          and src_spec.service_id in writable)
         if not (can_write_tgt or can_write_src):
             return LinkOutcome("not_writable", *raw, warnings=warnings)
@@ -578,14 +578,33 @@ class SyncEngine:
                         label, src_spec.key, shown[0], tgt_spec.key, shown[1],
                         tgt_spec.key, src_spec.key if not link.template else "template", link.id, policy)
             set_field(tgt_dive, tgt_spec, copy_value(tgt_spec.type, src_as_tgt))
-            return LinkOutcome(f"write:{tgt_spec.key}", *raw, modified=tgt_spec.service_id, warnings=warnings)
+            return LinkOutcome(f"write:{tgt_spec.key}", *raw, modified={tgt_spec.service_id}, warnings=warnings)
+
+        if link.template:
+            parsed = reverse_parse(link, tgt_val, self.catalog)
+            if not parsed:
+                logger.warning("  %s: target changed but does not match the reverse pattern, source left alone "
+                               "[link %s]", tgt_spec.label, link.id)
+                return LinkOutcome("reverse_unparsed", *raw, warnings=warnings)
+            modified: Set[str] = set()
+            written = []
+            for key, value in parsed.items():
+                spec = self.catalog[key]
+                dive = self._dive_for(spec.service_id, a_dive, b_dive)
+                set_field(dive, spec, copy_value(spec.type, value))
+                modified.add(spec.service_id)
+                written.append(key)
+            logger.info("  %s differs (%s=%r, %s=%r) -> %s := parsed from %s [link %s, %s]",
+                        label, src_spec.key, shown[0], tgt_spec.key, shown[1],
+                        ", ".join(written), tgt_spec.key, link.id, policy)
+            return LinkOutcome(f"write:{','.join(written)}", *raw, modified=modified, warnings=warnings)
 
         tgt_as_src = convert_value(tgt_val, tgt_spec.type, src_spec.type, link.separator)
         logger.info("  %s differs (%s=%r, %s=%r) -> %s := %s [link %s, %s]",
                     label, src_spec.key, shown[0], tgt_spec.key, shown[1],
                     src_spec.key, tgt_spec.key, link.id, policy)
         set_field(src_dive, src_spec, copy_value(src_spec.type, tgt_as_src))
-        return LinkOutcome(f"write:{src_spec.key}", *raw, modified=src_spec.service_id, warnings=warnings)
+        return LinkOutcome(f"write:{src_spec.key}", *raw, modified={src_spec.service_id}, warnings=warnings)
 
     def prepare_upload(self, dive: UnifiedDive, destination_id: str,
                        links: Optional[List[Tuple[FieldLink, FieldSpec, FieldSpec]]] = None) -> UnifiedDive:
@@ -631,7 +650,8 @@ class SyncEngine:
                  direction_override: Optional[str] = None, sync_gases_override: Optional[bool] = None,
                  field_links_override: Optional[List[FieldLink]] = None,
                  grace_window_override: Optional[int] = None,
-                 propagate_deletes_override: Optional[bool] = None) -> Dict[str, Any]:
+                 propagate_deletes_override: Optional[bool] = None,
+                 create_on_garmin_override: Optional[bool] = None) -> Dict[str, Any]:
         """Perform bidirectional or directional synchronization.
 
         Settings are re-read from disk at the start of every run; per-run
@@ -659,6 +679,8 @@ class SyncEngine:
             self.settings.grace_window_minutes = grace_window_override
         if propagate_deletes_override is not None:
             self.settings.propagate_deletes = propagate_deletes_override
+        if create_on_garmin_override is not None:
+            self.settings.create_on_garmin = create_on_garmin_override
 
         for adapter in (self.source, self.target):
             if hasattr(adapter, "upload_timezone") and self.settings.garmin_timezone:
@@ -806,8 +828,15 @@ class SyncEngine:
         seen_pairs = set()
         sync_results["conflicts"] = []
 
-        # 1. Upload dives only the source has to the target
-        if tgt in writable:
+        # 1. Upload dives only the source has to the target (rework.md C16:
+        # creating a new dive on Garmin from another source is opt-in - a
+        # matched dive's field updates below are never gated by this)
+        if tgt in writable and tgt == "garmin" and not self.settings.create_on_garmin and unique_source:
+            logger.info("  %d new dive(s) found only on %s; create_on_garmin is off, not creating them on Garmin",
+                       len(unique_source), self.source_name)
+            sync_results["skipped"].extend(
+                {"reason": "create_on_garmin_off", "time": str(d.date_time)} for d in unique_source)
+        elif tgt in writable:
             for dive in unique_source:
                 logger.info("Sync action: Upload %s dive at %s to %s", self.source_name, dive.date_time, self.target_name)
                 entry = {
@@ -827,8 +856,13 @@ class SyncEngine:
                     entry["dry_run"] = True
                     sync_results[f"uploaded_to_{tgt}"].append(entry)
 
-        # 2. Upload dives only the target has to the source
-        if src in writable:
+        # 2. Upload dives only the target has to the source (same C16 gate)
+        if src in writable and src == "garmin" and not self.settings.create_on_garmin and unique_target:
+            logger.info("  %d new dive(s) found only on %s; create_on_garmin is off, not creating them on Garmin",
+                       len(unique_target), self.target_name)
+            sync_results["skipped"].extend(
+                {"reason": "create_on_garmin_off", "time": str(d.date_time)} for d in unique_target)
+        elif src in writable:
             for dive in unique_target:
                 logger.info("Sync action: Upload %s dive at %s to %s", self.target_name, dive.date_time, self.source_name)
                 entry = {
@@ -873,8 +907,8 @@ class SyncEngine:
 
             for link, src_spec, tgt_spec in links:
                 outcome = self._apply_link(link, src_spec, tgt_spec, a_dive, b_dive, writable)
-                if outcome.modified:
-                    needs_update[outcome.modified] = True
+                for side in outcome.modified or ():
+                    needs_update[side] = True
                 if outcome.conflict:
                     run_conflicts.append(outcome.conflict)
                     sync_results["conflicts"].append(outcome.conflict.model_dump(mode="json"))

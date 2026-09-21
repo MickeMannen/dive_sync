@@ -83,7 +83,10 @@ class FieldLink(BaseModel):
     #  on the target, but a Garmin dive that *does* have tanks should always
     #  replace stale target data rather than only filling a blank field.)
     template: Optional[str] = Field(None, description="'{key}' template; required when len(source) > 1")
-    reverse: Optional[str] = Field(None, description="Parse pattern for a composite (regex with named groups); later item C21")
+    reverse: Optional[str] = Field(None, description="Parse pattern for a composite (regex with named groups matching "
+                                    "source field names, e.g. '(?P<divesite>.+) \\((?P<location>.+)\\)'); when set, a "
+                                    "composite's direction may also be bidirectional/to_source, and an edited target "
+                                    "is split back into its source fields when the pattern fully matches it")
     match_order: Optional[int] = Field(None, description="Set: this link is also a match key, tried in this order")
     separator: str = Field(", ", description="list <-> text links: join / split token")
     when: Optional[str] = Field(None, description="Reserved for conditional links")
@@ -106,8 +109,8 @@ class FieldLink(BaseModel):
         if self.is_composite:
             if not self.template:
                 raise ValueError(f"Link '{self.id}': a composite link needs a template")
-            if self.direction not in ("to_target", "off"):
-                raise ValueError(f"Link '{self.id}': a composite link is one-way towards its target (direction 'to_target' or 'off')")
+            if self.direction not in ("to_target", "off") and not self.reverse:
+                raise ValueError(f"Link '{self.id}': a composite link is one-way towards its target (direction 'to_target' or 'off') unless it has a 'reverse' pattern")
             if self.match_order is not None:
                 raise ValueError(f"Link '{self.id}': a composite link cannot be a match key")
         return self
@@ -415,6 +418,11 @@ def validate_field_links(links: List[FieldLink], catalog: Dict[str, FieldSpec]) 
             bad = [s.key for s in sources if s.type not in TEMPLATE_SOURCE_TYPES]
             if bad:
                 errors.append(f"Link '{link.id}': field(s) {', '.join(bad)} cannot be used inside a template")
+            if link.reverse:
+                not_text = [s.key for s in sources if s.type != "text"]
+                if not_text:
+                    errors.append(f"Link '{link.id}': reverse parsing only supports text source fields, "
+                                   f"{', '.join(not_text)} are not text")
         else:
             src = sources[0]
             if not types_compatible(src.type, target.type):
@@ -432,8 +440,11 @@ def validate_field_links(links: List[FieldLink], catalog: Dict[str, FieldSpec]) 
         writes_source = link.direction in ("bidirectional", "to_source")
         if writes_target and not target.writable:
             errors.append(f"Link '{link.id}': {target.key} cannot be written by its service")
-        if writes_source and not sources[0].writable:
-            errors.append(f"Link '{link.id}': {sources[0].key} cannot be written by its service")
+        if writes_source:
+            unwritable = [s.key for s in (sources if link.is_composite and link.reverse else sources[:1])
+                          if not s.writable]
+            if unwritable:
+                errors.append(f"Link '{link.id}': field(s) {', '.join(unwritable)} cannot be written by their service")
         unreadable = [s.key for s in sources if not s.readable]
         if unreadable:
             errors.append(f"Link '{link.id}': field(s) {', '.join(unreadable)} cannot be read")

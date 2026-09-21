@@ -241,6 +241,7 @@ function populateDefaults(settings) {
   $("default-only-new").checked = settings.sync_filters.only_new;
   $("default-sync-gases").checked = settings.sync_filters.sync_gases;
   $("default-propagate-deletes").checked = !!settings.propagate_deletes;
+  $("default-create-on-garmin").checked = !!settings.create_on_garmin;
   $("notify-url").value = settings.notify_url || "";
 }
 
@@ -301,6 +302,7 @@ function addPairRow(pair) {
   row.dataset.links = JSON.stringify(pair?.field_links ?? null);
   row.dataset.grace = pair?.grace_window_minutes ?? "";
   row.dataset.propagateDeletes = pair?.propagate_deletes ?? "";
+  row.dataset.createOnGarmin = pair?.create_on_garmin ?? "";
   row.querySelector(".remove-row").addEventListener("click", () => row.remove());
   $("pairs-body").appendChild(row);
 }
@@ -310,6 +312,7 @@ function readPairsTable() {
     const links = JSON.parse(row.dataset.links || "null");
     const grace = row.dataset.grace;
     const propagateDeletes = row.dataset.propagateDeletes;
+    const createOnGarmin = row.dataset.createOnGarmin;
     return {
       id: row.querySelector(".p-id").value.trim(),
       source: row.querySelector(".p-source").value.trim(),
@@ -319,6 +322,7 @@ function readPairsTable() {
       grace_window_minutes: grace === "" || grace === "null" ? null : parseInt(grace, 10),
       field_links: links,
       propagate_deletes: propagateDeletes === "" || propagateDeletes === "null" ? null : propagateDeletes === "true",
+      create_on_garmin: createOnGarmin === "" || createOnGarmin === "null" ? null : createOnGarmin === "true",
     };
   });
 }
@@ -399,6 +403,7 @@ function settingsPayload(extra) {
     grace_window_minutes: parseInt($("grace-window").value, 10),
     api_cooldown_seconds: parseFloat($("api-cooldown").value),
     propagate_deletes: $("default-propagate-deletes").checked,
+    create_on_garmin: $("default-create-on-garmin").checked,
     schedule: (currentSettings?.schedule || []).map((s) => ({ hour: s.hour, minute: s.minute })),
     cron_jobs: readCronTable(),
     sync_pairs: readPairsTable(),
@@ -495,6 +500,7 @@ function selectPair(pairId) {
   $("pair-direction").innerHTML = optionList(directionOptionsFor(info.source, info.target), pairDirection());
   $("pair-grace").value = pairGrace();
   $("pair-propagate-deletes").checked = pairPropagateDeletes();
+  $("pair-create-on-garmin").checked = pairCreateOnGarmin();
   renderBoard();
   loadConflicts();
 }
@@ -515,6 +521,13 @@ function pairPropagateDeletes() {
   const pair = (currentSettings?.sync_pairs || []).find((p) => p.id === board.pairId);
   const value = pair?.propagate_deletes;
   return value === null || value === undefined ? !!currentSettings?.propagate_deletes : !!value;
+}
+
+function pairCreateOnGarmin() {
+  if (board.pairId === "default") return !!currentSettings?.create_on_garmin;
+  const pair = (currentSettings?.sync_pairs || []).find((p) => p.id === board.pairId);
+  const value = pair?.create_on_garmin;
+  return value === null || value === undefined ? !!currentSettings?.create_on_garmin : !!value;
 }
 
 function fieldLi(field) {
@@ -716,9 +729,10 @@ function allowedDirections(link) {
   const structural = ["tanks", "samples"].includes(target?.type) || ["tanks", "samples"].includes(source?.type);
   const options = [];
   const composite = link.source.length > 1 || !!link.template;
-  if (!composite && !structural && target?.writable && source?.writable) options.push(["bidirectional", "Both ways"]);
+  const reversible = composite && !!link.reverse;
+  if ((!composite || reversible) && !structural && target?.writable && source?.writable) options.push(["bidirectional", "Both ways"]);
   if (target?.writable) options.push(["to_target", "Source → target"]);
-  if (!composite && source?.writable) options.push(["to_source", "Target → source"]);
+  if ((!composite || reversible) && source?.writable) options.push(["to_source", "Target → source"]);
   options.push(["off", "Off (not synced)"]);
   return options;
 }
@@ -740,6 +754,8 @@ function openEditor(id) {
   $("editor-template").value = link.template || "";
   const textTarget = board.catalog[link.target]?.type === "text";
   $("editor-template-block").hidden = !textTarget;
+  $("editor-reverse").value = link.reverse || "";
+  $("editor-reverse-block").hidden = !textTarget || (link.source.length === 1 && !link.template);
   $("editor-field-picker").innerHTML = optionList(link.source.map((k) => [k, board.catalog[k]?.label || k]), link.source[0]);
   $("link-editor").hidden = false;
   renderLinksTable();
@@ -766,6 +782,7 @@ function editorLink() {
     match_order: match === "" ? null : parseInt(match, 10),
     separator: $("editor-separator").value || ", ",
     template: $("editor-template").hidden ? link.template : ($("editor-template").value.trim() || null),
+    reverse: $("editor-reverse-block").hidden ? link.reverse : ($("editor-reverse").value.trim() || null),
   });
 }
 
@@ -792,7 +809,11 @@ async function runPreview() {
     $("editor-problems").textContent = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
     return;
   }
-  $("editor-preview").textContent = data.ok ? (data.text || "(empty)") : "–";
+  let text = data.ok ? (data.text || "(empty)") : "–";
+  if (data.ok && "reverse_sample" in data) {
+    text += "  |  reverse -> " + (data.reverse_sample ? JSON.stringify(data.reverse_sample) : "(pattern does not match its own template output)");
+  }
+  $("editor-preview").textContent = text;
   $("editor-problems").textContent = [...(data.problems || []), ...(data.warnings || [])].join("\n");
 }
 
@@ -834,12 +855,14 @@ async function saveBoard() {
     $("default-directionality").value = $("pair-direction").value;
     $("grace-window").value = $("pair-grace").value;
     $("default-propagate-deletes").checked = $("pair-propagate-deletes").checked;
+    $("default-create-on-garmin").checked = $("pair-create-on-garmin").checked;
     payload = settingsPayload({ field_links: board.links });
   } else {
     const pairs = readPairsTable().map((p) => (p.id === board.pairId
       ? Object.assign(p, { field_links: board.links, directionality: $("pair-direction").value,
                            grace_window_minutes: parseInt($("pair-grace").value, 10) || null,
-                           propagate_deletes: $("pair-propagate-deletes").checked })
+                           propagate_deletes: $("pair-propagate-deletes").checked,
+                           create_on_garmin: $("pair-create-on-garmin").checked })
       : p));
     payload = settingsPayload({ sync_pairs: pairs });
   }
@@ -1022,6 +1045,7 @@ async function init() {
   $("editor-delete").addEventListener("click", () => { if (editorLinkId) deleteLink(editorLinkId); });
   $("editor-insert").addEventListener("click", insertFieldIntoTemplate);
   $("editor-template").addEventListener("input", schedulePreview);
+  $("editor-reverse").addEventListener("input", schedulePreview);
   $("editor-direction").addEventListener("change", schedulePreview);
   $("profile-check").addEventListener("click", () => checkProfile(false));
   $("profile-apply").addEventListener("click", () => checkProfile(true));
