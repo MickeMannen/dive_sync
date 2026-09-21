@@ -94,7 +94,9 @@ def test_default_links_validate_against_catalogue():
     assert len(ids) == len(set(ids))
     by_id = {l.id: l for l in links}
     # Decided 2026-09-21: never wipe, no dive-number key on this pair, site names linked
-    assert all(l.conflict == "prefer_non_empty" for l in links)
+    # Decided 2026-09-22: tanks always mirrors the source (never wipe still applies elsewhere)
+    assert all(l.conflict == "prefer_non_empty" for l in links if l.id != "tanks")
+    assert by_id["tanks"].conflict == "prefer_source"
     assert by_id["buddy"].direction == "bidirectional" and by_id["gps"].direction == "bidirectional"
     assert by_id["tanks"].direction == "to_target" and by_id["samples"].direction == "to_target"
     assert "dive_number" not in by_id and not any(l.match_order for l in links)
@@ -297,3 +299,14 @@ def test_sample_comparison_resamples_both_sides():
     assert values_equal("samples", irregular, stored)
     assert not values_equal("samples", irregular, stored[:-1])
     assert not values_equal("samples", [], stored) and values_equal("samples", [], [])
+
+
+def test_copy_value_tanks_drops_name_but_keeps_role():
+    """E5: tank_role is real multi-tank information and must survive a
+    field-link copy between services; tank_name stays dropped (Garmin's
+    sensor names aren't meaningful elsewhere)."""
+    tanks = [GasMixture(oxygen=32.0, start_pressure=200.0, end_pressure=50.0, tank_volume=11.1,
+                        tank_name="Left", tank_role="backGas")]
+    copied = copy_value("tanks", tanks)
+    assert copied[0].tank_role == "backGas" and copied[0].tank_name is None
+    assert copied[0].oxygen == 32.0 and copied[0].start_pressure == 200.0

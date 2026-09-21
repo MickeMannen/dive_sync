@@ -1,0 +1,3194 @@
+model "Garmin Descent Mk2(i)/Mk3(i)(S)/G1/G2/X50i"
+deviceid 93dcaa63
+diveid 7e101e03
+maxdepth 20.902m
+meandepth 9.904m
+watertemp 29.0°C
+salinity 1025g/l
+keyvalue "Deco model" "Buhlmann ZHL-16C 35/75"
+keyvalue "Serial" "0000000000"
+keyvalue "FW Version" "19.34"
+keyvalue "Model" "Descent™ Mk3(i) 51mm"
+keyvalue "GPS1" "7.607093, 98.378161"
+keyvalue "GPS2" "7.606926, 98.378705"
+keyvalue "Session NE corner GPS" "7.607331, 98.378624"
+keyvalue "Session SW corner GPS" "7.607276, 98.378501"
+keyvalue "Lap some GPS" "7.607331, 98.378624"
+keyvalue "Lap other GPS" "7.607276, 98.378501"
+keyvalue "Sensor 1" "d5461f8c"
+event 0:01 type=25 flags=1 name="gaschange" cylinder=0
+event 44:23 type=26 flags=4 name="Safety stop begin"
+event 44:25 type=26 flags=4 name="Alert timed out"
+event 47:25 type=26 flags=4 name="Safety stop completed"
+event 47:28 type=26 flags=4 name="Alert timed out"
+event 55:18 type=26 flags=4 name="Surface"
+event 55:21 type=26 flags=4 name="Alert timed out"
+  0:01 1.505m 30.0°C po2=0.7bar heartbeat=109
+  0:02 1.647m tts=0:10
+  0:03 1.587m 200.08bar:0 ndl=0:00 tts=0:00
+  0:04 1.527m tts=0:10
+  0:05 1.485m tts=0:09 heartbeat=111
+  0:07 1.303m tts=0:08 heartbeat=112
+  0:08 1.127m tts=0:07 heartbeat=113
+  0:10 1.305m tts=0:08 heartbeat=118
+  0:11 1.262m heartbeat=123
+  0:12 1.189m tts=0:07 heartbeat=126
+  0:13 1.214m 199.94bar:0 heartbeat=128
+  0:14 1.037m tts=0:06 heartbeat=129
+  0:15 1.077m tts=0:07 heartbeat=130
+  0:16 0.934m tts=0:06 heartbeat=131
+  0:18 1.115m 199.67bar:0 tts=0:07 heartbeat=132
+  0:19 1.395m tts=0:09
+  0:20 1.698m tts=0:11 heartbeat=130
+  0:21 2.015m tts=0:13 heartbeat=127
+  0:22 2.261m tts=0:14 heartbeat=126
+  0:23 2.411m 199.39bar:0 tts=0:15 heartbeat=125
+  0:24 2.458m tts=0:16 heartbeat=123
+  0:25 2.336m tts=0:15 heartbeat=116
+  0:26 2.414m heartbeat=103
+  0:27 2.478m tts=0:16 heartbeat=98
+  0:28 2.58m 199.46bar:0 heartbeat=97
+  0:29 2.852m tts=0:18
+  0:30 2.644m tts=0:17
+  0:31 2.992m tts=0:19 heartbeat=96
+  0:32 3.122m tts=0:20
+  0:33 2.977m tts=0:19
+  0:34 2.736m tts=0:17
+  0:35 2.805m tts=0:18 heartbeat=97
+  0:38 2.876m 198.91bar:0
+  0:39 2.994m tts=0:19
+  0:40 2.987m heartbeat=96
+  0:44 2.838m tts=0:18
+  0:46 2.911m tts=0:19 heartbeat=97
+  0:47 2.868m tts=0:18 heartbeat=98
+  0:49 2.975m tts=0:19 heartbeat=99
+  0:50 3.054m tts=0:20
+  0:51 2.971m tts=0:19
+  0:52 2.829m tts=0:18
+  0:53 2.706m tts=0:17
+  0:54 2.691m heartbeat=98
+  0:56 2.811m tts=0:18 heartbeat=96
+  0:57 2.787m heartbeat=95
+  0:58 2.665m 198.22bar:0 tts=0:17 heartbeat=94
+  0:59 2.492m tts=0:16 heartbeat=90
+  1:00 2.493m heartbeat=91
+  1:01 2.625m tts=0:17 heartbeat=92
+  1:02 2.482m tts=0:16
+  1:03 2.352m tts=0:15 heartbeat=93
+  1:06 2.538m tts=0:16
+  1:08 2.591m 197.94bar:0 tts=0:00
+  1:09 2.618m tts=0:17 heartbeat=94
+  1:10 2.62m heartbeat=93
+  1:12 2.596m heartbeat=94
+  1:13 2.543m 198.08bar:0 tts=0:16
+  1:15 2.431m tts=0:15
+  1:16 2.516m tts=0:16
+  1:17 2.662m tts=0:17 heartbeat=93
+  1:18 2.773m tts=0:18
+  1:23 2.743m tts=0:17 heartbeat=94
+  1:24 2.748m tts=0:18 heartbeat=93
+  1:26 2.8m heartbeat=92
+  1:27 2.899m tts=0:19
+  1:28 3.075m tts=0:20
+  1:29 3.249m tts=0:21
+  1:30 3.302m heartbeat=93
+  1:33 3.341m heartbeat=94
+  1:34 3.36m tts=0:22
+  1:35 3.291m tts=0:21
+  1:36 3.118m tts=0:20
+  1:37 3.15m heartbeat=95
+  1:38 3.206m 197.25bar:0 tts=0:00
+  1:39 3.261m tts=0:21
+  1:40 3.522m tts=0:23
+  1:41 3.755m tts=0:24 heartbeat=94
+  1:42 3.934m tts=0:25
+  1:43 4.03m tts=0:26
+  1:44 4.104m heartbeat=93
+  1:47 3.932m
+  1:48 3.896m 196.91bar:0 tts=0:25 heartbeat=94
+  1:49 3.935m heartbeat=93
+  1:50 4.05m heartbeat=94
+  1:51 4.215m tts=0:26 heartbeat=93
+  1:52 4.342m tts=0:27 heartbeat=91
+  1:53 4.357m 196.43bar:0 tts=0:28 heartbeat=89
+  1:54 4.224m heartbeat=90
+  1:55 4.077m tts=0:27
+  1:56 4.117m tts=0:26 heartbeat=91
+  1:57 4.235m tts=0:27 heartbeat=92
+  1:58 4.463m 196.56bar:0
+  1:59 4.721m tts=0:29
+  2:00 4.823m tts=0:30
+  2:01 4.806m tts=0:31
+  2:03 4.861m 196.15bar:0 tts=0:32
+  2:04 4.829m tts=0:31
+  2:05 4.759m heartbeat=93
+  2:06 4.669m
+  2:07 4.687m tts=0:30
+  2:08 4.817m heartbeat=92
+  2:09 4.929m tts=0:31
+  2:10 4.937m tts=0:32
+  2:12 4.886m tts=0:31 heartbeat=93
+  2:13 4.982m tts=0:32
+  2:14 5.154m
+  2:15 5.141m tts=0:33
+  2:17 5.266m heartbeat=94
+  2:18 5.404m 195.53bar:0 tts=0:34 heartbeat=93
+  2:19 5.494m tts=0:35
+  2:20 5.488m tts=0:36 heartbeat=94
+  2:21 5.419m heartbeat=93
+  2:22 5.314m tts=0:35
+  2:23 5.213m 195.67bar:0 tts=0:34
+  2:24 5.138m heartbeat=94
+  2:25 5.137m tts=0:33 heartbeat=93
+  2:26 5.188m heartbeat=94
+  2:27 5.251m tts=0:34 heartbeat=93
+  2:28 5.252m 195.25bar:0 heartbeat=92
+  2:30 5.153m tts=0:33 heartbeat=93
+  2:32 5.111m
+  2:35 5.248m heartbeat=94
+  2:36 5.372m tts=0:34 heartbeat=93
+  2:37 5.412m tts=0:35 heartbeat=92
+  2:38 5.456m 194.91bar:0 heartbeat=93
+  2:39 5.51m
+  2:40 5.46m tts=0:36
+  2:41 5.345m tts=0:35
+  2:42 5.244m tts=0:34
+  2:43 5.249m 195.05bar:0 tts=0:00
+  2:44 5.254m tts=0:34
+  2:45 5.436m tts=0:35 heartbeat=94
+  2:46 5.511m tts=0:36 heartbeat=93
+  2:47 5.572m heartbeat=92
+  2:48 5.512m 194.57bar:0 tts=0:00
+  2:49 5.451m tts=0:35
+  2:51 5.446m heartbeat=91
+  2:52 5.52m tts=0:36
+  2:53 5.506m 194.77bar:0 tts=0:00
+  2:54 5.493m tts=0:36 heartbeat=90
+  2:56 5.603m
+  2:57 5.689m tts=0:37
+  2:58 5.79m 194.29bar:0
+  2:59 5.74m
+  3:01 5.695m heartbeat=91
+  3:02 5.767m heartbeat=90
+  3:03 5.864m 194.15bar:0 tts=0:38 heartbeat=89
+  3:04 5.939m heartbeat=86
+  3:05 5.935m heartbeat=85
+  3:06 5.829m heartbeat=86
+  3:07 5.78m tts=0:37 heartbeat=87
+  3:08 5.803m 193.88bar:0 tts=0:38 heartbeat=89
+  3:09 5.88m heartbeat=91
+  3:10 5.986m tts=0:39 heartbeat=90
+  3:11 5.967m heartbeat=91
+  3:12 5.744m tts=0:37
+  3:13 5.643m heartbeat=90
+  3:14 5.551m tts=0:36 heartbeat=89
+  3:16 5.685m tts=0:37
+  3:17 5.811m tts=0:38
+  3:18 5.913m 193.67bar:0
+  3:19 5.991m tts=0:39
+  3:20 6.048m
+  3:21 6.142m tts=0:40
+  3:22 6.279m tts=0:41 heartbeat=88
+  3:23 6.433m 193.26bar:0 tts=0:42 heartbeat=89
+  3:24 6.59m tts=0:43 heartbeat=90
+  3:26 6.767m tts=0:44
+  3:28 6.909m 193.39bar:0 tts=0:45
+  3:29 6.873m heartbeat=91
+  3:30 7.021m tts=0:46 heartbeat=90
+  3:31 7.187m ndl=932:17 tts=0:47
+  3:32 7.311m ndl=841:30 heartbeat=91
+  3:33 7.368m 192.98bar:0 ndl=807:59 tts=0:48 heartbeat=90
+  3:34 7.357m ndl=814:08 heartbeat=91
+  3:35 7.439m ndl=770:53
+  3:36 7.579m ndl=682:19 tts=0:49
+  3:37 7.58m ndl=681:56
+  3:38 7.511m 192.91bar:0 ndl=722:14
+  3:39 7.465m ndl=753:57 tts=0:48 heartbeat=90
+  3:40 7.376m ndl=803:14
+  3:41 7.471m ndl=749:03 tts=0:49
+  3:42 7.47m ndl=749:47 heartbeat=91
+  3:43 7.367m ndl=808:19 tts=0:48 heartbeat=90
+  3:44 7.346m ndl=820:11
+  3:45 7.425m 29.0°C ndl=777:51 heartbeat=91
+  3:46 7.404m ndl=788:14 heartbeat=92
+  3:47 7.379m 30.0°C ndl=801:43
+  3:48 7.423m ndl=778:29
+  3:49 7.528m ndl=711:33 tts=0:49
+  3:50 7.562m ndl=691:31 heartbeat=91
+  3:51 7.501m ndl=728:26
+  3:52 7.356m 29.0°C ndl=814:13 tts=0:48
+  3:53 7.293m 192.43bar:0 ndl=853:00 tts=0:47 heartbeat=92
+  3:54 7.366m ndl=808:40 tts=0:48
+  3:55 7.516m ndl=719:09 tts=0:49
+  3:56 7.547m ndl=700:15
+  3:57 7.566m ndl=689:04
+  3:58 7.702m 192.08bar:0 ndl=623:59 tts=0:50
+  3:59 7.867m ndl=541:00 tts=0:51
+  4:00 7.809m ndl=568:10 heartbeat=93
+  4:01 7.697m ndl=625:55 tts=0:50 heartbeat=92
+  4:02 7.648m ndl=647:40 heartbeat=93
+  4:03 7.618m ndl=661:55 tts=0:49 heartbeat=92
+  4:04 7.533m ndl=708:16
+  4:05 7.496m ndl=731:35
+  4:06 7.532m ndl=709:03
+  4:07 7.642m ndl=650:38 tts=0:50
+  4:08 7.686m ndl=630:29
+  4:09 7.705m ndl=622:27
+  4:10 7.84m ndl=552:48 tts=0:51
+  4:11 7.88m ndl=535:24 heartbeat=91
+  4:12 7.886m ndl=532:51
+  4:13 7.868m ndl=540:21 heartbeat=90
+  4:14 7.941m ndl=510:59 tts=0:52 heartbeat=89
+  4:15 8.06m ndl=472:06 heartbeat=88
+  4:16 8.059m ndl=472:11
+  4:17 7.989m ndl=494:17
+  4:18 7.873m ndl=538:15 tts=0:51
+  4:19 7.8m ndl=572:34 heartbeat=89
+  4:20 7.832m ndl=556:26
+  4:21 7.901m ndl=526:25 heartbeat=90
+  4:22 7.879m ndl=535:15 heartbeat=89
+  4:23 7.83m 191.46bar:0 ndl=557:28
+  4:24 7.723m ndl=615:06 tts=0:50
+  4:25 7.611m ndl=665:05 tts=0:49
+  4:26 7.494m ndl=732:49
+  4:27 7.578m ndl=682:21 heartbeat=88
+  4:28 7.655m 191.12bar:0 ndl=644:08 tts=0:50 heartbeat=89
+  4:29 7.782m ndl=581:34 tts=0:51
+  4:30 7.881m ndl=534:24
+  4:31 7.965m ndl=502:06 tts=0:52 heartbeat=90
+  4:33 7.993m ndl=514:06
+  4:34 8.08m ndl=492:34
+  4:35 8.155m ndl=465:53 tts=0:53 heartbeat=91
+  4:36 8.062m ndl=443:26 heartbeat=90
+  4:37 7.927m ndl=471:07 tts=0:52
+  4:38 7.893m 190.77bar:0 ndl=516:10 heartbeat=91
+  4:39 8.038m ndl=529:29 tts=0:51
+  4:40 8.171m ndl=478:18 tts=0:52
+  4:41 8.163m ndl=436:41 tts=0:53 heartbeat=92
+  4:42 8.063m ndl=439:54
+  4:43 7.963m 190.91bar:0 ndl=470:38 tts=0:52 heartbeat=91
+  4:44 7.944m ndl=502:34
+  4:45 8.054m ndl=509:26 heartbeat=90
+  4:46 8.175m ndl=473:18
+  4:47 8.241m ndl=435:04 tts=0:53
+  4:48 8.273m 190.5bar:0 ndl=411:05 tts=0:54
+  4:49 8.239m ndl=400:52
+  4:50 8.225m ndl=411:39
+  4:51 8.254m ndl=416:18 tts=0:53 heartbeat=91
+  4:52 8.293m ndl=406:52 tts=0:54 heartbeat=90
+  4:53 8.193m 190.57bar:0 ndl=394:48 heartbeat=91
+  4:54 8.231m ndl=427:51 tts=0:53 heartbeat=90
+  4:55 8.327m ndl=414:24 tts=0:54
+  4:56 8.458m ndl=385:02 heartbeat=89
+  4:57 8.476m ndl=353:07 tts=0:55
+  4:58 8.314m 190.08bar:0 ndl=349:10
+  4:59 8.15m ndl=388:28 tts=0:54
+  5:00 8.162m ndl=445:23 tts=0:53
+  5:01 8.242m ndl=440:07 heartbeat=90
+  5:02 8.35m ndl=410:26 tts=0:54
+  5:03 8.4m 190.22bar:0 ndl=378:42 heartbeat=89
+  5:04 8.402m ndl=366:10 tts=0:55
+  5:05 8.479m ndl=365:43
+  5:06 8.558m ndl=348:27
+  5:07 8.693m ndl=333:09 tts=0:56
+  5:08 8.779m 189.74bar:0 ndl=295:40 tts=0:57
+  5:09 8.798m ndl=277:22
+  5:10 8.739m ndl=273:46 heartbeat=90
+  5:11 8.721m ndl=285:27
+  5:12 8.836m ndl=289:22
+  5:13 8.641m 189.88bar:0 ndl=266:50
+  5:14 8.626m ndl=308:44 tts=0:56 heartbeat=91
+  5:15 8.693m ndl=312:58 heartbeat=90
+  5:16 8.635m ndl=295:38 tts=0:57
+  5:17 8.506m ndl=310:30 tts=0:56 heartbeat=91
+  5:18 8.451m 189.39bar:0 ndl=342:55 tts=0:55 heartbeat=90
+  5:19 8.419m ndl=354:20 heartbeat=91
+  5:20 8.474m ndl=361:18
+  5:21 8.63m ndl=349:24 heartbeat=92
+  5:22 8.738m ndl=311:38 tts=0:56
+  5:23 8.733m 189.05bar:0 ndl=285:30 tts=0:57
+  5:24 8.683m ndl=286:28
+  5:25 8.657m ndl=297:57 tts=0:56 heartbeat=91
+  5:26 8.717m ndl=304:19
+  5:27 8.905m ndl=290:03 tts=0:57 heartbeat=92
+  5:28 9.085m 189.26bar:0 ndl=255:14 tts=0:58
+  5:29 9.184m ndl=231:03 tts=0:59
+  5:30 9.252m ndl=220:10 tts=1:00 heartbeat=91
+  5:31 9.319m ndl=213:28
+  5:32 9.375m ndl=207:20 tts=1:01
+  5:33 9.439m ndl=202:29 heartbeat=90
+  5:34 9.627m ndl=197:19
+  5:35 9.719m ndl=181:21 tts=1:03
+  5:36 9.729m ndl=172:51
+  5:37 9.638m ndl=172:00 heartbeat=89
+  5:38 9.406m ndl=199:49 tts=1:01
+  5:39 9.412m ndl=199:23
+  5:40 9.419m ndl=198:48 heartbeat=88
+  5:41 9.424m ndl=198:23
+  5:42 9.448m ndl=196:26
+  5:43 9.427m 188.64bar:0 ndl=198:07 heartbeat=87
+  5:44 9.473m ndl=194:32 tts=1:02
+  5:45 9.587m ndl=185:15 heartbeat=88
+  5:46 9.597m ndl=184:11
+  5:47 9.479m ndl=194:03 heartbeat=89
+  5:48 9.341m 188.43bar:0 ndl=205:07 tts=1:01
+  5:49 9.259m ndl=212:26 tts=1:00 heartbeat=90
+  5:50 9.272m ndl=211:11
+  5:51 9.382m ndl=201:33 tts=1:01 heartbeat=89
+  5:52 9.413m ndl=199:04
+  5:53 9.379m 188.22bar:0 ndl=201:47
+  5:54 9.391m ndl=200:47
+  5:55 9.473m ndl=194:21 tts=1:02
+  5:56 9.41m ndl=199:14 tts=1:01
+  5:57 9.328m ndl=206:04
+  5:58 9.317m 188.08bar:0 ndl=207:00
+  5:59 9.449m ndl=196:05 tts=1:02
+  6:00 9.493m ndl=192:46 heartbeat=90
+  6:01 9.36m ndl=203:16 tts=1:01 heartbeat=89
+  6:02 9.302m ndl=208:20
+  6:03 9.294m 187.6bar:0 ndl=208:58 tts=1:00
+  6:04 9.246m ndl=213:27
+  6:05 9.221m ndl=215:51
+  6:06 9.34m ndl=204:50 tts=1:01
+  6:07 9.464m ndl=194:48 tts=1:02 heartbeat=90
+  6:08 9.462m 187.74bar:0 ndl=194:57
+  6:09 9.352m ndl=203:50 tts=1:01
+  6:10 9.216m ndl=216:17 tts=1:00
+  6:11 9.183m ndl=219:38
+  6:12 9.342m ndl=204:34 tts=1:01 heartbeat=91
+  6:13 9.288m 187.33bar:0 ndl=209:24 tts=1:00 heartbeat=90
+  6:14 9.212m ndl=216:38 heartbeat=91
+  6:15 9.106m ndl=227:53 tts=0:59
+  6:16 8.868m ndl=260:11 tts=0:58
+  6:17 8.725m ndl=287:19 tts=0:57 heartbeat=92
+  6:18 8.689m ndl=295:23
+  6:19 8.532m ndl=336:35 tts=0:55
+  6:20 8.349m ndl=377:20 tts=0:54 heartbeat=93
+  6:21 8.265m ndl=401:30
+  6:22 8.134m ndl=449:21 tts=0:53
+  6:23 8.022m ndl=481:05 tts=0:52
+  6:24 7.967m ndl=499:14 heartbeat=94
+  6:25 7.948m ndl=506:13 heartbeat=93
+  6:26 7.866m ndl=538:31 tts=0:51
+  6:27 7.761m ndl=591:31 tts=0:50 heartbeat=94
+  6:28 7.612m 187.26bar:0 ndl=662:23 tts=0:49 heartbeat=93
+  6:29 7.485m ndl=736:20
+  6:30 7.461m ndl=753:27 tts=0:48
+  6:31 7.454m ndl=758:26 heartbeat=92
+  6:32 7.37m ndl=803:40
+  6:33 7.271m 186.84bar:0 ndl=864:13 tts=0:47
+  6:34 7.126m ndl=984:49 tts=0:46
+  6:35 7.104m ndl=999:25
+  6:36 7.069m ndl=0:00
+  6:37 6.936m tts=0:45
+  6:38 6.785m tts=0:44
+  6:39 6.869m tts=0:45
+  6:40 6.955m heartbeat=91
+  6:41 6.903m heartbeat=92
+  6:42 6.765m tts=0:44
+  6:43 6.669m 186.64bar:0 tts=0:43
+  6:44 6.546m tts=0:42
+  6:45 6.415m
+  6:46 6.319m tts=0:41
+  6:47 6.334m heartbeat=93
+  6:48 6.194m 186.71bar:0 tts=0:40
+  6:49 6.245m
+  6:50 6.325m tts=0:41
+  6:51 6.405m tts=0:42 heartbeat=94
+  6:52 6.457m
+  6:53 6.4m 186.57bar:0 tts=0:41 heartbeat=95
+  6:54 6.429m tts=0:42
+  6:55 6.554m tts=0:43
+  6:56 6.633m
+  6:57 6.653m heartbeat=93
+  6:59 6.774m tts=0:44
+  7:00 6.868m tts=0:45 heartbeat=92
+  7:01 6.844m tts=0:44 heartbeat=91
+  7:03 6.804m 186.22bar:0 heartbeat=90
+  7:04 6.925m tts=0:45
+  7:06 6.954m heartbeat=89
+  7:11 7.127m ndl=984:06 tts=0:46 heartbeat=90
+  7:12 7.262m ndl=869:56 tts=0:47
+  7:13 7.344m 185.4bar:0 ndl=817:48 tts=0:48
+  7:14 7.346m ndl=816:37
+  7:15 7.369m ndl=803:09
+  7:16 7.51m ndl=719:03 tts=0:49
+  7:17 7.529m ndl=707:11 heartbeat=89
+  7:18 7.48m 185.46bar:0 ndl=738:56
+  7:19 7.412m ndl=780:33 tts=0:48
+  7:20 7.37m ndl=802:56
+  7:21 7.283m ndl=855:44 tts=0:47
+  7:22 7.217m ndl=903:21
+  7:23 7.208m 185.19bar:0 ndl=910:34
+  7:24 7.25m ndl=878:20
+  7:25 7.377m ndl=798:58 tts=0:48
+  7:26 7.423m ndl=774:52
+  7:27 7.443m ndl=764:57
+  7:28 7.437m 185.33bar:0 ndl=767:34 heartbeat=90
+  7:29 7.495m ndl=728:31 tts=0:49
+  7:30 7.581m ndl=677:28
+  7:31 7.834m ndl=552:22 tts=0:51 heartbeat=91
+  7:32 7.908m ndl=520:22
+  7:33 7.912m 184.98bar:0 ndl=0:00 tts=0:00
+  7:34 7.915m ndl=527:28 tts=0:51
+  7:35 7.914m ndl=517:40 heartbeat=92
+  7:36 7.883m ndl=517:49
+  7:37 7.949m ndl=530:29
+  7:38 8.037m 184.84bar:0 ndl=504:42 tts=0:52 heartbeat=91
+  7:39 7.995m ndl=475:30
+  7:40 7.976m ndl=488:45 heartbeat=90
+  7:41 7.882m ndl=495:19
+  7:42 8.023m ndl=530:49 tts=0:51
+  7:43 8.083m 184.57bar:0 ndl=479:38 tts=0:52 heartbeat=91
+  7:44 8.11m ndl=461:44 tts=0:53 heartbeat=90
+  7:45 8.124m ndl=454:22
+  7:46 8.139m ndl=450:39 heartbeat=91
+  7:47 8.143m ndl=446:48
+  7:48 8.2m ndl=445:21
+  7:49 8.343m ndl=422:41
+  7:50 8.347m ndl=377:41 tts=0:54 heartbeat=90
+  7:51 8.245m ndl=376:39
+  7:52 8.118m ndl=406:37
+  7:53 8.185m 184.29bar:0 ndl=452:04 tts=0:53
+  7:54 8.339m ndl=428:03
+  7:55 8.302m ndl=378:46 tts=0:54 heartbeat=91
+  7:56 8.293m ndl=389:02 heartbeat=90
+  7:57 8.376m ndl=391:44
+  7:58 8.434m 183.95bar:0 ndl=369:15
+  7:59 8.421m ndl=355:22 tts=0:55 heartbeat=89
+  8:00 8.306m ndl=358:30
+  8:01 7.947m ndl=387:51 tts=0:54
+  8:02 7.768m ndl=504:53 tts=0:52
+  8:03 7.739m 184.09bar:0 ndl=585:39 tts=0:50
+  8:04 7.775m ndl=602:53
+  8:05 7.818m ndl=581:41 tts=0:51 heartbeat=90
+  8:06 7.837m ndl=559:15
+  8:07 7.907m ndl=550:07 heartbeat=89
+  8:08 8.154m 183.6bar:0 ndl=520:02
+  8:09 8.236m ndl=440:26 tts=0:53
+  8:10 8.224m ndl=409:28 tts=0:54 heartbeat=88
+  8:11 8.232m ndl=413:26 tts=0:53
+  8:12 8.409m ndl=410:43 tts=0:54 heartbeat=86
+  8:13 8.434m 183.67bar:0 ndl=361:02 tts=0:55
+  8:14 8.523m ndl=355:16
+  8:15 8.581m ndl=336:42
+  8:16 8.7m ndl=323:42 tts=0:56 heartbeat=87
+  8:17 8.806m ndl=291:12 tts=0:57 heartbeat=86
+  8:18 8.825m ndl=269:20 heartbeat=87
+  8:19 8.594m ndl=265:58
+  8:20 8.817m ndl=319:34 tts=0:56
+  8:21 8.954m ndl=267:26 tts=0:57 heartbeat=88
+  8:22 9.24m ndl=245:31 tts=0:58
+  8:23 9.13m 182.84bar:0 ndl=212:14 tts=1:00
+  8:24 9.259m ndl=223:30 tts=0:59 heartbeat=89
+  8:25 9.264m ndl=210:25 tts=1:00 heartbeat=90
+  8:26 9.368m ndl=209:55 heartbeat=91
+  8:27 9.386m ndl=200:40 tts=1:01
+  8:28 9.44m ndl=199:10
+  8:29 9.496m ndl=194:52
+  8:30 9.562m ndl=190:39 tts=1:02
+  8:31 9.791m ndl=185:47 heartbeat=92
+  8:32 9.806m ndl=164:42 tts=1:04
+  8:33 9.939m ndl=163:28
+  8:34 9.972m ndl=154:04 tts=1:05
+  8:35 10.044m ndl=151:53 heartbeat=93
+  8:36 10.072m ndl=147:31 heartbeat=92
+  8:37 10.101m ndl=145:52 tts=1:06 heartbeat=91
+  8:38 10.131m ndl=144:15 heartbeat=89
+  8:39 10.066m ndl=142:36 heartbeat=87
+  8:40 10.31m ndl=133:40 tts=1:07
+  8:41 10.312m ndl=133:34 heartbeat=85
+  8:42 10.369m ndl=131:00 tts=1:08 heartbeat=83
+  8:43 10.22m 182.15bar:0 ndl=137:56 tts=1:07
+  8:44 10.221m ndl=137:52
+  8:45 10.277m ndl=135:09 heartbeat=84
+  8:46 10.292m ndl=134:24
+  8:47 10.375m ndl=130:40 tts=1:08 heartbeat=83
+  8:48 10.322m ndl=133:00 tts=1:07 heartbeat=84
+  8:49 10.45m ndl=127:27 tts=1:08
+  8:50 10.524m ndl=124:30 tts=1:09 heartbeat=85
+  8:51 10.609m ndl=121:18
+  8:52 10.553m ndl=123:21
+  8:53 10.448m ndl=127:29 tts=1:08 heartbeat=86
+  8:54 10.385m ndl=130:06
+  8:55 10.422m ndl=128:31 heartbeat=87
+  8:56 10.311m ndl=133:22 tts=1:07
+  8:57 10.204m ndl=138:28 tts=1:06
+  8:58 10.113m 181.95bar:0 ndl=143:15
+  8:59 9.927m ndl=154:26 tts=1:05 heartbeat=86
+  9:00 9.81m ndl=162:43 tts=1:04
+  9:01 9.917m ndl=155:04 tts=1:05 heartbeat=85
+  9:02 9.985m ndl=150:37
+  9:03 9.803m ndl=163:10 tts=1:04
+  9:04 9.735m ndl=168:41 tts=1:03
+  9:05 9.607m ndl=180:29
+  9:06 9.518m ndl=188:22 tts=1:02
+  9:07 9.422m ndl=195:32 tts=1:01
+  9:08 9.31m 181.67bar:0 ndl=204:56
+  9:09 9.162m ndl=219:12 tts=1:00
+  9:10 9.239m ndl=211:25
+  9:11 9.288m ndl=206:48
+  9:12 9.203m ndl=214:58
+  9:13 9.108m 181.12bar:0 ndl=225:06 tts=0:59 heartbeat=86
+  9:14 9.092m ndl=226:51
+  9:15 9.106m ndl=225:17 heartbeat=87
+  9:16 9.09m ndl=227:05
+  9:17 9.047m ndl=232:09
+  9:18 9.044m ndl=232:29
+  9:19 9.007m ndl=237:14
+  9:20 9.059m ndl=230:42
+  9:21 9.159m ndl=219:22 tts=1:00 heartbeat=88
+  9:22 9.183m ndl=216:46 heartbeat=87
+  9:23 9.137m 180.84bar:0 ndl=221:39 tts=0:59
+  9:24 9.076m ndl=228:35
+  9:25 9.097m ndl=226:04
+  9:26 9.145m ndl=220:42 tts=1:00
+  9:27 9.125m ndl=222:56 tts=0:59
+  9:28 9.085m 180.91bar:0 ndl=227:28
+  9:29 9.114m ndl=224:06
+  9:30 9.098m ndl=225:51
+  9:31 9.127m ndl=222:35
+  9:32 9.18m ndl=216:58 tts=1:00
+  9:33 9.221m 180.5bar:0 ndl=212:50
+  9:34 9.168m ndl=218:09 heartbeat=88
+  9:35 9.071m ndl=228:59 tts=0:59 heartbeat=87
+  9:36 9.155m ndl=219:29 tts=1:00
+  9:37 9.197m ndl=215:09
+  9:38 9.211m 180.64bar:0 ndl=213:41
+  9:39 9.241m ndl=210:46 heartbeat=88
+  9:40 9.357m ndl=200:18 tts=1:01
+  9:41 9.455m ndl=192:31 tts=1:02
+  9:42 9.522m ndl=187:32 heartbeat=89
+  9:43 9.504m 180.02bar:0 ndl=188:49
+  9:44 9.544m ndl=185:55
+  9:45 9.5m ndl=189:02 heartbeat=92
+  9:46 9.352m ndl=200:37 tts=1:01
+  9:47 9.365m ndl=199:32 heartbeat=93
+  9:48 9.391m 180.16bar:0 ndl=197:24 heartbeat=92
+  9:49 9.329m ndl=202:36
+  9:50 9.507m ndl=188:26 tts=1:02
+  9:51 9.56m ndl=184:36
+  9:52 9.526m ndl=187:04
+  9:53 9.623m 179.88bar:0 ndl=178:05 tts=1:03
+  9:54 9.667m ndl=173:52 heartbeat=91
+  9:55 9.581m ndl=182:17 tts=1:02
+  9:56 9.656m ndl=174:53 tts=1:03 heartbeat=90
+  9:57 9.667m ndl=173:50
+  9:58 9.573m ndl=183:10 tts=1:02
+  9:59 9.585m ndl=181:49 heartbeat=91
+ 10:00 9.66m ndl=174:25 tts=1:03 heartbeat=90
+ 10:01 9.66m ndl=174:21
+ 10:02 9.627m ndl=177:31 heartbeat=91
+ 10:03 9.645m 179.4bar:0 ndl=175:49 heartbeat=90
+ 10:04 9.613m ndl=178:54
+ 10:05 9.546m ndl=185:25 tts=1:02
+ 10:06 9.381m ndl=197:53 tts=1:01 heartbeat=91
+ 10:07 9.359m ndl=199:44 heartbeat=90
+ 10:08 9.348m 179.6bar:0 ndl=200:36
+ 10:09 9.305m ndl=204:22 heartbeat=89
+ 10:10 9.319m ndl=203:06
+ 10:11 9.365m ndl=199:09
+ 10:12 9.356m ndl=199:54
+ 10:13 9.241m 179.19bar:0 ndl=210:13 tts=1:00
+ 10:14 9.159m ndl=218:24
+ 10:15 9.271m ndl=207:21
+ 10:16 9.357m ndl=199:43 tts=1:01
+ 10:17 9.27m ndl=207:24 tts=1:00
+ 10:18 9.22m 179.26bar:0 ndl=212:11 heartbeat=90
+ 10:19 9.206m ndl=213:32
+ 10:20 9.153m ndl=218:55
+ 10:21 9.086m ndl=226:23 tts=0:59
+ 10:22 9.079m ndl=227:15
+ 10:23 9.226m 178.78bar:0 ndl=211:26 tts=1:00
+ 10:24 9.172m ndl=216:56
+ 10:25 9.071m ndl=228:04 tts=0:59
+ 10:26 9.178m ndl=216:16 tts=1:00 heartbeat=91
+ 10:27 9.119m ndl=222:30 tts=0:59 heartbeat=90
+ 10:28 9.123m 178.98bar:0 ndl=222:05 heartbeat=91
+ 10:29 9.237m ndl=210:19 tts=1:00
+ 10:30 9.297m ndl=204:44 tts=1:01
+ 10:31 9.362m ndl=199:06 heartbeat=90
+ 10:32 9.45m ndl=191:59 tts=1:02 heartbeat=89
+ 10:33 9.482m ndl=189:33
+ 10:34 9.488m ndl=189:05
+ 10:35 9.534m ndl=185:48
+ 10:36 9.543m ndl=185:10
+ 10:37 9.512m ndl=187:18 heartbeat=90
+ 10:38 9.601m 178.16bar:0 ndl=179:33
+ 10:39 9.829m ndl=159:45 tts=1:04 heartbeat=91
+ 10:40 9.935m ndl=152:21 tts=1:05
+ 10:41 9.872m ndl=156:35 tts=1:04
+ 10:42 9.983m ndl=149:15 tts=1:05 heartbeat=92
+ 10:43 10.071m ndl=143:59 tts=1:06
+ 10:44 10.044m ndl=145:30 tts=1:05
+ 10:45 10.005m ndl=147:50 heartbeat=93
+ 10:46 9.91m ndl=153:54
+ 10:47 10.089m ndl=142:54 tts=1:06 heartbeat=94
+ 10:48 10.086m 178.09bar:0 ndl=143:02
+ 10:49 10.164m ndl=138:50
+ 10:50 10.303m ndl=132:03 tts=1:07
+ 10:51 10.375m ndl=128:48 tts=1:08 heartbeat=95
+ 10:52 10.467m ndl=124:59
+ 10:53 10.516m 177.74bar:0 ndl=123:01 tts=1:09
+ 10:54 10.552m ndl=121:38 heartbeat=94
+ 10:55 10.653m ndl=117:58
+ 10:56 10.707m heartbeat=93
+ 10:57 10.8m ndl=116:05 tts=1:10
+ 10:58 10.84m 177.26bar:0 ndl=113:02
+ 10:59 11.077m ndl=111:45 tts=1:11
+ 11:00 11.126m ndl=104:57 tts=1:12 heartbeat=94
+ 11:01 11.177m ndl=103:39 tts=1:13
+ 11:02 11.229m ndl=102:06
+ 11:03 11.367m 176.85bar:0 ndl=100:17
+ 11:04 11.417m ndl=95:54 tts=1:14 heartbeat=93
+ 11:05 11.403m ndl=94:25 heartbeat=94
+ 11:06 11.499m ndl=94:49
+ 11:07 11.566m ndl=92:07 tts=1:15
+ 11:08 11.56m 176.98bar:0 ndl=90:18 heartbeat=95
+ 11:09 11.644m ndl=90:26
+ 11:10 11.744m ndl=88:18 tts=1:16 heartbeat=94
+ 11:11 11.774m ndl=85:55 tts=1:17
+ 11:12 11.873m ndl=85:13
+ 11:13 11.931m 176.36bar:0 ndl=83:02 heartbeat=93
+ 11:14 11.864m ndl=81:49 tts=1:18
+ 11:15 11.972m ndl=83:12 tts=1:17
+ 11:16 11.945m ndl=80:57 tts=1:18
+ 11:17 11.996m ndl=81:28
+ 11:18 12.023m 176.57bar:0 ndl=80:26 heartbeat=92
+ 11:19 12.05m ndl=79:54
+ 11:20 12.102m ndl=79:21 tts=1:19
+ 11:21 12.123m ndl=78:21 heartbeat=91
+ 11:22 12.268m ndl=77:58
+ 11:23 12.31m 176.02bar:0 ndl=75:23 tts=1:20
+ 11:24 12.329m ndl=74:39
+ 11:25 12.339m ndl=74:20 heartbeat=92
+ 11:26 12.385m ndl=74:08
+ 11:27 12.4m ndl=73:23 tts=1:21
+ 11:28 12.441m 175.6bar:0 ndl=73:08
+ 11:29 12.619m ndl=72:27
+ 11:30 12.378m ndl=69:48 tts=1:22
+ 11:31 12.54m ndl=73:25 tts=1:21 heartbeat=91
+ 11:32 12.564m ndl=70:55 tts=1:22
+ 11:33 12.762m ndl=70:32
+ 11:34 12.849m ndl=67:45 tts=1:23
+ 11:35 12.903m ndl=66:35 tts=1:24 heartbeat=92
+ 11:36 12.92m ndl=65:53
+ 11:37 12.966m ndl=65:39
+ 11:38 12.922m ndl=65:04 tts=1:25
+ 11:39 13.048m ndl=65:36 tts=1:24 heartbeat=93
+ 11:40 13.001m ndl=64:03 tts=1:25
+ 11:41 12.91m ndl=64:35
+ 11:42 12.985m ndl=65:41 tts=1:24 heartbeat=95
+ 11:43 12.954m ndl=64:45 tts=1:25 heartbeat=96
+ 11:44 13.033m ndl=65:07 tts=1:24 heartbeat=95
+ 11:45 13.115m ndl=64:09 tts=1:25 heartbeat=94
+ 11:46 13.055m ndl=63:10 tts=1:26 heartbeat=93
+ 11:47 13.028m ndl=63:51 tts=1:25
+ 11:48 13.123m ndl=64:09
+ 11:49 13.136m ndl=63:01 tts=1:26
+ 11:50 13.117m ndl=62:51
+ 11:51 13.215m ndl=63:03
+ 11:52 13.245m ndl=61:56 heartbeat=92
+ 11:53 13.169m ndl=61:35
+ 11:54 13.301m ndl=62:25
+ 11:55 13.357m ndl=60:57 tts=1:27
+ 11:56 13.381m ndl=60:20
+ 11:57 13.458m ndl=60:04
+ 11:58 13.531m 174.02bar:0 ndl=59:16 tts=1:28
+ 11:59 13.738m ndl=58:31
+ 12:00 13.785m ndl=56:33 tts=1:30
+ 12:01 13.854m ndl=56:07 heartbeat=93
+ 12:02 13.86m ndl=55:29
+ 12:03 14.098m 174.16bar:0 ndl=55:25
+ 12:04 14.147m ndl=53:25 tts=1:32
+ 12:05 14.188m ndl=53:00
+ 12:06 14.282m ndl=52:40 tts=1:33
+ 12:07 14.41m ndl=51:55 heartbeat=94
+ 12:08 14.485m 173.47bar:0 ndl=50:57 tts=1:34 heartbeat=95
+ 12:09 14.501m ndl=50:24 tts=1:35
+ 12:10 14.547m ndl=50:16
+ 12:11 14.509m ndl=49:55
+ 12:12 14.37m ndl=50:10
+ 12:13 14.3m 173.54bar:0 ndl=51:09 tts=1:34 heartbeat=94
+ 12:14 14.346m ndl=51:40 tts=1:33
+ 12:15 14.381m ndl=51:18 tts=1:34 heartbeat=93
+ 12:16 14.429m ndl=51:02 heartbeat=92
+ 12:17 14.415m ndl=50:40 heartbeat=91
+ 12:18 14.288m 172.92bar:0 ndl=50:45
+ 12:19 14.52m ndl=51:40 tts=1:33 heartbeat=92
+ 12:20 14.533m ndl=49:58 tts=1:35 heartbeat=91
+ 12:21 14.38m ndl=49:51
+ 12:22 14.316m ndl=50:56 tts=1:34
+ 12:23 14.428m ndl=51:23 tts=1:33 heartbeat=90
+ 12:24 14.329m ndl=50:33 tts=1:34
+ 12:25 14.404m ndl=51:16
+ 12:26 14.556m ndl=50:42
+ 12:27 14.611m ndl=49:36 tts=1:35
+ 12:28 14.636m ndl=49:12 heartbeat=91
+ 12:29 14.598m ndl=49:01 tts=1:36 heartbeat=92
+ 12:30 14.55m ndl=49:15 tts=1:35
+ 12:31 14.459m ndl=50:13 tts=1:34 heartbeat=91
+ 12:32 14.447m ndl=50:17
+ 12:33 14.339m 172.23bar:0 ndl=51:03 heartbeat=90
+ 12:34 14.228m ndl=51:52 tts=1:33
+ 12:35 14.263m ndl=51:35
+ 12:36 14.171m ndl=52:17 tts=1:32 heartbeat=91
+ 12:37 14.3m ndl=51:17 tts=1:33 heartbeat=92
+ 12:38 14.431m ndl=50:18 tts=1:34
+ 12:39 14.243m ndl=51:41 tts=1:33 heartbeat=95
+ 12:40 14.425m ndl=50:18 tts=1:34 heartbeat=96
+ 12:41 14.463m ndl=50:01
+ 12:42 14.346m ndl=50:51 heartbeat=95
+ 12:43 14.329m ndl=50:58
+ 12:44 14.362m ndl=50:42 heartbeat=94
+ 12:45 14.331m ndl=50:55 heartbeat=95
+ 12:46 14.395m ndl=50:26
+ 12:47 14.49m ndl=49:44 tts=1:35
+ 12:48 14.453m ndl=49:58 tts=1:34
+ 12:49 14.605m ndl=48:54 tts=1:35
+ 12:50 14.645m ndl=48:37 tts=1:36 heartbeat=94
+ 12:51 14.766m ndl=47:47 heartbeat=95
+ 12:52 14.888m ndl=46:52 tts=1:37
+ 12:53 14.938m ndl=46:28 tts=1:38 heartbeat=94
+ 12:54 14.943m ndl=46:25
+ 12:55 14.778m ndl=47:39 tts=1:36
+ 12:56 14.705m ndl=48:06
+ 12:57 14.743m ndl=47:50 heartbeat=95
+ 12:58 14.751m 171.33bar:0 ndl=47:46
+ 12:59 14.755m ndl=47:43
+ 13:00 14.822m ndl=47:15 tts=1:37
+ 13:02 14.854m ndl=46:58
+ 13:03 14.98m 170.57bar:0 ndl=45:59 tts=1:38
+ 13:04 15.21m ndl=44:19 tts=1:39
+ 13:05 15.405m ndl=43:00 tts=1:41 heartbeat=96
+ 13:06 15.506m ndl=42:21
+ 13:07 15.576m ndl=41:54 tts=1:42 heartbeat=95
+ 13:08 15.722m 170.71bar:0 ndl=40:46 tts=1:43
+ 13:09 15.933m ndl=39:09 tts=1:44
+ 13:10 16.095m ndl=38:00 tts=1:45
+ 13:11 16.215m ndl=37:11 tts=1:46
+ 13:12 16.332m ndl=36:26 tts=1:47
+ 13:13 16.397m 170.09bar:0 ndl=36:01
+ 13:14 16.382m ndl=36:05
+ 13:15 16.406m ndl=35:56
+ 13:16 16.377m ndl=36:05
+ 13:17 16.306m ndl=36:30 tts=1:46 heartbeat=96
+ 13:18 16.307m 169.54bar:0 ndl=36:29
+ 13:19 16.297m ndl=36:32
+ 13:20 16.324m ndl=36:21 tts=1:47 heartbeat=95
+ 13:21 16.386m ndl=35:57
+ 13:22 16.543m ndl=35:01 tts=1:48
+ 13:23 16.522m 169.47bar:0 ndl=0:00 tts=0:00
+ 13:24 16.5m ndl=35:13 tts=1:48 heartbeat=94
+ 13:25 16.548m ndl=34:56 heartbeat=95
+ 13:26 16.578m ndl=34:45 heartbeat=94
+ 13:27 16.644m ndl=34:22 tts=1:49 heartbeat=93
+ 13:28 16.73m 168.71bar:0 ndl=33:53
+ 13:29 16.694m ndl=34:04 heartbeat=92
+ 13:30 16.706m ndl=33:59
+ 13:31 16.706m ndl=33:58
+ 13:32 16.632m ndl=34:21 heartbeat=93
+ 13:33 16.618m 168.99bar:0 ndl=34:25
+ 13:34 16.62m ndl=34:23 heartbeat=94
+ 13:36 16.644m ndl=34:13 cns=1% heartbeat=93
+ 13:37 16.695m ndl=33:55
+ 13:38 16.625m ndl=34:17
+ 13:39 16.58m ndl=34:31 tts=1:48
+ 13:40 16.621m ndl=34:17 tts=1:49
+ 13:41 16.547m ndl=34:40 tts=1:48
+ 13:42 16.615m ndl=34:17 tts=1:49
+ 13:43 16.656m ndl=34:02
+ 13:44 16.627m ndl=34:11 heartbeat=92
+ 13:45 16.717m ndl=33:41
+ 13:46 16.798m ndl=33:14 tts=1:50
+ 13:47 16.813m ndl=33:08
+ 13:48 16.828m 167.68bar:0 ndl=33:03
+ 13:49 16.991m ndl=32:13 tts=1:51
+ 13:50 17.049m ndl=31:56
+ 13:51 17.049m ndl=31:55
+ 13:52 17.002m ndl=32:07 heartbeat=91
+ 13:53 16.961m 167.81bar:0 ndl=32:18 heartbeat=92
+ 13:54 16.918m ndl=32:30 heartbeat=93
+ 13:55 16.905m ndl=32:32 tts=1:50
+ 13:56 16.911m ndl=32:30
+ 13:57 16.816m ndl=32:57 heartbeat=94
+ 13:58 16.792m ndl=33:04
+ 13:59 16.873m ndl=32:38 heartbeat=95
+ 14:00 16.962m ndl=32:11 tts=1:51 heartbeat=94
+ 14:01 17.021m ndl=31:53
+ 14:02 17.035m ndl=31:48
+ 14:03 17.108m ndl=31:26 tts=1:52 heartbeat=95
+ 14:04 17.062m ndl=31:38 tts=1:51
+ 14:05 17.022m ndl=31:49
+ 14:06 16.99m ndl=31:57
+ 14:07 16.709m ndl=33:21 tts=1:49
+ 14:08 16.393m ndl=35:06 tts=1:47
+ 14:09 16.235m ndl=36:03 tts=1:46 heartbeat=94
+ 14:10 16.226m ndl=36:05
+ 14:11 16.414m ndl=34:55 tts=1:47
+ 14:12 16.596m ndl=33:52 tts=1:48
+ 14:13 16.626m 166.5bar:0 ndl=33:41 tts=1:49 heartbeat=93
+ 14:14 16.594m ndl=33:51 tts=1:48 heartbeat=92
+ 14:15 16.743m ndl=33:02 tts=1:49 heartbeat=91
+ 14:16 16.812m ndl=32:40 tts=1:50
+ 14:17 16.86m ndl=32:24
+ 14:19 16.806m ndl=32:38 heartbeat=93
+ 14:20 16.844m ndl=32:26
+ 14:21 16.766m ndl=32:49
+ 14:22 16.602m ndl=33:40 tts=1:48
+ 14:23 16.659m 166.09bar:0 ndl=33:21 tts=1:49
+ 14:24 16.76m ndl=32:48 heartbeat=94
+ 14:25 16.709m ndl=33:03
+ 14:26 16.665m ndl=33:16 heartbeat=93
+ 14:27 16.744m ndl=32:50
+ 14:28 16.773m 165.54bar:0 ndl=32:40 tts=1:50
+ 14:29 16.717m ndl=32:56 tts=1:49
+ 14:30 16.765m ndl=32:40 tts=1:50 heartbeat=92
+ 14:31 16.789m ndl=32:32
+ 14:32 16.613m ndl=33:27 tts=1:49
+ 14:33 16.712m ndl=32:54
+ 14:34 16.569m ndl=33:39 tts=1:48 heartbeat=93
+ 14:35 16.497m ndl=34:02
+ 14:36 16.401m ndl=34:34 tts=1:47
+ 14:37 16.507m ndl=33:57 tts=1:48 heartbeat=92
+ 14:38 16.656m ndl=33:07 tts=1:49
+ 14:39 16.705m ndl=32:50
+ 14:40 16.666m ndl=33:01
+ 14:41 16.731m ndl=32:40 heartbeat=91
+ 14:42 16.779m ndl=32:24 tts=1:50
+ 14:43 16.709m ndl=32:45 tts=1:49 heartbeat=92
+ 14:44 16.724m ndl=32:39
+ 14:45 16.691m ndl=32:48
+ 14:46 16.752m ndl=32:28
+ 14:47 16.867m ndl=31:52 tts=1:50
+ 14:48 16.964m 164.16bar:0 ndl=31:23 tts=1:51
+ 14:49 16.994m ndl=31:13 heartbeat=91
+ 14:50 16.962m ndl=31:21 heartbeat=92
+ 14:51 16.884m ndl=31:43 tts=1:50
+ 14:52 16.737m ndl=32:27 tts=1:49
+ 14:53 16.6m 164.37bar:0 ndl=33:09 tts=1:48
+ 14:54 16.505m ndl=33:40
+ 14:55 16.41m ndl=34:12 tts=1:47 heartbeat=93
+ 14:56 16.318m ndl=34:44 heartbeat=92
+ 14:57 16.442m ndl=33:59 heartbeat=93
+ 14:58 16.458m 163.95bar:0 ndl=33:52
+ 14:59 16.436m ndl=33:59 heartbeat=92
+ 15:00 16.515m ndl=33:31 tts=1:48
+ 15:01 16.534m ndl=33:23
+ 15:02 16.587m ndl=33:05
+ 15:03 16.642m 163.54bar:0 ndl=32:46 tts=1:49 heartbeat=93
+ 15:04 16.834m ndl=31:45 tts=1:50
+ 15:05 17.059m ndl=30:40 tts=1:51
+ 15:06 17.031m ndl=30:46 heartbeat=94
+ 15:07 17.006m ndl=30:52 heartbeat=95
+ 15:08 17.125m 163.47bar:0 ndl=30:19 tts=1:52
+ 15:09 17.158m ndl=30:09
+ 15:10 17.113m ndl=30:20 heartbeat=94
+ 15:11 17.081m ndl=30:28 heartbeat=95
+ 15:12 17.088m ndl=30:25
+ 15:13 17.057m 163.13bar:0 ndl=30:32 tts=1:51
+ 15:14 17.3m ndl=29:27 tts=1:53
+ 15:15 17.442m ndl=28:50 tts=1:54
+ 15:17 17.367m ndl=29:07 tts=1:53 heartbeat=94
+ 15:18 17.384m 163.19bar:0 ndl=29:01 tts=1:54
+ 15:19 17.359m ndl=29:07 tts=1:53
+ 15:21 17.409m ndl=28:52 tts=1:54 heartbeat=93
+ 15:22 17.438m ndl=28:44
+ 15:23 17.4m 162.5bar:0 ndl=28:52
+ 15:24 17.345m ndl=29:05 tts=1:53 heartbeat=94
+ 15:25 17.398m ndl=28:51 tts=1:54 heartbeat=93
+ 15:26 17.561m ndl=27:58 tts=1:55 heartbeat=94
+ 15:27 17.816m ndl=26:33 tts=1:56
+ 15:28 18.001m 162.64bar:0 ndl=25:37 tts=1:58
+ 15:29 18.179m ndl=24:47 tts=1:59
+ 15:30 18.296m ndl=24:16 tts=2:00
+ 15:31 18.487m ndl=23:28 tts=2:01 heartbeat=93
+ 15:32 18.76m ndl=22:26 tts=2:03 heartbeat=92
+ 15:33 18.886m 161.88bar:0 ndl=21:59
+ 15:34 19.061m ndl=21:24 tts=2:05
+ 15:35 19.249m ndl=20:48 tts=2:06
+ 15:36 19.308m ndl=20:36
+ 15:37 19.325m ndl=20:32
+ 15:38 19.407m 162.02bar:0 ndl=20:17 tts=2:07 heartbeat=91
+ 15:39 19.553m ndl=19:52 tts=2:08 heartbeat=92
+ 15:40 19.516m ndl=19:57
+ 15:41 19.518m ndl=19:55
+ 15:42 19.567m ndl=19:46
+ 15:43 19.782m 161.4bar:0 ndl=19:12 tts=2:09
+ 15:44 19.735m ndl=19:18
+ 15:45 19.685m ndl=19:25
+ 15:46 19.652m ndl=19:29 tts=2:08 heartbeat=93
+ 15:47 19.764m ndl=19:10 tts=2:09 heartbeat=95
+ 15:48 19.862m 161.61bar:0 ndl=18:55 tts=2:10 heartbeat=96
+ 15:49 19.928m ndl=18:44
+ 15:50 20.001m ndl=18:32 tts=2:11
+ 15:51 20.016m ndl=18:29 heartbeat=95
+ 15:52 20.083m ndl=18:19
+ 15:53 20.053m 160.92bar:0 ndl=18:22
+ 15:54 20.0m ndl=18:28
+ 15:55 19.989m ndl=18:29
+ 15:56 20.109m ndl=18:11 heartbeat=94
+ 15:57 20.228m ndl=17:54 tts=2:12
+ 15:58 20.341m 160.64bar:0 ndl=17:38 tts=2:13
+ 15:59 20.519m ndl=17:15 tts=2:14 heartbeat=93
+ 16:00 20.666m ndl=16:49 tts=2:15
+ 16:01 20.792m ndl=16:25 tts=2:16
+ 16:02 20.89m ndl=16:07 tts=2:17
+ 16:03 20.902m 160.16bar:0 ndl=16:03 heartbeat=94
+ 16:04 20.872m ndl=16:08 tts=2:16 heartbeat=93
+ 16:05 20.828m ndl=16:14 heartbeat=92
+ 16:06 20.76m
+ 16:07 20.621m ndl=16:26
+ 16:08 20.593m 160.3bar:0 ndl=16:51 tts=2:15
+ 16:09 20.512m ndl=16:55 heartbeat=91
+ 16:10 20.378m ndl=17:05 tts=2:14
+ 16:11 20.289m ndl=17:21 tts=2:13 heartbeat=90
+ 16:12 20.167m ndl=17:31
+ 16:13 20.027m 159.82bar:0 ndl=17:47 tts=2:12
+ 16:14 19.725m ndl=18:05 tts=2:11 heartbeat=91
+ 16:15 19.518m ndl=18:48 tts=2:09
+ 16:16 19.352m ndl=19:19 tts=2:08 heartbeat=92
+ 16:17 19.166m ndl=19:46 tts=2:06
+ 16:18 19.051m 160.02bar:0 ndl=20:18 tts=2:05
+ 16:19 18.896m ndl=20:38
+ 16:20 18.91m ndl=21:07 tts=2:03
+ 16:21 18.993m ndl=21:03 tts=2:04 heartbeat=91
+ 16:22 18.988m ndl=20:46 heartbeat=92
+ 16:23 18.904m 159.4bar:0 ndl=0:00 tts=0:00
+ 16:24 18.821m ndl=21:06 tts=2:03
+ 16:25 18.807m ndl=21:17 heartbeat=93
+ 16:26 18.736m ndl=21:19
+ 16:27 18.572m ndl=21:32 tts=2:02
+ 16:28 18.558m 159.54bar:0 ndl=22:07 tts=2:01
+ 16:29 18.563m ndl=22:09
+ 16:30 18.463m ndl=22:07 heartbeat=94
+ 16:31 18.384m ndl=22:28 heartbeat=93
+ 16:32 18.454m ndl=22:46 tts=2:00 heartbeat=92
+ 16:33 18.466m 158.92bar:0 ndl=22:29 tts=2:01
+ 16:34 18.472m ndl=22:25
+ 16:35 18.463m ndl=22:22
+ 16:36 18.451m ndl=22:23
+ 16:37 18.486m ndl=22:25
+ 16:38 18.497m 158.99bar:0 ndl=22:16
+ 16:39 18.398m ndl=22:13
+ 16:40 18.375m ndl=22:35 tts=2:00 heartbeat=91
+ 16:41 18.366m ndl=22:39
+ 16:42 18.285m ndl=22:40
+ 16:43 18.218m 159.2bar:0 ndl=22:59 tts=1:59
+ 16:44 18.171m ndl=23:15 heartbeat=90
+ 16:45 18.22m ndl=23:26 heartbeat=89
+ 16:46 18.253m ndl=23:12
+ 16:47 18.269m ndl=23:03
+ 16:48 18.225m ndl=22:58
+ 16:49 18.127m ndl=23:08
+ 16:50 18.174m ndl=23:32 tts=1:58
+ 16:51 18.167m ndl=23:19 tts=1:59 heartbeat=90
+ 16:52 18.056m ndl=23:20 heartbeat=91
+ 16:53 17.917m 158.51bar:0 ndl=23:48 tts=1:58 heartbeat=90
+ 16:54 17.78m ndl=24:26 tts=1:57
+ 16:55 17.693m ndl=25:06 tts=1:56
+ 16:56 17.726m ndl=25:32
+ 16:57 17.741m ndl=25:20 heartbeat=89
+ 16:58 17.732m 157.95bar:0 ndl=25:15
+ 16:59 17.685m ndl=25:16
+ 17:00 17.685m ndl=25:30 heartbeat=88
+ 17:01 17.758m ndl=25:29 heartbeat=89
+ 17:02 17.746m ndl=25:05
+ 17:03 17.639m 157.89bar:0 ndl=25:08
+ 17:04 17.447m ndl=25:41 tts=1:55
+ 17:05 17.261m ndl=26:46 tts=1:54
+ 17:06 16.994m ndl=27:30 tts=1:53
+ 17:07 17.118m ndl=28:39 tts=1:51
+ 17:08 17.191m 158.16bar:0 ndl=28:05 tts=1:52
+ 17:09 17.231m ndl=27:45
+ 17:10 17.161m ndl=27:34 tts=1:53
+ 17:11 17.044m ndl=27:51 tts=1:52
+ 17:12 17.111m ndl=28:20 tts=1:51
+ 17:13 17.321m 158.23bar:0 ndl=28:02 tts=1:52
+ 17:14 17.27m ndl=27:08 tts=1:53
+ 17:15 17.276m ndl=27:19
+ 17:16 17.198m ndl=27:17
+ 17:17 17.224m ndl=27:35 tts=1:52 heartbeat=90
+ 17:18 17.118m 157.61bar:0 ndl=27:28 tts=1:53
+ 17:19 16.97m ndl=27:54 tts=1:52
+ 17:20 16.876m ndl=28:32 tts=1:51
+ 17:21 16.816m ndl=28:57 tts=1:50 heartbeat=91
+ 17:22 16.677m ndl=29:13 heartbeat=90
+ 17:23 16.657m 157.26bar:0 ndl=29:53 tts=1:49
+ 17:24 16.675m ndl=29:58
+ 17:25 16.611m ndl=29:52
+ 17:26 16.59m ndl=30:10 tts=1:48
+ 17:27 16.626m ndl=30:16 heartbeat=91
+ 17:28 16.66m 157.33bar:0 ndl=30:04 tts=1:49 heartbeat=92
+ 17:29 16.657m ndl=29:52 heartbeat=93
+ 17:30 16.546m
+ 17:31 16.448m ndl=30:26 tts=1:48
+ 17:32 16.523m ndl=30:56 tts=1:47
+ 17:33 16.774m 156.64bar:0 ndl=30:31 tts=1:48 heartbeat=94
+ 17:34 16.759m ndl=29:14 tts=1:50 heartbeat=93
+ 17:35 16.746m ndl=29:17 tts=1:49
+ 17:36 16.722m ndl=29:20
+ 17:37 16.717m ndl=29:26 heartbeat=94
+ 17:38 16.653m 156.78bar:0 heartbeat=93
+ 17:39 16.654m ndl=29:44
+ 17:40 16.638m ndl=29:43
+ 17:41 16.628m ndl=29:47
+ 17:42 16.621m ndl=29:49
+ 17:43 16.667m 156.16bar:0 ndl=29:50
+ 17:44 16.802m ndl=29:35 heartbeat=92
+ 17:45 16.937m ndl=28:54 tts=1:50
+ 17:46 16.972m ndl=28:16 tts=1:51
+ 17:47 16.988m ndl=28:05
+ 17:48 16.95m ndl=28:00
+ 17:49 16.917m ndl=28:09
+ 17:50 16.904m ndl=28:17
+ 17:51 16.838m ndl=28:20 tts=1:50
+ 17:52 16.724m ndl=28:37 heartbeat=91
+ 17:53 16.721m 156.09bar:0 ndl=29:09 tts=1:49 heartbeat=92
+ 17:54 16.787m heartbeat=91
+ 17:55 16.796m ndl=28:49 tts=1:50
+ 17:56 16.783m ndl=28:45
+ 17:57 16.758m ndl=28:48 heartbeat=90
+ 17:58 16.88m 155.54bar:0 ndl=28:54 tts=1:49 heartbeat=91
+ 17:59 16.969m ndl=28:18 tts=1:50 heartbeat=92
+ 18:00 16.959m ndl=27:53 tts=1:51
+ 18:01 17.014m ndl=27:55
+ 18:02 17.053m ndl=27:39
+ 18:03 17.362m 154.99bar:0 ndl=27:28
+ 18:04 17.341m ndl=26:10 tts=1:53 heartbeat=91
+ 18:05 17.308m ndl=26:14 heartbeat=92
+ 18:06 17.152m ndl=26:21
+ 18:07 17.246m ndl=26:58 tts=1:52
+ 18:08 17.255m 155.13bar:0 ndl=26:34 tts=1:53
+ 18:09 17.204m ndl=26:31
+ 18:10 17.238m ndl=26:42 tts=1:52 heartbeat=93
+ 18:11 17.165m ndl=26:33 tts=1:53
+ 18:12 16.783m ndl=26:50 tts=1:52 heartbeat=94
+ 18:13 16.698m 154.64bar:0 ndl=28:31 tts=1:50
+ 18:14 17.0m ndl=27:31 tts=1:51 heartbeat=95
+ 18:15 16.927m ndl=27:49
+ 18:16 16.816m ndl=28:19 tts=1:50 heartbeat=94
+ 18:17 16.76m ndl=28:34 tts=1:49
+ 18:18 16.6m 154.71bar:0 ndl=29:20 tts=1:48
+ 18:19 16.481m ndl=29:57 heartbeat=95
+ 18:20 16.533m ndl=29:39
+ 18:21 16.501m ndl=29:48 heartbeat=96
+ 18:22 16.248m ndl=31:12 tts=1:46
+ 18:23 16.078m ndl=32:13 tts=1:45 heartbeat=95
+ 18:24 16.128m ndl=31:53
+ 18:25 16.275m ndl=30:59 tts=1:46 heartbeat=96
+ 18:26 16.266m ndl=31:01
+ 18:27 16.197m ndl=31:25 heartbeat=95
+ 18:28 16.159m 154.3bar:0 ndl=31:38
+ 18:29 16.177m ndl=31:30 heartbeat=94
+ 18:30 16.241m ndl=31:06
+ 18:31 16.412m ndl=30:07 tts=1:47 heartbeat=93
+ 18:32 16.567m ndl=29:17 tts=1:48
+ 18:33 16.574m 153.47bar:0 ndl=29:14
+ 18:34 16.549m ndl=29:20
+ 18:35 16.536m ndl=29:23 heartbeat=92
+ 18:36 16.48m ndl=29:40 heartbeat=93
+ 18:37 16.463m ndl=29:45 heartbeat=94
+ 18:38 16.441m 153.68bar:0 ndl=29:51 tts=1:47 heartbeat=93
+ 18:39 16.45m ndl=29:47
+ 18:40 16.462m ndl=29:42 tts=1:48
+ 18:41 16.478m ndl=29:36
+ 18:42 16.387m ndl=30:04 tts=1:47
+ 18:43 16.338m 153.06bar:0 ndl=30:20 heartbeat=92
+ 18:44 16.284m ndl=30:37 tts=1:46
+ 18:45 16.161m ndl=31:19
+ 18:46 16.084m ndl=31:47 tts=1:45 heartbeat=93
+ 18:47 16.052m ndl=31:58
+ 18:48 16.052m 152.71bar:0 ndl=31:57
+ 18:49 16.065m ndl=31:51
+ 18:50 16.059m ndl=31:52
+ 18:51 16.154m ndl=31:16
+ 18:52 16.329m ndl=30:14 tts=1:47 heartbeat=92
+ 18:53 16.432m ndl=29:39
+ 18:54 16.361m ndl=30:01
+ 18:55 16.221m ndl=30:48 tts=1:46
+ 18:56 16.244m ndl=30:39
+ 18:57 16.279m ndl=30:26
+ 18:58 16.187m 152.09bar:0 ndl=30:57 heartbeat=91
+ 18:59 16.373m ndl=29:52 tts=1:47
+ 19:00 16.394m ndl=29:44
+ 19:01 16.394m ndl=29:43 heartbeat=92
+ 19:02 16.377m ndl=29:48 heartbeat=91
+ 19:03 16.288m 152.23bar:0 ndl=30:17 tts=1:46 heartbeat=92
+ 19:04 16.212m ndl=30:42
+ 19:05 16.191m ndl=30:49
+ 19:06 16.19m ndl=30:48
+ 19:07 16.231m ndl=30:32 heartbeat=91
+ 19:08 16.313m 151.47bar:0 ndl=30:03 tts=1:47 heartbeat=92
+ 19:09 16.427m ndl=29:24 heartbeat=91
+ 19:10 16.453m ndl=29:15
+ 19:11 16.432m ndl=29:21
+ 19:12 16.403m ndl=29:29 heartbeat=92
+ 19:13 16.319m 151.61bar:0 ndl=29:56
+ 19:14 16.179m ndl=30:44 tts=1:46
+ 19:15 16.085m ndl=31:17 tts=1:45
+ 19:16 16.093m ndl=31:13
+ 19:17 16.097m ndl=31:10
+ 19:18 16.045m ndl=31:29 heartbeat=91
+ 19:19 15.994m ndl=31:47 tts=1:44 heartbeat=92
+ 19:20 16.049m ndl=31:25 tts=1:45
+ 19:21 16.077m ndl=31:14
+ 19:22 15.961m ndl=31:57 tts=1:44
+ 19:23 16.058m ndl=31:19 tts=1:45
+ 19:24 16.028m ndl=31:29 heartbeat=91
+ 19:25 15.924m ndl=32:09 tts=1:44 heartbeat=92
+ 19:26 15.943m ndl=32:00
+ 19:27 15.973m ndl=31:47
+ 19:28 15.989m ndl=31:40
+ 19:29 16.064m ndl=31:11 tts=1:45
+ 19:30 16.054m ndl=31:13 heartbeat=91
+ 19:31 16.112m ndl=30:51 heartbeat=92
+ 19:32 16.193m ndl=30:21 tts=1:46
+ 19:33 16.208m ndl=30:14
+ 19:34 16.033m ndl=31:17 tts=1:45
+ 19:35 16.073m ndl=31:01
+ 19:36 16.108m ndl=30:47
+ 19:37 16.057m ndl=31:05
+ 19:38 16.103m 149.68bar:0 ndl=30:47
+ 19:39 16.165m ndl=30:24 tts=1:46
+ 19:40 16.193m ndl=30:13 heartbeat=93
+ 19:41 16.165m ndl=30:22 heartbeat=94
+ 19:42 16.073m ndl=30:54 tts=1:45 heartbeat=95
+ 19:43 16.198m 149.54bar:0 ndl=30:08 tts=1:46
+ 19:44 16.214m ndl=30:01 heartbeat=94
+ 19:45 16.173m ndl=30:15
+ 19:46 16.181m ndl=30:11
+ 19:47 16.256m ndl=29:44
+ 19:48 16.411m ndl=28:52 tts=1:47
+ 19:49 16.397m ndl=28:55
+ 19:50 16.512m ndl=28:18 tts=1:48 heartbeat=93
+ 19:51 16.636m ndl=27:40 tts=1:49
+ 19:52 16.752m ndl=27:06
+ 19:53 16.794m ndl=26:53 tts=1:50 heartbeat=94
+ 19:54 16.692m ndl=27:21 tts=1:49 heartbeat=93
+ 19:55 16.413m ndl=28:44 tts=1:47
+ 19:56 16.409m heartbeat=94
+ 19:57 16.433m ndl=28:36
+ 19:58 16.208m ndl=29:49 tts=1:46
+ 19:59 16.09m ndl=30:30 tts=1:45
+ 20:00 16.192m ndl=29:53 tts=1:46 heartbeat=93
+ 20:01 16.234m ndl=29:37
+ 20:02 16.273m ndl=29:23
+ 20:03 16.321m 147.89bar:0 ndl=29:06 tts=1:47
+ 20:04 16.282m ndl=29:18 tts=1:46 heartbeat=94
+ 20:05 16.147m ndl=30:04 tts=1:45 heartbeat=93
+ 20:06 16.078m ndl=30:28
+ 20:07 16.119m ndl=30:12 heartbeat=94
+ 20:08 16.219m ndl=29:35 tts=1:46
+ 20:09 16.173m ndl=29:51 heartbeat=93
+ 20:10 16.133m ndl=30:04 tts=1:45
+ 20:11 16.15m ndl=29:57
+ 20:12 16.275m ndl=29:13 tts=1:46
+ 20:13 16.268m 147.54bar:0 ndl=29:14
+ 20:14 16.1m ndl=30:11 tts=1:45 heartbeat=94
+ 20:15 16.155m ndl=29:51 tts=1:46 heartbeat=93
+ 20:16 16.278m ndl=29:07
+ 20:17 16.304m ndl=28:58
+ 20:18 16.31m 146.92bar:0 ndl=28:55 tts=1:47
+ 20:19 16.335m ndl=28:46
+ 20:20 16.347m ndl=28:41 heartbeat=92
+ 20:21 16.453m ndl=28:06
+ 20:22 16.57m ndl=27:29 tts=1:48
+ 20:23 16.685m 147.2bar:0 ndl=26:55 tts=1:49
+ 20:24 16.702m ndl=26:49
+ 20:25 16.883m ndl=25:58 tts=1:50
+ 20:26 17.008m ndl=25:25 tts=1:51
+ 20:27 17.009m ndl=25:24 heartbeat=91
+ 20:28 16.937m ndl=25:41 heartbeat=92
+ 20:29 16.807m ndl=26:15 tts=1:50
+ 20:30 16.524m ndl=27:35 tts=1:48 heartbeat=91
+ 20:31 16.344m ndl=28:30 tts=1:47
+ 20:32 16.451m ndl=27:55
+ 20:33 16.408m ndl=28:08
+ 20:34 16.517m ndl=27:33 tts=1:48
+ 20:35 16.566m ndl=27:17 heartbeat=90
+ 20:36 16.654m ndl=26:51 tts=1:49
+ 20:37 16.765m ndl=26:18 tts=1:50
+ 20:38 16.806m 146.3bar:0 ndl=26:06
+ 20:39 16.749m ndl=26:21 tts=1:49 heartbeat=91
+ 20:40 16.691m ndl=26:36
+ 20:41 16.643m ndl=26:49 heartbeat=92
+ 20:42 16.612m ndl=26:57 heartbeat=91
+ 20:43 16.549m 146.51bar:0 ndl=27:14 tts=1:48
+ 20:44 16.483m ndl=27:33 heartbeat=90
+ 20:45 16.456m ndl=27:40 tts=1:47
+ 20:46 16.513m ndl=27:22 tts=1:48
+ 20:47 16.533m ndl=27:15
+ 20:48 16.474m 145.82bar:0 ndl=27:32 heartbeat=91
+ 20:49 16.337m ndl=28:14 tts=1:47 heartbeat=90
+ 20:50 16.165m ndl=29:11 tts=1:46
+ 20:51 16.001m ndl=30:09 tts=1:44 heartbeat=91
+ 20:52 15.847m ndl=31:08 tts=1:43 heartbeat=90
+ 20:53 15.831m ndl=31:13
+ 20:54 15.999m ndl=30:07 tts=1:44
+ 20:55 15.921m ndl=30:35 heartbeat=89
+ 20:56 15.522m ndl=33:17 tts=1:41
+ 20:57 15.68m ndl=32:13 tts=1:42
+ 20:58 15.741m ndl=31:46 tts=1:43
+ 20:59 15.721m ndl=31:53 heartbeat=88
+ 21:00 15.729m ndl=31:49
+ 21:01 15.671m ndl=32:13 tts=1:42
+ 21:02 15.675m ndl=32:10 heartbeat=89
+ 21:03 15.697m ndl=31:59
+ 21:04 15.622m ndl=32:31
+ 21:05 15.537m ndl=33:03 tts=1:41
+ 21:06 15.777m ndl=31:22 tts=1:43 heartbeat=90
+ 21:07 15.842m ndl=30:55
+ 21:08 15.735m ndl=31:38
+ 21:09 15.538m ndl=32:58 tts=1:41
+ 21:10 15.495m ndl=33:11 heartbeat=92
+ 21:11 15.411m ndl=33:38 heartbeat=93
+ 21:12 15.262m ndl=34:28 tts=1:40
+ 21:13 15.053m 144.51bar:0 ndl=35:44 tts=1:38
+ 21:14 15.11m ndl=35:21 tts=1:39 heartbeat=91
+ 21:15 15.099m ndl=35:24 heartbeat=90
+ 21:16 15.021m ndl=35:53 tts=1:38 cns=2% heartbeat=91
+ 21:17 14.918m ndl=36:32 tts=1:37
+ 21:18 14.799m 144.85bar:0 ndl=37:21 heartbeat=92
+ 21:19 14.623m ndl=38:23 tts=1:35
+ 21:20 14.502m ndl=39:05
+ 21:21 14.431m ndl=39:30 tts=1:34
+ 21:22 14.396m ndl=39:42
+ 21:23 14.526m 144.16bar:0 ndl=38:53 tts=1:35
+ 21:24 14.545m ndl=38:45
+ 21:25 14.498m ndl=39:01 heartbeat=91
+ 21:26 14.408m ndl=39:33 tts=1:34 heartbeat=92
+ 21:27 14.382m ndl=39:42
+ 21:28 14.341m 144.37bar:0 ndl=39:56
+ 21:29 14.308m ndl=40:08 tts=1:33
+ 21:30 14.269m ndl=40:22
+ 21:31 14.218m ndl=40:41 heartbeat=91
+ 21:32 14.132m ndl=41:15 tts=1:32
+ 21:33 13.982m 143.96bar:0 ndl=42:16 tts=1:31
+ 21:34 13.893m ndl=42:54 heartbeat=90
+ 21:35 13.706m ndl=44:19 tts=1:29
+ 21:36 13.526m ndl=45:46 tts=1:28
+ 21:37 13.407m ndl=46:47 tts=1:27
+ 21:38 13.358m 144.03bar:0 ndl=47:12 heartbeat=91
+ 21:39 13.314m ndl=47:35 heartbeat=90
+ 21:40 13.304m ndl=47:40
+ 21:41 13.148m ndl=49:08 tts=1:26 heartbeat=89
+ 21:42 12.977m
+ 21:43 12.774m 143.61bar:0 ndl=50:52 tts=1:25
+ 21:44 12.684m ndl=53:06 tts=1:23 heartbeat=87
+ 21:45 12.683m ndl=54:09
+ 21:46 12.726m ndl=54:10
+ 21:47 12.701m ndl=53:37 heartbeat=88
+ 21:48 12.699m ndl=53:55 heartbeat=89
+ 21:50 13.043m ndl=52:15 tts=1:24 heartbeat=90
+ 21:51 13.104m ndl=50:03 tts=1:25
+ 21:52 13.316m ndl=49:25 heartbeat=91
+ 21:53 13.37m ndl=47:21 tts=1:27
+ 21:54 13.495m ndl=46:51
+ 21:55 13.342m ndl=45:45 tts=1:28 heartbeat=92
+ 21:56 13.356m ndl=47:04 tts=1:27 heartbeat=91
+ 21:57 13.517m ndl=46:56
+ 21:58 13.581m 142.37bar:0 ndl=45:30 tts=1:28
+ 21:59 13.537m ndl=44:58 tts=1:29
+ 22:00 13.463m ndl=45:18 tts=1:28
+ 22:01 13.456m ndl=45:55 heartbeat=90
+ 22:02 13.436m ndl=45:58 heartbeat=91
+ 22:03 13.356m 142.44bar:0 ndl=46:07
+ 22:04 13.244m ndl=46:49 tts=1:27
+ 22:05 13.157m ndl=47:49 tts=1:26 heartbeat=90
+ 22:06 13.313m ndl=48:39 heartbeat=89
+ 22:07 12.99m ndl=47:09 tts=1:27 heartbeat=88
+ 22:08 12.97m ndl=50:18 tts=1:25 heartbeat=87
+ 22:09 12.924m ndl=50:30
+ 22:10 13.049m ndl=50:58 tts=1:24 heartbeat=88
+ 22:11 13.062m ndl=49:39 tts=1:25
+ 22:12 12.935m ndl=49:29 heartbeat=89
+ 22:13 13.049m ndl=50:48 tts=1:24
+ 22:14 13.109m ndl=49:35 tts=1:25 heartbeat=90
+ 22:15 13.157m ndl=48:58 tts=1:26
+ 22:16 12.983m ndl=48:29
+ 22:17 13.073m ndl=50:13 tts=1:25
+ 22:18 13.091m 142.03bar:0 ndl=49:17
+ 22:19 12.98m ndl=49:05
+ 22:20 12.806m ndl=50:12
+ 22:21 12.647m ndl=52:06 tts=1:24
+ 22:22 12.531m ndl=53:58 tts=1:22
+ 22:23 12.327m 141.61bar:0 ndl=55:24
+ 22:24 12.273m ndl=58:12 tts=1:20 heartbeat=91
+ 22:25 12.237m ndl=58:58 heartbeat=90
+ 22:26 12.179m ndl=59:30
+ 22:27 12.192m ndl=60:24 tts=1:19
+ 22:28 12.267m 141.75bar:0 ndl=60:10 tts=1:20
+ 22:29 12.395m ndl=59:00
+ 22:30 12.55m ndl=57:08 tts=1:21
+ 22:31 12.702m ndl=55:02 tts=1:22 heartbeat=89
+ 22:32 12.817m ndl=53:08 tts=1:23
+ 22:33 12.912m 141.2bar:0 ndl=51:47 tts=1:24
+ 22:34 13.062m ndl=50:43 heartbeat=88
+ 22:35 13.404m ndl=49:08 tts=1:25 heartbeat=87
+ 22:36 13.504m ndl=45:53 tts=1:27
+ 22:37 13.592m ndl=45:01 tts=1:28
+ 22:38 13.575m 140.85bar:0 ndl=44:16 tts=1:29 heartbeat=88
+ 22:39 13.396m ndl=44:23
+ 22:40 13.501m ndl=45:53 tts=1:27
+ 22:41 13.525m ndl=44:58 tts=1:28
+ 22:42 13.558m ndl=44:45
+ 22:43 13.572m ndl=44:28 heartbeat=89
+ 22:44 13.304m ndl=44:20 tts=1:29
+ 22:45 13.203m ndl=46:37 tts=1:27
+ 22:46 13.358m ndl=47:33 tts=1:26
+ 22:47 13.236m ndl=46:06 tts=1:27
+ 22:48 13.128m 140.51bar:0 ndl=47:12 tts=1:26
+ 22:49 12.998m ndl=48:13
+ 22:50 12.794m ndl=49:31 tts=1:25
+ 22:51 12.63m ndl=51:43 tts=1:23
+ 22:52 12.585m ndl=53:39 tts=1:22 heartbeat=90
+ 22:53 12.647m 140.37bar:0 ndl=54:12
+ 22:54 12.717m ndl=53:24
+ 22:55 12.7m ndl=52:33 tts=1:23
+ 22:56 12.614m ndl=52:44
+ 22:57 12.382m ndl=53:46 tts=1:22
+ 22:58 12.231m 140.1bar:0 ndl=56:48 tts=1:21
+ 22:59 12.174m ndl=58:59 tts=1:20 heartbeat=91
+ 23:00 12.156m ndl=59:52 tts=1:19
+ 23:01 11.877m ndl=60:07
+ 23:02 11.906m ndl=64:55 tts=1:17
+ 23:03 12.024m ndl=64:22 tts=1:18 heartbeat=92
+ 23:04 12.236m ndl=62:15 heartbeat=91
+ 23:05 12.09m ndl=58:49 tts=1:20
+ 23:06 12.193m ndl=61:06 tts=1:19
+ 23:07 12.269m ndl=59:27 tts=1:20 heartbeat=90
+ 23:08 12.345m 139.61bar:0 ndl=58:16 heartbeat=89
+ 23:09 12.337m ndl=57:09 tts=1:21
+ 23:10 12.338m ndl=57:14 tts=1:20 heartbeat=90
+ 23:11 12.47m ndl=57:13
+ 23:12 12.595m ndl=55:22 tts=1:21
+ 23:13 12.6m 138.99bar:0 ndl=53:45 tts=1:22 heartbeat=91
+ 23:14 12.677m ndl=53:40 heartbeat=90
+ 23:15 12.608m ndl=52:42 tts=1:23 heartbeat=89
+ 23:16 12.397m ndl=53:31 tts=1:22
+ 23:17 12.138m ndl=56:17 tts=1:21
+ 23:18 12.081m 139.13bar:0 ndl=60:07 tts=1:19 heartbeat=88
+ 23:19 11.927m ndl=61:02 heartbeat=87
+ 23:20 11.776m ndl=63:41 tts=1:18
+ 23:21 11.778m ndl=66:33 tts=1:17
+ 23:22 11.934m ndl=66:29
+ 23:23 12.079m 139.27bar:0 ndl=61:00 tts=1:19 heartbeat=86
+ 23:24 12.132m ndl=60:07
+ 23:25 12.144m ndl=59:55
+ 23:26 12.154m ndl=59:44 heartbeat=85
+ 23:27 12.102m ndl=60:33
+ 23:28 12.032m 138.86bar:0 ndl=61:42 tts=1:18 heartbeat=86
+ 23:29 12.059m ndl=61:14 tts=1:19
+ 23:30 11.971m ndl=62:43 tts=1:18
+ 23:31 11.884m ndl=64:17 tts=1:17 heartbeat=87
+ 23:32 11.815m ndl=65:35
+ 23:33 11.787m 138.72bar:0 ndl=66:07
+ 23:34 11.772m ndl=66:25
+ 23:35 11.78m ndl=66:13
+ 23:36 11.761m ndl=66:35
+ 23:37 11.604m ndl=69:56 tts=1:16
+ 23:38 11.512m 138.51bar:0 ndl=72:04 tts=1:15 heartbeat=88
+ 23:39 11.386m ndl=75:14 tts=1:14
+ 23:40 11.283m ndl=78:06
+ 23:41 11.04m ndl=85:07 tts=1:12 heartbeat=87
+ 23:42 11.086m ndl=84:00
+ 23:43 11.068m 138.23bar:0 ndl=84:25
+ 23:44 10.952m ndl=87:17 tts=1:11
+ 23:45 10.968m ndl=86:51
+ 23:46 10.996m ndl=86:07 tts=1:12
+ 23:47 11.012m ndl=85:43 heartbeat=86
+ 23:48 11.058m 138.37bar:0 ndl=84:34
+ 23:49 11.025m ndl=85:21
+ 23:50 11.036m ndl=85:05
+ 23:51 11.058m ndl=84:31
+ 23:52 11.027m ndl=85:16 heartbeat=84
+ 23:53 11.005m 137.82bar:0 ndl=85:47
+ 23:54 11.013m ndl=85:33
+ 23:55 10.938m ndl=87:26 tts=1:11 heartbeat=85
+ 23:56 10.829m ndl=90:22 heartbeat=88
+ 23:57 10.811m ndl=90:51 tts=1:10 heartbeat=89
+ 23:58 10.838m 137.96bar:0 ndl=90:06 tts=1:11 heartbeat=90
+ 23:59 10.91m ndl=88:07
+ 24:00 10.847m ndl=89:48
+ 24:01 10.852m ndl=89:39
+ 24:02 10.677m ndl=94:46 tts=1:10
+ 24:03 10.403m 137.61bar:0 ndl=104:13 tts=1:08
+ 24:04 10.179m ndl=113:47 tts=1:06
+ 24:05 10.09m ndl=118:11
+ 24:06 10.243m ndl=110:50 tts=1:07
+ 24:07 10.37m ndl=105:28 tts=1:08
+ 24:08 10.41m ndl=103:53
+ 24:09 10.416m ndl=103:38
+ 24:10 10.552m ndl=98:42 tts=1:09
+ 24:11 10.622m ndl=96:22 heartbeat=89
+ 24:12 10.656m ndl=95:15
+ 24:13 10.51m 137.2bar:0 ndl=100:06 tts=1:08
+ 24:14 10.465m ndl=101:43
+ 24:15 10.476m ndl=101:18
+ 24:16 10.412m ndl=103:40
+ 24:17 10.24m ndl=110:46 tts=1:07 heartbeat=88
+ 24:18 10.432m 136.92bar:0 ndl=102:52 tts=1:08
+ 24:19 10.523m ndl=99:34 tts=1:09
+ 24:20 10.525m ndl=99:28 heartbeat=87
+ 24:21 10.69m ndl=94:02 tts=1:10
+ 24:22 10.636m ndl=95:44 tts=1:09
+ 24:23 10.739m 137.13bar:0 ndl=92:32 tts=1:10 heartbeat=88
+ 24:24 10.757m ndl=92:00 heartbeat=87
+ 24:25 10.798m ndl=90:47 heartbeat=88
+ 24:26 10.944m ndl=86:49 tts=1:11 heartbeat=87
+ 24:27 11.078m ndl=83:28 tts=1:12 heartbeat=88
+ 24:28 11.177m 136.58bar:0 ndl=80:36 tts=1:13 heartbeat=89
+ 24:29 11.161m ndl=81:05 heartbeat=90
+ 24:30 11.213m ndl=79:26
+ 24:31 11.216m ndl=79:20
+ 24:32 11.259m ndl=78:00
+ 24:33 11.115m 136.65bar:0 ndl=82:31 tts=1:12 heartbeat=91
+ 24:34 11.07m ndl=83:33 heartbeat=90
+ 24:35 11.151m ndl=81:20 tts=1:13 heartbeat=89
+ 24:36 11.199m ndl=79:47 heartbeat=88
+ 24:37 11.206m ndl=79:32
+ 24:38 11.234m 136.24bar:0 ndl=78:40 heartbeat=86
+ 24:39 11.308m ndl=76:29 tts=1:14
+ 24:40 11.341m ndl=75:33 heartbeat=85
+ 24:41 11.3m ndl=76:41 heartbeat=86
+ 24:42 11.249m ndl=78:08 tts=1:13
+ 24:43 11.238m 136.3bar:0 ndl=78:27 heartbeat=87
+ 24:44 11.302m ndl=76:35 tts=1:14
+ 24:45 11.303m ndl=76:31 heartbeat=88
+ 24:46 11.259m ndl=77:47 tts=1:13
+ 24:47 11.163m ndl=80:43
+ 24:48 11.137m 136.03bar:0 ndl=81:34 heartbeat=87
+ 24:49 11.153m ndl=81:02
+ 24:50 11.125m ndl=81:56 tts=1:12 heartbeat=88
+ 24:51 11.13m ndl=81:45 tts=1:13
+ 24:52 11.135m ndl=81:33
+ 24:53 11.19m 135.75bar:0 ndl=79:46 heartbeat=89
+ 24:54 11.216m ndl=78:57
+ 24:55 11.197m ndl=79:32 heartbeat=88
+ 24:56 11.15m ndl=81:01
+ 24:57 11.159m ndl=80:42 heartbeat=87
+ 24:58 11.181m 135.61bar:0 ndl=79:58
+ 24:59 11.167m ndl=80:24
+ 25:00 11.188m ndl=79:43
+ 25:01 11.22m ndl=78:43 heartbeat=88
+ 25:02 11.209m ndl=79:01 heartbeat=87
+ 25:03 11.14m 135.2bar:0 ndl=81:12
+ 25:04 11.143m ndl=81:06
+ 25:05 11.142m heartbeat=88
+ 25:06 11.155m ndl=80:39 heartbeat=87
+ 25:07 11.247m ndl=77:48
+ 25:08 11.247m ndl=77:47
+ 25:09 11.19m ndl=79:30 heartbeat=88
+ 25:10 11.215m ndl=78:43 heartbeat=87
+ 25:11 11.293m ndl=76:22 tts=1:14
+ 25:12 11.138m ndl=81:08 tts=1:13
+ 25:13 11.033m 134.93bar:0 ndl=83:46 tts=1:12 heartbeat=88
+ 25:14 11.111m ndl=81:55 heartbeat=87
+ 25:15 11.24m ndl=77:51 tts=1:13
+ 25:16 11.305m ndl=75:58 tts=1:14
+ 25:17 11.273m ndl=76:52 tts=1:13
+ 25:18 11.179m 134.51bar:0 ndl=79:41
+ 25:19 11.082m ndl=82:31 tts=1:12
+ 25:20 11.038m ndl=83:32
+ 25:21 11.32m ndl=75:27 tts=1:14 heartbeat=88
+ 25:22 11.349m ndl=74:37
+ 25:23 11.229m 134.72bar:0 ndl=78:04 tts=1:13
+ 25:24 11.219m ndl=78:20 heartbeat=87
+ 25:25 11.211m ndl=78:34
+ 25:26 11.231m ndl=77:57
+ 25:27 11.209m ndl=78:37 heartbeat=88
+ 25:28 11.174m 134.24bar:0 ndl=79:40 heartbeat=87
+ 25:29 11.141m ndl=80:45
+ 25:30 11.129m ndl=81:06 heartbeat=88
+ 25:31 11.159m ndl=80:07 heartbeat=87
+ 25:32 11.211m ndl=78:28
+ 25:33 11.246m 133.89bar:0 ndl=77:24 heartbeat=88
+ 25:34 11.061m ndl=82:45 tts=1:12 heartbeat=87
+ 25:35 11.006m ndl=84:03 heartbeat=86
+ 25:36 10.955m ndl=85:19 tts=1:11
+ 25:37 10.89m ndl=86:59 heartbeat=87
+ 25:38 10.956m 133.55bar:0 ndl=85:16
+ 25:39 10.975m ndl=84:45 tts=1:12
+ 25:40 10.848m ndl=88:03 tts=1:11
+ 25:41 10.625m ndl=94:39 tts=1:09 heartbeat=86
+ 25:42 10.631m ndl=94:26
+ 25:43 10.566m 133.68bar:0 ndl=96:32
+ 25:44 10.464m ndl=100:05 tts=1:08
+ 25:45 10.548m ndl=97:07 tts=1:09
+ 25:46 10.503m ndl=98:40 tts=1:08 heartbeat=85
+ 25:47 10.516m ndl=98:11 tts=1:09
+ 25:48 10.577m 133.34bar:0 ndl=96:05
+ 25:49 10.413m ndl=101:55 tts=1:08 heartbeat=84
+ 25:50 10.389m ndl=102:49
+ 25:51 10.476m ndl=99:32 heartbeat=85
+ 25:52 10.581m ndl=95:55 tts=1:09 heartbeat=86
+ 25:53 10.637m 133.06bar:0 ndl=94:04
+ 25:54 10.609m ndl=94:57
+ 25:55 10.697m
+ 25:56 10.746m ndl=92:10 tts=1:10
+ 25:57 10.792m ndl=90:41
+ 25:58 10.829m 133.2bar:0 ndl=89:21
+ 25:59 10.895m ndl=88:18 tts=1:11
+ 26:00 10.911m ndl=86:29
+ 26:01 11.045m ndl=86:04
+ 26:02 11.072m ndl=82:42 tts=1:12
+ 26:03 11.043m 132.79bar:0 ndl=82:03
+ 26:04 11.072m ndl=82:43 heartbeat=87
+ 26:05 11.077m ndl=82:01
+ 26:06 11.1m ndl=81:52
+ 26:07 11.113m ndl=81:20
+ 26:08 11.169m 132.58bar:0 ndl=81:00 heartbeat=88
+ 26:09 11.138m ndl=79:13 tts=1:13 heartbeat=87
+ 26:10 11.056m ndl=80:11
+ 26:11 11.01m ndl=82:17 tts=1:12
+ 26:12 10.975m ndl=83:22
+ 26:13 10.963m 132.17bar:0 ndl=84:13 heartbeat=88
+ 26:14 10.947m ndl=84:31 tts=1:11 heartbeat=87
+ 26:15 10.986m ndl=84:54
+ 26:16 11.112m ndl=83:53 tts=1:12
+ 26:17 11.298m ndl=80:53 heartbeat=88
+ 26:18 11.373m ndl=75:12 tts=1:14 heartbeat=87
+ 26:19 11.393m ndl=73:07
+ 26:20 11.453m ndl=72:34
+ 26:21 11.482m ndl=71:02 tts=1:15
+ 26:22 11.532m ndl=70:17
+ 26:23 11.504m 131.82bar:0 ndl=69:05 heartbeat=86
+ 26:24 11.541m ndl=69:43
+ 26:25 11.538m ndl=68:51
+ 26:26 11.44m ndl=68:54
+ 26:27 11.429m ndl=71:15
+ 26:28 11.449m 132.03bar:0 ndl=71:31 tts=1:14
+ 26:29 11.518m ndl=70:59 tts=1:15
+ 26:30 11.593m ndl=69:18
+ 26:31 11.597m ndl=67:34 tts=1:16
+ 26:32 11.534m ndl=67:28
+ 26:33 11.587m 131.68bar:0 ndl=68:52 tts=1:15
+ 26:34 11.613m ndl=67:39 tts=1:16
+ 26:35 11.642m ndl=67:03
+ 26:36 11.654m ndl=66:25
+ 26:37 11.735m ndl=66:07
+ 26:38 11.755m 131.2bar:0 ndl=64:27
+ 26:39 11.798m ndl=64:01 tts=1:17 heartbeat=85
+ 26:40 11.811m ndl=63:10 heartbeat=86
+ 26:41 11.751m ndl=62:53
+ 26:42 11.732m ndl=64:03
+ 26:43 11.539m ndl=64:25 tts=1:16
+ 26:44 11.356m ndl=68:34 tts=1:15 heartbeat=85
+ 26:45 11.227m ndl=73:08 tts=1:14
+ 26:46 11.41m ndl=76:46 tts=1:13
+ 26:47 11.511m ndl=71:41 tts=1:14
+ 26:48 11.519m 131.13bar:0 ndl=69:09 tts=1:15 heartbeat=86
+ 26:49 11.779m ndl=68:58
+ 26:50 11.894m ndl=63:22 tts=1:17
+ 26:51 11.895m ndl=61:11 tts=1:18 heartbeat=85
+ 26:52 11.938m ndl=61:09 heartbeat=86
+ 26:53 12.026m 130.79bar:0 ndl=60:22
+ 26:54 12.054m ndl=58:51 heartbeat=85
+ 26:55 11.993m ndl=58:22 tts=1:19
+ 26:56 11.896m ndl=59:22 tts=1:18
+ 26:57 11.94m ndl=61:03 heartbeat=86
+ 26:58 11.985m 130.86bar:0 ndl=60:15
+ 26:59 11.952m ndl=59:28
+ 27:00 11.874m ndl=60:00
+ 27:01 11.795m ndl=61:23 tts=1:17
+ 27:02 11.599m ndl=62:51
+ 27:03 11.73m 130.58bar:0 ndl=66:53 tts=1:16 heartbeat=85
+ 27:04 11.57m ndl=64:06 heartbeat=86
+ 27:05 11.446m ndl=67:29 tts=1:15
+ 27:06 11.356m ndl=70:25
+ 27:07 11.298m ndl=72:43 tts=1:14
+ 27:08 11.413m 130.31bar:0 ndl=74:18 heartbeat=85
+ 27:09 11.603m ndl=71:13 heartbeat=86
+ 27:10 11.714m ndl=66:41 tts=1:16
+ 27:11 11.679m ndl=64:18
+ 27:12 11.647m ndl=65:01
+ 27:13 11.708m ndl=65:40 heartbeat=85
+ 27:14 11.687m ndl=64:23 heartbeat=86
+ 27:15 11.649m ndl=64:48
+ 27:16 11.641m ndl=65:35
+ 27:17 11.627m ndl=65:43 heartbeat=85
+ 27:18 11.542m 129.89bar:0 ndl=66:01 heartbeat=86
+ 27:19 11.431m ndl=67:54 tts=1:15
+ 27:20 11.413m ndl=70:34
+ 27:21 11.42m ndl=71:00 tts=1:14
+ 27:22 11.533m ndl=70:49
+ 27:23 11.613m 129.96bar:0 ndl=68:03 tts=1:15 heartbeat=85
+ 27:24 11.608m ndl=66:14 tts=1:16 heartbeat=86
+ 27:25 11.603m ndl=66:18
+ 27:26 11.607m ndl=66:25
+ 27:27 11.568m ndl=66:19
+ 27:28 11.517m 129.55bar:0 ndl=67:10 tts=1:15
+ 27:29 11.447m ndl=68:18
+ 27:30 11.381m ndl=71:40 tts=1:14 heartbeat=85
+ 27:31 11.337m ndl=72:49
+ 27:32 11.35m ndl=72:27
+ 27:33 11.407m 129.69bar:0 ndl=70:56
+ 27:34 11.492m ndl=68:49 tts=1:15
+ 27:35 11.476m ndl=69:12 heartbeat=84
+ 27:36 11.398m ndl=71:07 tts=1:14
+ 27:37 11.356m ndl=72:12
+ 27:38 11.335m 129.27bar:0 ndl=72:46 heartbeat=83
+ 27:39 11.209m ndl=76:21 tts=1:13
+ 27:40 11.303m ndl=73:37 tts=1:14 heartbeat=84
+ 27:41 11.321m ndl=73:06
+ 27:42 11.249m ndl=75:07 tts=1:13 heartbeat=85
+ 27:43 11.211m 128.72bar:0 ndl=76:14
+ 27:44 11.193m ndl=76:46
+ 27:45 11.32m ndl=73:03 tts=1:14
+ 27:46 11.246m ndl=75:09 tts=1:13 heartbeat=84
+ 27:47 11.135m ndl=78:33
+ 27:48 11.026m 128.93bar:0 ndl=81:14 tts=1:12 heartbeat=85
+ 27:49 10.951m ndl=83:04 tts=1:11
+ 27:50 10.737m ndl=88:51 tts=1:10
+ 27:51 10.705m ndl=89:46
+ 27:52 10.73m ndl=89:00 heartbeat=84
+ 27:53 10.755m 128.51bar:0 ndl=88:15
+ 27:54 10.768m ndl=87:53
+ 27:55 10.54m ndl=94:56 tts=1:09
+ 27:56 10.427m ndl=98:54 tts=1:08 heartbeat=85
+ 27:57 10.435m ndl=98:36 heartbeat=84
+ 27:58 10.365m ndl=101:15
+ 27:59 10.337m ndl=102:19 tts=1:07
+ 28:00 10.293m ndl=104:06
+ 28:01 10.319m ndl=103:01 heartbeat=85
+ 28:02 10.323m ndl=102:51 heartbeat=84
+ 28:03 10.204m 128.44bar:0 ndl=107:56 tts=1:06
+ 28:04 10.098m ndl=112:59
+ 28:05 10.065m ndl=114:39 heartbeat=85
+ 28:06 10.049m ndl=115:28 tts=1:05 heartbeat=84
+ 28:07 9.968m ndl=119:58 heartbeat=83
+ 28:08 10.002m ndl=117:59
+ 28:09 9.927m ndl=122:20
+ 28:10 9.752m ndl=134:14 tts=1:03 heartbeat=82
+ 28:11 9.692m ndl=139:04 heartbeat=81
+ 28:12 9.828m ndl=128:45 tts=1:04
+ 28:13 9.992m 127.69bar:0 ndl=118:30 tts=1:05 heartbeat=83
+ 28:14 10.21m ndl=107:30 tts=1:06 heartbeat=84
+ 28:15 10.171m ndl=109:14
+ 28:16 9.938m ndl=121:36 tts=1:05
+ 28:17 9.902m ndl=123:45 tts=1:04
+ 28:18 9.964m 127.75bar:0 ndl=120:01 tts=1:05
+ 28:19 9.871m ndl=125:44 tts=1:04 heartbeat=85
+ 28:20 9.825m ndl=128:49
+ 28:21 9.844m ndl=127:28 heartbeat=84
+ 28:22 9.845m ndl=127:23 heartbeat=83
+ 28:23 9.85m 127.48bar:0 ndl=127:04 heartbeat=84
+ 28:24 9.829m ndl=128:28 heartbeat=85
+ 28:25 9.829m ndl=128:24 heartbeat=87
+ 28:26 9.853m ndl=126:48
+ 28:27 9.821m ndl=128:56 heartbeat=88
+ 28:28 9.794m ndl=130:50
+ 28:29 9.791m ndl=131:02
+ 28:30 9.782m ndl=131:43 heartbeat=87
+ 28:31 9.757m ndl=133:31
+ 28:32 9.721m ndl=136:18 tts=1:03
+ 28:33 9.709m 127.27bar:0 ndl=137:13
+ 28:34 9.576m ndl=149:12 tts=1:02
+ 28:35 9.708m ndl=137:17 tts=1:03
+ 28:36 9.657m ndl=141:37
+ 28:37 9.718m ndl=136:26
+ 28:38 9.749m 126.93bar:0 ndl=134:04
+ 28:39 9.79m ndl=130:56 tts=1:04
+ 28:40 9.695m ndl=138:19 tts=1:03
+ 28:41 9.52m ndl=154:21 tts=1:02 heartbeat=86
+ 28:42 9.541m ndl=152:45 heartbeat=87
+ 28:43 9.153m 126.86bar:0 ndl=184:03 tts=1:00
+ 28:44 9.109m ndl=188:34 tts=0:59
+ 28:45 9.149m ndl=184:26 tts=1:00
+ 28:46 9.108m ndl=188:41 tts=0:59 heartbeat=88
+ 28:47 9.217m ndl=177:53 tts=1:00
+ 28:48 9.393m ndl=163:11 tts=1:01 heartbeat=87
+ 28:49 9.403m ndl=162:23 heartbeat=88
+ 28:50 9.384m ndl=163:51 heartbeat=89
+ 28:51 9.375m ndl=164:28 heartbeat=90
+ 28:52 9.504m ndl=155:13 tts=1:02
+ 28:53 9.573m 126.38bar:0 ndl=149:16 heartbeat=91
+ 28:54 9.609m ndl=145:40 tts=1:03
+ 28:55 9.625m ndl=144:10 heartbeat=89
+ 28:56 9.681m ndl=139:13
+ 28:57 9.603m ndl=146:15 heartbeat=88
+ 28:58 9.544m 126.58bar:0 ndl=152:09 tts=1:02
+ 28:59 9.446m ndl=159:08 tts=1:01
+ 29:00 9.557m ndl=150:44 tts=1:02 heartbeat=87
+ 29:01 9.373m ndl=164:29 tts=1:01
+ 29:02 9.399m ndl=162:31
+ 29:03 9.214m 126.24bar:0 ndl=177:51 tts=1:00 heartbeat=88
+ 29:04 9.062m ndl=193:27 tts=0:59 heartbeat=86
+ 29:05 9.141m ndl=184:55
+ 29:06 9.195m ndl=179:32 tts=1:00
+ 29:07 9.283m ndl=171:40
+ 29:08 9.394m 126.17bar:0 ndl=162:47 tts=1:01 heartbeat=87
+ 29:09 9.503m ndl=155:01 tts=1:02 heartbeat=86
+ 29:10 9.536m ndl=152:51
+ 29:11 9.613m ndl=145:05 tts=1:03
+ 29:12 9.459m ndl=158:00 tts=1:02
+ 29:13 9.751m 125.89bar:0 ndl=133:20 tts=1:03
+ 29:14 9.846m ndl=126:30 tts=1:04
+ 29:15 9.815m ndl=128:38 heartbeat=88
+ 29:16 9.782m ndl=130:58 heartbeat=89
+ 29:17 9.749m ndl=133:27 tts=1:03 heartbeat=90
+ 29:18 9.627m ndl=143:37
+ 29:19 9.49m ndl=155:43 tts=1:02
+ 29:20 9.53m ndl=153:04 heartbeat=89
+ 29:21 9.732m ndl=134:40 tts=1:03 heartbeat=88
+ 29:22 9.839m ndl=126:50 tts=1:04
+ 29:23 9.811m 125.27bar:0 ndl=128:46 heartbeat=87
+ 29:24 9.761m ndl=132:23
+ 29:25 9.719m ndl=135:38 tts=1:03
+ 29:26 9.559m ndl=150:07 tts=1:02
+ 29:27 9.477m ndl=156:31 heartbeat=86
+ 29:28 9.414m 125.34bar:0 ndl=160:57 tts=1:01 heartbeat=85
+ 29:29 9.472m ndl=156:48 tts=1:02
+ 29:30 9.473m ndl=156:43 heartbeat=84
+ 29:31 9.485m ndl=155:52
+ 29:32 9.449m ndl=158:20 heartbeat=83
+ 29:33 9.479m 125.0bar:0 ndl=156:14 heartbeat=81
+ 29:34 9.464m ndl=157:16
+ 29:35 9.445m ndl=158:36 tts=1:01
+ 29:36 9.474m ndl=156:33 tts=1:02 heartbeat=82
+ 29:37 9.511m ndl=154:03
+ 29:38 9.508m 124.79bar:0 ndl=154:14
+ 29:39 9.523m ndl=153:12 heartbeat=83
+ 29:40 9.468m ndl=156:53
+ 29:41 9.438m ndl=158:57 tts=1:01
+ 29:42 9.4m ndl=161:44
+ 29:43 9.326m 124.86bar:0 ndl=167:28
+ 29:44 9.293m ndl=170:11 tts=1:00
+ 29:45 9.271m ndl=171:59
+ 29:46 9.301m ndl=169:26 tts=1:01 heartbeat=82
+ 29:47 9.339m ndl=166:22 heartbeat=83
+ 29:48 9.373m 124.65bar:0 ndl=163:43
+ 29:49 9.378m ndl=163:19
+ 29:50 9.455m ndl=157:39 tts=1:02
+ 29:51 9.448m heartbeat=82
+ 29:52 9.408m ndl=158:05 tts=1:01 heartbeat=83
+ 29:53 9.367m 124.72bar:0 ndl=161:00
+ 29:54 9.399m ndl=164:03
+ 29:55 9.419m ndl=161:35
+ 29:56 9.488m ndl=160:06
+ 29:57 9.552m ndl=155:17 tts=1:02 heartbeat=84
+ 29:58 9.504m 124.24bar:0 ndl=150:20
+ 29:59 9.387m ndl=154:10
+ 30:00 9.187m ndl=162:28 tts=1:01
+ 30:01 9.401m ndl=179:25 tts=1:00 heartbeat=85
+ 30:02 9.307m ndl=161:22 tts=1:01 heartbeat=84
+ 30:03 9.358m 124.38bar:0 ndl=168:44 heartbeat=85
+ 30:04 9.32m ndl=164:34
+ 30:05 9.237m ndl=167:34 heartbeat=84
+ 30:06 9.141m ndl=174:38 tts=1:00
+ 30:07 9.092m ndl=183:51 tts=0:59
+ 30:08 9.056m 124.03bar:0 ndl=188:56
+ 30:09 9.017m ndl=192:53 heartbeat=85
+ 30:10 9.084m ndl=197:27 heartbeat=84
+ 30:11 9.266m ndl=189:45 heartbeat=85
+ 30:12 9.431m ndl=172:02 tts=1:00
+ 30:13 9.56m 123.55bar:0 ndl=158:57 tts=1:01
+ 30:14 9.622m ndl=149:15 tts=1:02
+ 30:15 9.536m ndl=143:09 tts=1:03 heartbeat=84
+ 30:16 9.541m ndl=151:45 tts=1:02 heartbeat=85
+ 30:17 9.488m ndl=151:09
+ 30:18 9.5m 123.76bar:0 ndl=154:55 heartbeat=86
+ 30:19 9.563m ndl=154:04 heartbeat=87
+ 30:20 9.616m ndl=148:50
+ 30:21 9.623m ndl=143:39 tts=1:03 heartbeat=88
+ 30:22 9.57m ndl=142:59
+ 30:23 9.569m 123.48bar:0 ndl=148:06 tts=1:02 heartbeat=87
+ 30:24 9.535m ndl=148:07
+ 30:25 9.538m ndl=151:40
+ 30:26 9.526m ndl=151:19 heartbeat=88
+ 30:27 9.507m ndl=152:14 heartbeat=87
+ 30:28 9.524m 123.2bar:0 ndl=153:29
+ 30:29 9.515m ndl=152:20 heartbeat=88
+ 30:30 9.487m ndl=152:53 heartbeat=87
+ 30:31 9.44m ndl=154:46
+ 30:32 9.41m ndl=158:01 tts=1:01 heartbeat=88
+ 30:33 9.387m ndl=160:08 heartbeat=87
+ 30:34 9.4m ndl=161:49
+ 30:35 9.479m ndl=160:52
+ 30:36 9.111m ndl=155:13 tts=1:02
+ 30:37 9.388m ndl=186:24 tts=0:59
+ 30:38 9.188m 122.93bar:0 ndl=161:45 tts=1:01
+ 30:39 9.343m ndl=178:37 tts=1:00
+ 30:40 9.4m ndl=165:07 tts=1:01
+ 30:41 9.343m ndl=160:48 heartbeat=88
+ 30:42 9.403m ndl=165:09 heartbeat=89
+ 30:43 9.386m 122.51bar:0 ndl=160:32
+ 30:44 9.52m ndl=161:45
+ 30:45 9.531m ndl=152:21 tts=1:02
+ 30:46 9.415m ndl=151:38
+ 30:47 9.526m ndl=159:36 tts=1:01 heartbeat=90
+ 30:48 9.457m 122.65bar:0 ndl=151:54 tts=1:02 heartbeat=89
+ 30:49 9.363m ndl=156:31
+ 30:50 9.293m ndl=163:27 tts=1:01 heartbeat=88
+ 30:51 9.278m ndl=169:00 tts=1:00
+ 30:52 9.241m ndl=170:15 heartbeat=87
+ 30:53 9.187m 122.31bar:0 ndl=173:27
+ 30:54 9.086m ndl=178:29
+ 30:55 9.034m ndl=188:45 tts=0:59
+ 30:56 9.029m ndl=194:40 heartbeat=88
+ 30:57 9.069m ndl=195:15
+ 30:58 9.151m 122.03bar:0 ndl=190:36
+ 30:59 9.172m ndl=181:54 tts=1:00 heartbeat=89
+ 31:00 9.224m ndl=179:45 heartbeat=88
+ 31:01 9.227m ndl=174:56
+ 31:02 9.008m ndl=174:37
+ 31:03 8.96m ndl=197:35 tts=0:59 heartbeat=89
+ 31:04 8.952m ndl=203:42 tts=0:58 heartbeat=88
+ 31:05 8.985m ndl=204:49 heartbeat=89
+ 31:06 9.031m ndl=200:29
+ 31:07 9.091m ndl=194:45 tts=0:59
+ 31:08 9.09m 121.76bar:0 ndl=188:08
+ 31:09 9.13m ndl=183:51
+ 31:10 9.074m ndl=189:49 heartbeat=88
+ 31:11 9.032m ndl=194:40
+ 31:12 9.024m ndl=195:32
+ 31:13 9.093m 121.62bar:0 ndl=187:42
+ 31:14 9.165m ndl=180:15 tts=1:00
+ 31:15 9.262m ndl=171:17
+ 31:16 9.219m ndl=175:09 heartbeat=89
+ 31:17 9.177m ndl=179:00 heartbeat=88
+ 31:18 9.121m ndl=184:37 tts=0:59
+ 31:19 9.097m ndl=187:11
+ 31:20 9.037m ndl=193:55 heartbeat=87
+ 31:21 8.989m ndl=199:43 tts=0:58
+ 31:22 8.928m ndl=207:50
+ 31:23 8.846m ndl=220:07 heartbeat=86
+ 31:24 8.869m ndl=216:24
+ 31:25 8.764m ndl=234:31 tts=0:57
+ 31:26 9.052m ndl=192:04 tts=0:59
+ 31:27 9.093m ndl=187:26 heartbeat=85
+ 31:28 9.083m 120.72bar:0 ndl=188:30
+ 31:29 9.104m ndl=186:17
+ 31:30 9.172m ndl=179:21 tts=1:00
+ 31:31 8.892m ndl=212:50 tts=0:58
+ 31:32 9.025m ndl=195:07 tts=0:59 heartbeat=84
+ 31:33 9.159m 120.79bar:0 ndl=180:33 tts=1:00
+ 31:34 8.947m ndl=205:01 tts=0:58
+ 31:35 8.928m ndl=207:37 heartbeat=85
+ 31:36 9.115m ndl=184:59 tts=0:59 heartbeat=84
+ 31:37 9.058m ndl=191:11
+ 31:38 8.95m 120.86bar:0 ndl=204:30 tts=0:58
+ 31:39 8.848m ndl=219:33
+ 31:40 8.82m ndl=224:12 tts=0:57
+ 31:41 8.849m ndl=219:21 tts=0:58
+ 31:42 8.89m ndl=212:54 heartbeat=83
+ 31:43 8.971m 120.58bar:0 ndl=201:38
+ 31:44 8.914m ndl=209:22 heartbeat=84
+ 31:45 8.828m ndl=222:43 tts=0:57
+ 31:46 8.86m ndl=217:28 tts=0:58
+ 31:47 8.841m ndl=220:26 heartbeat=85
+ 31:48 8.84m 120.38bar:0 ndl=220:41 heartbeat=86
+ 31:49 8.832m ndl=221:56 tts=0:57 heartbeat=87
+ 31:50 8.802m ndl=227:03
+ 31:51 8.76m ndl=234:50
+ 31:52 8.775m ndl=232:03
+ 31:53 8.818m 120.45bar:0 ndl=224:17
+ 31:54 8.849m ndl=219:07 tts=0:58
+ 31:55 8.886m ndl=213:20 heartbeat=86
+ 31:56 8.918m ndl=208:34
+ 31:57 8.943m ndl=205:06 heartbeat=85
+ 31:58 8.879m 120.1bar:0 ndl=214:16 heartbeat=84
+ 31:59 8.862m ndl=216:54
+ 32:00 8.794m ndl=228:16 tts=0:57
+ 32:01 8.743m ndl=237:57
+ 32:02 8.702m ndl=246:47
+ 32:03 8.649m 119.89bar:0 ndl=259:18 tts=0:56
+ 32:04 8.64m ndl=261:28 heartbeat=85
+ 32:05 8.696m ndl=247:52 tts=0:57 heartbeat=84
+ 32:06 8.712m ndl=244:25
+ 32:07 8.678m ndl=252:08 tts=0:56
+ 32:08 8.665m ndl=255:10 heartbeat=85
+ 32:09 8.678m ndl=252:04 heartbeat=84
+ 32:10 8.649m ndl=259:10
+ 32:11 8.586m ndl=276:49
+ 32:12 8.526m ndl=292:06 tts=0:55
+ 32:13 8.463m 119.62bar:0 ndl=304:20 heartbeat=83
+ 32:14 8.418m ndl=314:00
+ 32:15 8.407m ndl=316:27
+ 32:16 8.47m ndl=302:47
+ 32:17 8.428m ndl=311:40
+ 32:18 8.707m 119.34bar:0 ndl=245:15 tts=0:57
+ 32:19 8.879m ndl=213:59 tts=0:58
+ 32:20 8.868m ndl=215:42 heartbeat=84
+ 32:21 8.907m ndl=209:48
+ 32:22 8.963m ndl=202:07 heartbeat=86
+ 32:23 8.957m 119.48bar:0 ndl=202:49 heartbeat=87
+ 32:24 8.965m ndl=201:42
+ 32:25 8.779m ndl=230:42 tts=0:57
+ 32:26 8.579m ndl=278:33 tts=0:56
+ 32:27 8.541m ndl=289:13
+ 32:28 8.5m 119.07bar:0 ndl=296:44 tts=0:55
+ 32:29 8.496m ndl=297:32
+ 32:30 8.722m ndl=241:55 tts=0:57
+ 32:31 8.938m ndl=205:14 tts=0:58 heartbeat=88
+ 32:32 8.976m ndl=200:16 heartbeat=87
+ 32:33 8.939m 118.72bar:0 ndl=205:09
+ 32:34 8.946m ndl=204:06
+ 32:35 8.958m ndl=202:27
+ 32:36 8.869m ndl=215:12 heartbeat=86
+ 32:37 8.76m ndl=234:01 tts=0:57
+ 32:38 8.631m 118.65bar:0 ndl=263:29 tts=0:56
+ 32:39 8.926m ndl=206:45 tts=0:58 heartbeat=85
+ 32:40 9.03m ndl=193:26 tts=0:59
+ 32:41 8.862m ndl=216:16 tts=0:58 heartbeat=84
+ 32:42 8.775m ndl=231:13 tts=0:57 heartbeat=85
+ 32:43 8.778m 118.58bar:0 ndl=230:39
+ 32:44 8.815m ndl=223:55
+ 32:45 8.868m ndl=215:12 tts=0:58 heartbeat=86
+ 32:46 8.927m ndl=206:34
+ 32:47 9.023m ndl=194:06 tts=0:59
+ 32:48 9.174m 118.1bar:0 ndl=177:52 tts=1:00
+ 32:49 9.174m
+ 32:50 8.882m ndl=213:00 tts=0:58
+ 32:51 8.778m ndl=230:25 tts=0:57
+ 32:52 8.648m ndl=258:38 tts=0:56
+ 32:53 8.546m 118.03bar:0 ndl=287:45 heartbeat=85
+ 32:54 8.484m ndl=299:29 tts=0:55 heartbeat=86
+ 32:55 8.46m ndl=304:08
+ 32:56 8.575m ndl=279:26 tts=0:56 heartbeat=85
+ 32:57 8.813m ndl=223:59 tts=0:57 heartbeat=86
+ 32:58 8.925m 117.76bar:0 ndl=206:39 tts=0:58
+ 32:59 9.05m ndl=190:48 tts=0:59
+ 33:00 8.839m ndl=219:34 tts=0:58
+ 33:01 9.044m ndl=191:29 tts=0:59
+ 33:02 9.217m ndl=173:41 tts=1:00 heartbeat=85
+ 33:03 9.171m ndl=177:55 heartbeat=86
+ 33:04 9.199m ndl=175:16
+ 33:05 9.239m ndl=171:37 heartbeat=85
+ 33:06 9.252m ndl=170:28 heartbeat=86
+ 33:07 9.307m ndl=165:47 tts=1:01
+ 33:08 9.262m 117.48bar:0 ndl=169:35 tts=1:00
+ 33:09 9.216m ndl=173:36 heartbeat=85
+ 33:10 9.285m ndl=167:36 heartbeat=86
+ 33:11 9.333m
+ 33:12 9.35m ndl=163:37 tts=1:01
+ 33:13 9.338m 117.21bar:0 ndl=162:16 heartbeat=85
+ 33:14 9.252m ndl=163:14 heartbeat=84
+ 33:15 9.203m ndl=170:18 tts=1:00 heartbeat=83
+ 33:16 9.12m ndl=174:41
+ 33:17 9.221m ndl=182:53 tts=0:59
+ 33:18 9.237m 117.34bar:0 ndl=173:00 tts=1:00
+ 33:19 9.238m ndl=171:37
+ 33:20 9.265m ndl=171:30
+ 33:21 9.255m ndl=169:06
+ 33:22 9.187m ndl=169:57
+ 33:23 9.12m ndl=176:08
+ 33:24 8.906m ndl=182:46 tts=0:59 heartbeat=82
+ 33:25 9.127m ndl=208:53 tts=0:58 heartbeat=83
+ 33:26 9.406m ndl=181:57 tts=0:59
+ 33:27 9.378m ndl=157:48 tts=1:01
+ 33:28 9.182m ndl=159:55
+ 33:29 9.238m ndl=176:29 tts=1:00
+ 33:30 9.45m ndl=171:21
+ 33:31 9.296m ndl=154:35 tts=1:02
+ 33:32 9.381m ndl=166:17 tts=1:00 heartbeat=82
+ 33:33 9.576m 116.72bar:0 ndl=159:32 tts=1:01 heartbeat=83
+ 33:34 9.515m ndl=144:42 tts=1:02
+ 33:35 9.521m ndl=150:09 heartbeat=84
+ 33:36 9.563m ndl=149:44
+ 33:37 9.58m ndl=145:58 heartbeat=85
+ 33:38 9.604m 116.45bar:0 ndl=144:15
+ 33:39 9.577m ndl=141:54 tts=1:03
+ 33:40 9.434m ndl=144:29 tts=1:02 heartbeat=84
+ 33:41 9.377m ndl=155:32 tts=1:01
+ 33:42 9.43m ndl=159:43
+ 33:43 9.537m ndl=155:47 heartbeat=85
+ 33:44 9.576m ndl=148:33 tts=1:02 heartbeat=86
+ 33:45 9.656m ndl=144:28
+ 33:46 9.506m ndl=137:02 tts=1:03
+ 33:47 9.464m ndl=150:30 tts=1:02 heartbeat=85
+ 33:48 9.342m 116.03bar:0 ndl=153:22 heartbeat=86
+ 33:49 9.52m ndl=162:17 tts=1:01
+ 33:50 9.614m ndl=149:34 tts=1:02
+ 33:51 9.57m ndl=140:45 tts=1:03
+ 33:52 9.257m ndl=145:01 tts=1:02 heartbeat=85
+ 33:53 9.504m ndl=169:14 tts=1:00 heartbeat=86
+ 33:54 9.645m ndl=150:34 tts=1:02
+ 33:55 9.668m ndl=137:51 tts=1:03
+ 33:56 9.631m ndl=135:50 heartbeat=85
+ 33:57 9.658m ndl=139:05
+ 33:58 9.715m 115.83bar:0 ndl=136:43 heartbeat=86
+ 33:59 9.812m ndl=132:00
+ 34:00 9.658m ndl=124:45 tts=1:04
+ 34:01 9.678m ndl=136:41 tts=1:03
+ 34:02 9.765m ndl=134:58
+ 34:03 9.626m ndl=128:06 tts=1:04
+ 34:04 9.682m ndl=139:27 tts=1:03
+ 34:05 9.803m ndl=134:31
+ 34:06 9.852m ndl=125:19 tts=1:04
+ 34:07 9.874m ndl=121:56
+ 34:08 9.897m 115.21bar:0 ndl=120:28
+ 34:09 9.884m ndl=119:03
+ 34:10 9.848m ndl=119:51
+ 34:11 9.774m ndl=122:10
+ 34:12 9.691m ndl=127:17 heartbeat=85
+ 34:13 9.7m 115.28bar:0 ndl=133:41 tts=1:03 heartbeat=84
+ 34:14 9.87m ndl=132:53
+ 34:15 9.992m ndl=120:40 tts=1:04
+ 34:16 10.005m ndl=113:22 tts=1:05
+ 34:17 9.985m ndl=112:36
+ 34:18 9.946m 114.93bar:0 ndl=113:44
+ 34:19 9.936m ndl=115:56 heartbeat=83
+ 34:20 9.893m ndl=116:29 heartbeat=84
+ 34:21 9.861m ndl=119:04 tts=1:04
+ 34:22 9.924m ndl=121:08
+ 34:23 9.952m 114.45bar:0 ndl=117:10 tts=1:05
+ 34:24 9.911m ndl=115:29
+ 34:25 9.914m ndl=117:55
+ 34:26 9.858m ndl=117:44
+ 34:27 9.871m ndl=121:11 tts=1:04 heartbeat=83
+ 34:28 9.834m 114.59bar:0 ndl=120:20 heartbeat=84
+ 34:29 9.696m ndl=122:46
+ 34:30 9.901m ndl=132:55 tts=1:03
+ 34:31 9.74m ndl=118:24 tts=1:04
+ 34:32 10.064m ndl=129:27 tts=1:03
+ 34:33 10.116m 114.17bar:0 ndl=109:15 tts=1:06
+ 34:34 10.155m ndl=104:47
+ 34:35 10.21m ndl=102:17 heartbeat=85
+ 34:36 10.192m ndl=103:04
+ 34:37 10.229m ndl=101:26 tts=1:07
+ 34:38 10.167m 114.03bar:0 ndl=104:11 tts=1:06 heartbeat=86
+ 34:39 10.256m ndl=100:14 tts=1:07
+ 34:40 10.353m ndl=96:20
+ 34:41 10.398m ndl=94:37 tts=1:08
+ 34:42 10.407m ndl=94:16
+ 34:43 10.306m 114.1bar:0 ndl=98:07 tts=1:07 heartbeat=87
+ 34:44 10.362m ndl=95:55 heartbeat=88
+ 34:45 10.374m ndl=95:28 tts=1:08
+ 34:46 10.35m ndl=96:20 tts=1:07
+ 34:47 10.376m ndl=95:20 tts=1:08 heartbeat=87
+ 34:48 10.367m 113.76bar:0 ndl=95:40
+ 34:49 10.25m ndl=100:18 tts=1:07
+ 34:50 10.225m ndl=101:23
+ 34:51 10.234m ndl=100:58 heartbeat=88
+ 34:52 10.233m ndl=101:01 heartbeat=87
+ 34:53 10.218m 113.28bar:0 ndl=101:37
+ 34:54 10.288m ndl=98:40 heartbeat=88
+ 34:55 10.322m ndl=97:18 heartbeat=87
+ 34:56 10.02m ndl=111:09 tts=1:05 heartbeat=86
+ 34:57 10.174m ndl=103:33 tts=1:06
+ 34:58 10.257m ndl=99:52 tts=1:07
+ 34:59 10.367m ndl=95:30 tts=1:08 heartbeat=85
+ 35:00 10.449m ndl=92:27
+ 35:01 10.547m ndl=89:08 tts=1:09
+ 35:02 10.405m ndl=94:02 tts=1:08
+ 35:03 10.523m 112.93bar:0 ndl=89:54 tts=1:09
+ 35:04 10.436m ndl=92:53 tts=1:08
+ 35:05 10.363m ndl=95:31
+ 35:06 10.395m ndl=94:19 heartbeat=84
+ 35:07 10.372m ndl=95:10
+ 35:08 10.331m 112.66bar:0 ndl=96:43 tts=1:07
+ 35:09 10.291m ndl=98:18
+ 35:10 10.337m ndl=96:26
+ 35:11 10.287m ndl=98:25 heartbeat=83
+ 35:12 10.199m ndl=102:08 tts=1:06
+ 35:13 10.167m 112.79bar:0 ndl=103:34 heartbeat=84
+ 35:14 10.136m ndl=105:01
+ 35:15 10.05m ndl=109:14 tts=1:05
+ 35:16 10.016m ndl=110:59
+ 35:17 10.093m ndl=107:00 tts=1:06
+ 35:18 10.083m 112.45bar:0 ndl=107:30 heartbeat=85
+ 35:19 10.079m ndl=107:40 heartbeat=84
+ 35:20 10.042m ndl=109:33 tts=1:05
+ 35:21 9.908m ndl=117:06
+ 35:22 9.833m ndl=121:54 tts=1:04 heartbeat=85
+ 35:23 9.888m 112.59bar:0 ndl=118:18 heartbeat=84
+ 35:24 9.951m ndl=114:31 tts=1:05 heartbeat=85
+ 35:25 9.967m ndl=113:33
+ 35:26 9.876m ndl=118:59 tts=1:04
+ 35:27 9.938m ndl=115:11 tts=1:05 heartbeat=84
+ 35:28 9.865m 112.24bar:0 ndl=119:40 tts=1:04
+ 35:29 9.903m ndl=117:14
+ 35:30 9.789m ndl=124:47
+ 35:31 9.806m ndl=123:32 heartbeat=85
+ 35:32 9.875m ndl=118:59
+ 35:33 9.921m ndl=116:07 tts=1:05
+ 35:34 10.003m ndl=111:25
+ 35:35 10.036m ndl=109:38 heartbeat=86
+ 35:36 10.061m ndl=108:19 tts=1:06 heartbeat=85
+ 35:37 10.009m ndl=111:02 tts=1:05
+ 35:38 10.057m 111.9bar:0 ndl=108:29
+ 35:39 9.771m ndl=125:56 tts=1:04 heartbeat=86
+ 35:40 9.695m ndl=131:46 tts=1:03
+ 35:41 9.643m ndl=136:07 heartbeat=85
+ 35:42 9.764m ndl=126:23 tts=1:04
+ 35:43 9.666m 111.69bar:0 ndl=134:07 tts=1:03
+ 35:44 9.802m ndl=123:39 tts=1:04
+ 35:45 9.843m ndl=120:51
+ 35:46 9.867m ndl=119:15 heartbeat=86
+ 35:47 9.897m ndl=117:19
+ 35:48 9.895m 111.28bar:0 ndl=117:28 heartbeat=87
+ 35:49 9.87m ndl=119:02
+ 35:50 9.856m ndl=119:54
+ 35:51 9.779m ndl=125:09
+ 35:52 9.669m ndl=133:44 tts=1:03
+ 35:53 9.519m 111.35bar:0 ndl=147:21 tts=1:02 heartbeat=88
+ 35:54 9.526m ndl=146:56 heartbeat=87
+ 35:55 9.564m ndl=143:18
+ 35:56 9.508m ndl=148:01 heartbeat=88
+ 35:57 9.449m ndl=152:01 tts=1:01 heartbeat=89
+ 35:58 9.405m 111.07bar:0 ndl=155:07
+ 35:59 9.506m ndl=148:08 tts=1:02
+ 36:00 9.544m ndl=145:17
+ 36:01 9.544m ndl=145:18 heartbeat=88
+ 36:02 9.535m ndl=146:11
+ 36:03 9.546m 110.72bar:0 ndl=145:02 heartbeat=87
+ 36:04 9.485m ndl=149:25
+ 36:05 9.51m ndl=147:46 heartbeat=86
+ 36:06 9.565m ndl=143:04
+ 36:07 9.631m ndl=136:44 tts=1:03
+ 36:08 9.532m 110.45bar:0 ndl=146:15 tts=1:02
+ 36:09 9.449m ndl=151:45 heartbeat=85
+ 36:10 9.738m ndl=127:54 tts=1:03
+ 36:11 9.726m ndl=128:48
+ 36:12 9.507m ndl=147:51 tts=1:02
+ 36:13 9.635m ndl=136:20 tts=1:03
+ 36:14 9.708m ndl=130:06
+ 36:15 9.612m ndl=138:21
+ 36:16 9.516m ndl=147:12 tts=1:02 heartbeat=86
+ 36:17 9.373m ndl=157:08 tts=1:01
+ 36:18 9.351m 110.1bar:0 ndl=158:48 heartbeat=87
+ 36:19 9.405m ndl=154:43
+ 36:20 9.281m ndl=164:24 tts=1:00
+ 36:21 9.288m ndl=163:49
+ 36:22 9.477m ndl=149:40 tts=1:02 heartbeat=88
+ 36:23 9.546m ndl=144:41
+ 36:24 9.554m ndl=143:54 heartbeat=89
+ 36:25 9.634m ndl=136:10 tts=1:03
+ 36:26 9.693m ndl=131:11
+ 36:27 9.645m ndl=135:13
+ 36:28 9.659m 109.76bar:0 ndl=133:57
+ 36:29 9.541m ndl=145:06 tts=1:02
+ 36:30 9.375m ndl=156:46 tts=1:01
+ 36:31 9.374m ndl=156:50
+ 36:32 9.558m ndl=143:22 tts=1:02
+ 36:33 9.704m ndl=130:08 tts=1:03
+ 36:34 9.674m ndl=132:37
+ 36:35 9.628m ndl=136:34
+ 36:36 9.749m ndl=126:36
+ 36:37 9.809m ndl=122:17 tts=1:04 heartbeat=90
+ 36:38 9.772m 109.41bar:0 ndl=124:52 heartbeat=91
+ 36:39 9.737m ndl=127:30 tts=1:03
+ 36:40 9.763m ndl=125:33 tts=1:04
+ 36:41 9.863m ndl=118:37 heartbeat=90
+ 36:42 9.815m ndl=121:46
+ 36:43 9.703m 109.14bar:0 ndl=130:05 tts=1:03
+ 36:44 9.648m ndl=134:40 heartbeat=89
+ 36:45 9.628m ndl=136:23 heartbeat=88
+ 36:46 9.663m ndl=133:18
+ 36:47 9.75m ndl=126:23 heartbeat=89
+ 36:48 9.908m ndl=115:41 tts=1:05
+ 36:49 9.956m ndl=112:52
+ 36:50 9.876m ndl=117:40 tts=1:04
+ 36:51 9.923m ndl=114:44 tts=1:05
+ 36:52 9.961m ndl=112:32
+ 36:53 9.897m 108.86bar:0 ndl=116:16 tts=1:04 heartbeat=88
+ 36:54 9.863m heartbeat=89
+ 36:55 9.824m ndl=118:27 heartbeat=88
+ 36:56 9.77m ndl=120:56
+ 36:57 9.823m ndl=124:45 heartbeat=87
+ 36:58 9.744m 108.52bar:0 ndl=121:02
+ 36:59 9.698m ndl=126:39 tts=1:03
+ 37:00 9.829m ndl=130:09 heartbeat=88
+ 37:01 9.937m ndl=120:33 tts=1:04 heartbeat=87
+ 37:02 9.956m ndl=113:47 tts=1:05
+ 37:03 10.041m 108.04bar:0 ndl=112:38
+ 37:04 10.063m ndl=108:01 heartbeat=88
+ 37:05 9.974m ndl=106:53 tts=1:06 heartbeat=87
+ 37:06 9.93m ndl=111:37 tts=1:05
+ 37:07 9.917m ndl=114:06
+ 37:08 9.678m 107.97bar:0 ndl=114:51
+ 37:09 9.658m ndl=131:39 tts=1:03 heartbeat=86
+ 37:10 9.885m ndl=133:20
+ 37:11 9.701m ndl=116:44 tts=1:04
+ 37:12 9.936m ndl=129:45 tts=1:03
+ 37:13 9.976m ndl=113:40 tts=1:05
+ 37:14 9.986m ndl=111:20
+ 37:15 10.044m ndl=110:48
+ 37:16 10.005m ndl=107:40
+ 37:17 10.023m ndl=109:40
+ 37:18 10.092m ndl=108:43 heartbeat=87
+ 37:19 10.014m ndl=105:12 tts=1:06
+ 37:20 9.961m ndl=109:09 tts=1:05
+ 37:21 10.002m ndl=112:05 heartbeat=88
+ 37:22 9.984m ndl=109:45 heartbeat=89
+ 37:23 10.022m 107.48bar:0 ndl=110:44
+ 37:24 10.101m ndl=108:41
+ 37:25 10.076m ndl=104:38 tts=1:06
+ 37:26 10.079m ndl=105:51
+ 37:27 10.12m ndl=105:41
+ 37:28 9.96m 107.14bar:0 ndl=103:42 heartbeat=88
+ 37:29 9.837m ndl=111:58 tts=1:05
+ 37:30 9.643m ndl=119:30 tts=1:04
+ 37:31 9.678m ndl=134:14 tts=1:03
+ 37:32 9.761m ndl=131:16 heartbeat=86
+ 37:33 9.814m ndl=124:43 tts=1:04
+ 37:34 9.87m ndl=121:00 heartbeat=85
+ 37:35 9.946m ndl=117:16
+ 37:36 9.887m ndl=112:39 tts=1:05 heartbeat=84
+ 37:37 9.778m ndl=116:13 tts=1:04
+ 37:38 9.842m ndl=123:27
+ 37:39 9.872m ndl=119:03 heartbeat=85
+ 37:40 9.859m ndl=117:04 heartbeat=84
+ 37:41 9.905m ndl=117:54 heartbeat=85
+ 37:42 9.968m ndl=115:00
+ 37:43 9.864m ndl=111:17 tts=1:05 heartbeat=86
+ 37:44 9.831m ndl=117:31 tts=1:04
+ 37:45 9.87m ndl=119:38
+ 37:46 9.704m ndl=117:06
+ 37:47 9.78m ndl=128:51 tts=1:03 heartbeat=85
+ 37:48 9.943m 106.24bar:0 ndl=123:06 tts=1:04 heartbeat=86
+ 37:49 9.971m ndl=112:38 tts=1:05
+ 37:50 9.927m ndl=111:01
+ 37:51 9.935m ndl=113:33
+ 37:52 9.845m ndl=113:04
+ 37:53 9.771m 106.38bar:0 ndl=118:36 tts=1:04
+ 37:54 9.761m ndl=123:40
+ 37:55 9.733m ndl=124:22
+ 37:56 9.67m ndl=126:27 tts=1:03 heartbeat=87
+ 37:57 9.676m ndl=131:30
+ 37:58 9.755m 106.11bar:0 ndl=130:57
+ 37:59 9.796m ndl=124:46 tts=1:04
+ 38:00 9.811m ndl=121:48 heartbeat=88
+ 38:01 9.861m ndl=120:46
+ 38:02 9.881m ndl=117:23 heartbeat=87
+ 38:03 9.86m 105.76bar:0 ndl=116:10
+ 38:04 9.782m ndl=117:26
+ 38:05 9.886m ndl=115:48
+ 38:06 9.792m ndl=121:58
+ 38:07 9.776m ndl=123:04
+ 38:08 9.774m 105.83bar:0 ndl=123:13 heartbeat=88
+ 38:09 9.699m ndl=128:52 tts=1:03 heartbeat=87
+ 38:10 9.695m ndl=129:10
+ 38:11 9.621m ndl=135:30
+ 38:12 9.559m ndl=141:28 tts=1:02 heartbeat=86
+ 38:13 9.604m ndl=137:04 tts=1:03
+ 38:14 9.656m ndl=132:25
+ 38:15 9.669m ndl=131:14
+ 38:16 9.635m ndl=134:11
+ 38:17 9.611m ndl=136:21
+ 38:18 9.513m 105.14bar:0 ndl=145:12 tts=1:02
+ 38:19 9.399m ndl=153:00 tts=1:01
+ 38:20 9.793m ndl=121:39 tts=1:04
+ 38:21 9.541m ndl=143:10 tts=1:02
+ 38:22 9.796m ndl=121:25 tts=1:04
+ 38:23 9.947m 104.86bar:0 ndl=111:51 tts=1:05 heartbeat=85
+ 38:24 9.951m ndl=111:38 heartbeat=86
+ 38:25 9.926m ndl=113:03 heartbeat=87
+ 38:26 9.978m ndl=110:04
+ 38:27 10.009m ndl=108:23 heartbeat=88
+ 38:28 10.034m ndl=107:01
+ 38:29 9.969m ndl=110:31
+ 38:30 9.981m ndl=109:49 heartbeat=89
+ 38:31 10.022m ndl=107:36 heartbeat=88
+ 38:32 10.019m ndl=107:45 heartbeat=87
+ 38:33 9.943m 104.38bar:0 ndl=111:55 heartbeat=86
+ 38:34 9.95m ndl=111:30 heartbeat=84
+ 38:35 9.888m ndl=115:10 tts=1:04
+ 38:36 9.846m ndl=117:50
+ 38:37 9.897m ndl=114:34 heartbeat=85
+ 38:38 9.962m 104.24bar:0 ndl=110:46 tts=1:05 heartbeat=86
+ 38:39 9.978m ndl=109:50
+ 38:40 10.022m ndl=107:29
+ 38:41 9.987m ndl=109:19
+ 38:42 9.973m ndl=110:03
+ 38:43 9.99m ndl=109:06
+ 38:44 9.956m ndl=110:59
+ 38:45 9.956m ndl=111:00
+ 38:46 10.026m ndl=107:08
+ 38:47 10.015m ndl=107:43
+ 38:48 9.959m 103.83bar:0 ndl=110:47
+ 38:49 9.975m ndl=109:49 heartbeat=85
+ 38:50 9.943m ndl=111:40 heartbeat=86
+ 38:51 9.898m ndl=114:18 tts=1:04
+ 38:52 9.937m ndl=111:58 tts=1:05 heartbeat=85
+ 38:53 9.926m 103.49bar:0 ndl=112:36 heartbeat=86
+ 38:54 9.852m ndl=117:08 tts=1:04
+ 38:55 9.688m ndl=128:58 tts=1:03
+ 38:56 9.616m ndl=135:08
+ 38:57 9.859m ndl=116:36 tts=1:04 heartbeat=87
+ 38:58 9.913m 103.69bar:0 ndl=113:18 tts=1:05
+ 38:59 9.957m ndl=110:43
+ 39:00 10.096m ndl=103:22 tts=1:06
+ 39:01 9.973m ndl=109:46 tts=1:05
+ 39:02 10.313m ndl=93:55 tts=1:07
+ 39:03 10.292m ndl=94:44
+ 39:04 10.16m ndl=100:19 tts=1:06 heartbeat=88
+ 39:05 10.04m ndl=106:06 tts=1:05 heartbeat=87
+ 39:06 9.984m ndl=109:03
+ 39:07 10.281m ndl=95:06 tts=1:07 heartbeat=88
+ 39:08 10.275m 103.14bar:0 ndl=95:21
+ 39:09 10.32m ndl=93:32
+ 39:10 10.138m ndl=101:14 tts=1:06
+ 39:11 10.381m ndl=91:13 tts=1:08
+ 39:12 10.292m ndl=94:35 tts=1:07
+ 39:13 10.432m 103.07bar:0 ndl=89:22 tts=1:08
+ 39:14 10.436m ndl=89:12
+ 39:15 10.405m ndl=90:17 heartbeat=89
+ 39:16 10.285m ndl=94:47 tts=1:07
+ 39:17 10.294m ndl=94:26
+ 39:18 10.453m ndl=88:32 tts=1:08 heartbeat=90
+ 39:19 10.453m ndl=88:31
+ 39:20 10.535m ndl=85:46 tts=1:09
+ 39:21 10.577m ndl=84:26
+ 39:22 10.565m ndl=84:48
+ 39:23 10.557m 102.8bar:0 ndl=85:02 heartbeat=89
+ 39:24 10.545m ndl=85:24
+ 39:25 10.351m ndl=92:05 tts=1:07 heartbeat=88
+ 39:26 10.236m ndl=96:37
+ 39:27 10.25m ndl=96:03
+ 39:28 10.218m 102.59bar:0 ndl=97:22 heartbeat=87
+ 39:29 10.182m ndl=98:53 tts=1:06
+ 39:30 10.152m ndl=100:14
+ 39:31 9.869m ndl=115:22 tts=1:04
+ 39:32 10.025m ndl=106:24 tts=1:05
+ 39:33 10.049m ndl=105:08
+ 39:34 9.893m ndl=113:49 tts=1:04
+ 39:35 10.126m ndl=101:21 tts=1:06 heartbeat=88
+ 39:36 10.296m ndl=94:02 tts=1:07
+ 39:37 10.387m ndl=90:35 tts=1:08
+ 39:38 10.399m 101.69bar:0 ndl=90:07
+ 39:39 10.418m ndl=89:25 heartbeat=89
+ 39:40 10.364m ndl=91:22
+ 39:41 10.293m ndl=94:04 tts=1:07
+ 39:42 10.261m ndl=95:21 heartbeat=88
+ 39:43 10.245m ndl=95:59 heartbeat=89
+ 39:44 10.238m ndl=96:15
+ 39:45 10.164m ndl=99:28 tts=1:06
+ 39:46 10.085m ndl=103:08
+ 39:47 10.054m ndl=104:40 tts=1:05
+ 39:48 10.067m 101.49bar:0 ndl=104:00 tts=1:06 heartbeat=88
+ 39:49 9.981m ndl=108:28 tts=1:05 heartbeat=89
+ 39:50 9.895m ndl=113:23 tts=1:04
+ 39:51 10.037m ndl=105:28 tts=1:05
+ 39:52 10.041m ndl=105:15
+ 39:53 9.975m ndl=108:44
+ 39:54 10.071m ndl=103:41 tts=1:06 heartbeat=88
+ 39:55 10.12m ndl=101:18
+ 39:56 10.05m ndl=104:41 tts=1:05
+ 39:57 10.156m ndl=99:35 tts=1:06
+ 39:58 10.162m 100.59bar:0 ndl=99:18
+ 39:59 9.993m ndl=107:38 tts=1:05
+ 40:00 9.975m ndl=108:37
+ 40:01 9.851m ndl=115:58 tts=1:04 heartbeat=87
+ 40:02 9.78m ndl=120:45
+ 40:03 9.818m 100.66bar:0 ndl=118:05
+ 40:04 9.781m ndl=120:39
+ 40:05 9.681m ndl=128:17 tts=1:03 heartbeat=88
+ 40:06 9.772m ndl=121:18 tts=1:04 heartbeat=87
+ 40:07 9.764m ndl=121:47
+ 40:08 9.681m 100.31bar:0 ndl=128:13 tts=1:03
+ 40:09 9.731m ndl=124:15 heartbeat=88
+ 40:10 9.731m ndl=124:14 heartbeat=87
+ 40:11 9.762m ndl=121:54 tts=1:04
+ 40:12 9.742m ndl=123:22 tts=1:03
+ 40:13 9.673m 100.11bar:0 ndl=128:48 heartbeat=88
+ 40:14 9.573m ndl=137:44 tts=1:02
+ 40:15 9.514m ndl=143:01
+ 40:16 9.511m ndl=143:10
+ 40:17 9.565m ndl=138:31
+ 40:18 9.693m 99.69bar:0 ndl=127:02 tts=1:03 heartbeat=87
+ 40:19 9.749m ndl=122:45
+ 40:20 9.631m ndl=132:16
+ 40:21 9.622m ndl=133:05
+ 40:22 9.542m ndl=140:45 tts=1:02
+ 40:23 9.541m 99.76bar:0 ndl=140:49 heartbeat=88
+ 40:24 9.577m ndl=137:13
+ 40:25 9.602m ndl=134:50 tts=1:03
+ 40:26 9.599m ndl=135:03 tts=1:02
+ 40:28 9.582m 99.42bar:0 ndl=132:38 tts=1:03
+ 40:29 9.478m ndl=136:41 tts=1:02 heartbeat=87
+ 40:30 9.448m ndl=145:06
+ 40:31 9.441m ndl=147:04 tts=1:01
+ 40:32 9.434m ndl=147:33
+ 40:33 9.425m 98.93bar:0 ndl=148:00
+ 40:34 9.408m ndl=148:37 heartbeat=88
+ 40:35 9.405m ndl=149:47 heartbeat=87
+ 40:36 9.496m ndl=150:01
+ 40:37 9.505m ndl=143:49 tts=1:02 heartbeat=88
+ 40:38 9.454m ndl=143:10 heartbeat=87
+ 40:39 9.452m ndl=146:34
+ 40:40 9.484m ndl=146:41
+ 40:41 9.443m ndl=144:31
+ 40:42 9.323m ndl=147:16 tts=1:01 heartbeat=86
+ 40:43 9.382m 98.87bar:0 ndl=156:01
+ 40:44 9.364m ndl=151:31
+ 40:45 9.282m ndl=152:52
+ 40:46 9.218m ndl=159:19 tts=1:00
+ 40:47 9.128m ndl=164:46
+ 40:48 8.911m 98.59bar:0 ndl=173:17 tts=0:59
+ 40:49 8.798m ndl=199:07 tts=0:58
+ 40:50 8.882m ndl=216:47 tts=0:57
+ 40:51 8.958m ndl=203:10 tts=0:58
+ 40:52 9.055m ndl=192:38
+ 40:53 9.07m ndl=180:55 tts=0:59
+ 40:54 9.043m ndl=179:16 heartbeat=85
+ 40:55 9.132m ndl=182:16 heartbeat=86
+ 40:56 9.127m ndl=172:45
+ 40:57 9.035m ndl=173:12 heartbeat=85
+ 40:58 8.985m 98.45bar:0 ndl=183:08
+ 40:59 9.07m ndl=189:05 tts=0:58
+ 41:00 9.051m ndl=179:07 tts=0:59
+ 41:01 8.989m ndl=181:17 heartbeat=86
+ 41:02 9.029m ndl=188:32 tts=0:58
+ 41:03 9.008m 97.97bar:0 ndl=183:46 tts=0:59 heartbeat=85
+ 41:04 8.97m ndl=186:14 heartbeat=86
+ 41:05 9.056m ndl=190:55 tts=0:58
+ 41:06 9.069m ndl=180:34 tts=0:59
+ 41:07 9.014m ndl=179:10
+ 41:08 8.986m 97.83bar:0 ndl=185:23
+ 41:09 9.024m ndl=188:46 tts=0:58 heartbeat=85
+ 41:10 8.974m ndl=184:10 tts=0:59 heartbeat=86
+ 41:11 8.921m ndl=190:14 tts=0:58
+ 41:12 8.95m ndl=197:17
+ 41:13 8.968m 97.9bar:0 ndl=193:18 heartbeat=85
+ 41:14 8.942m ndl=190:58 heartbeat=86
+ 41:15 8.869m ndl=194:24
+ 41:16 8.814m ndl=204:45 heartbeat=85
+ 41:17 8.742m ndl=213:31 tts=0:57 heartbeat=86
+ 41:18 8.639m 97.56bar:0 ndl=226:51
+ 41:19 8.526m ndl=250:06 tts=0:56
+ 41:20 8.398m ndl=280:43 tts=0:55 heartbeat=85
+ 41:21 8.305m ndl=306:33 heartbeat=86
+ 41:22 8.426m ndl=329:53 tts=0:54
+ 41:23 8.537m 97.42bar:0 ndl=300:21 tts=0:55
+ 41:24 8.638m ndl=278:40 tts=0:56
+ 41:25 8.769m ndl=250:21
+ 41:26 8.897m ndl=221:28 tts=0:57 heartbeat=85
+ 41:27 9.14m ndl=200:27 tts=0:58 heartbeat=86
+ 41:28 9.154m ndl=171:26 tts=0:59 heartbeat=85
+ 41:29 9.296m ndl=170:06 tts=1:00
+ 41:30 9.296m ndl=157:30
+ 41:31 9.318m ndl=157:26
+ 41:32 9.171m ndl=155:43 tts=1:01 heartbeat=84
+ 41:33 8.913m 96.73bar:0 ndl=168:21 tts=1:00 heartbeat=85
+ 41:34 8.823m ndl=198:00 tts=0:58
+ 41:35 8.98m ndl=211:47 tts=0:57 heartbeat=84
+ 41:36 8.995m ndl=189:02 tts=0:58
+ 41:37 8.938m ndl=187:16 tts=0:59
+ 41:38 8.97m 96.52bar:0 ndl=194:32 tts=0:58
+ 41:39 8.897m ndl=190:15 heartbeat=85
+ 41:40 8.631m ndl=200:08 heartbeat=84
+ 41:41 8.739m ndl=251:44 tts=0:56
+ 41:42 9.044m ndl=226:55 tts=0:57
+ 41:43 9.043m 96.38bar:0 ndl=181:17 tts=0:59 heartbeat=85
+ 41:44 8.968m ndl=181:28 heartbeat=84
+ 41:45 9.036m ndl=190:24 tts=0:58
+ 41:46 9.074m ndl=182:13 tts=0:59
+ 41:47 9.039m ndl=177:58 heartbeat=85
+ 41:48 9.005m ndl=181:49 heartbeat=84
+ 41:49 8.98m ndl=185:47
+ 41:50 8.833m ndl=209:54 tts=0:57
+ 41:51 8.807m ndl=214:15 heartbeat=85
+ 41:52 8.727m ndl=229:10 heartbeat=84
+ 41:53 8.884m 95.76bar:0 ndl=201:54 tts=0:58
+ 41:54 8.845m ndl=207:48 heartbeat=85
+ 41:55 8.794m ndl=216:22 tts=0:57 heartbeat=84
+ 41:56 8.645m ndl=247:55 tts=0:56
+ 41:57 8.587m ndl=264:08 heartbeat=85
+ 41:58 8.499m 95.83bar:0 ndl=285:04 tts=0:55
+ 41:59 8.389m ndl=307:56
+ 42:00 8.035m ndl=415:51 tts=0:52
+ 42:01 7.919m ndl=454:16 tts=0:51
+ 42:02 7.666m ndl=572:46 tts=0:50
+ 42:03 7.741m ndl=538:07 heartbeat=84
+ 42:04 7.707m ndl=555:39 heartbeat=85
+ 42:05 8.013m ndl=422:23 tts=0:52
+ 42:06 8.234m ndl=350:17 tts=0:54 heartbeat=84
+ 42:07 8.344m ndl=318:42 heartbeat=85
+ 42:08 8.256m ndl=343:18
+ 42:09 8.327m ndl=323:00
+ 42:10 8.363m ndl=314:03 heartbeat=86
+ 42:11 8.337m ndl=320:34
+ 42:12 8.333m ndl=321:28 heartbeat=87
+ 42:13 8.303m 95.42bar:0 ndl=329:22
+ 42:14 8.327m ndl=323:02
+ 42:15 8.288m ndl=333:46
+ 42:16 8.294m ndl=331:52
+ 42:17 8.157m ndl=377:56 tts=0:53
+ 42:18 8.018m 95.0bar:0 ndl=420:22 tts=0:52
+ 42:19 8.345m ndl=318:10 tts=0:54
+ 42:20 8.395m ndl=306:12 tts=0:55
+ 42:21 8.456m ndl=293:04
+ 42:22 8.528m ndl=279:13 heartbeat=86
+ 42:23 8.567m 94.66bar:0 ndl=270:03 tts=0:56
+ 42:24 8.588m ndl=263:17
+ 42:25 8.605m ndl=258:11
+ 42:26 8.587m ndl=263:33 heartbeat=85
+ 42:27 8.517m ndl=281:16 tts=0:55
+ 42:28 8.458m 94.8bar:0 ndl=292:40 heartbeat=86
+ 42:29 8.532m ndl=278:31
+ 42:30 8.718m ndl=230:25 tts=0:57
+ 42:31 8.654m ndl=245:07 tts=0:56
+ 42:32 8.595m ndl=261:08
+ 42:33 8.753m 94.32bar:0 ndl=223:26 tts=0:57
+ 42:34 8.644m ndl=247:39 tts=0:56 heartbeat=87
+ 42:35 8.451m ndl=293:49 tts=0:55 heartbeat=88
+ 42:36 8.306m ndl=328:07 tts=0:54
+ 42:37 8.432m ndl=297:53 tts=0:55 heartbeat=89
+ 42:38 8.363m ndl=313:33 tts=0:54 heartbeat=88
+ 42:39 8.349m ndl=316:50
+ 42:40 8.403m ndl=304:12 tts=0:55 heartbeat=87
+ 42:41 8.37m ndl=311:45 tts=0:54 heartbeat=86
+ 42:42 8.357m ndl=314:52
+ 42:43 8.269m 94.04bar:0 ndl=338:36
+ 42:44 8.207m ndl=358:44 tts=0:53
+ 42:45 8.187m ndl=365:58 heartbeat=87
+ 42:46 8.258m ndl=342:05 tts=0:54
+ 42:47 8.235m ndl=349:20
+ 42:48 8.429m ndl=298:14 tts=0:55 heartbeat=86
+ 42:49 8.498m ndl=284:22
+ 42:50 8.467m ndl=290:20 heartbeat=85
+ 42:51 8.53m ndl=278:32
+ 42:52 8.538m ndl=277:01 tts=0:56
+ 42:53 8.489m 93.69bar:0 ndl=286:05 tts=0:55
+ 42:54 8.581m ndl=264:57 tts=0:56 heartbeat=86
+ 42:55 8.614m ndl=255:13
+ 42:56 8.572m ndl=267:49
+ 42:57 8.667m ndl=241:29
+ 42:58 8.676m ndl=239:28
+ 42:59 8.641m ndl=247:54 heartbeat=87
+ 43:00 8.701m ndl=233:35 tts=0:57
+ 43:01 8.663m ndl=242:27 tts=0:56
+ 43:02 8.648m ndl=246:04
+ 43:03 8.45m 93.14bar:0 ndl=293:37 tts=0:55
+ 43:04 8.258m ndl=341:42 tts=0:54 heartbeat=88
+ 43:05 8.208m ndl=357:57 tts=0:53
+ 43:06 8.243m ndl=346:12 tts=0:54
+ 43:07 8.34m ndl=318:38
+ 43:08 8.375m ndl=310:12
+ 43:09 8.509m ndl=282:02 tts=0:55 heartbeat=87
+ 43:10 8.56m ndl=271:21 tts=0:56
+ 43:11 8.583m ndl=264:13
+ 43:12 8.615m ndl=254:34
+ 43:13 8.617m 92.87bar:0 ndl=254:08 heartbeat=88
+ 43:14 8.538m ndl=276:33 heartbeat=87
+ 43:15 8.482m ndl=287:05 tts=0:55 heartbeat=88
+ 43:16 8.328m ndl=321:33 tts=0:54 heartbeat=87
+ 43:17 8.445m ndl=294:20 tts=0:55
+ 43:18 8.47m 93.01bar:0 ndl=289:21
+ 43:19 8.463m ndl=290:47
+ 43:20 8.448m ndl=293:46
+ 43:21 8.464m ndl=290:27 heartbeat=86
+ 43:22 8.473m ndl=288:44
+ 43:23 8.421m 92.52bar:0 ndl=299:27
+ 43:24 8.406m ndl=302:43
+ 43:25 8.45m ndl=293:11
+ 43:26 8.551m ndl=274:12 tts=0:56
+ 43:27 8.538m ndl=276:26 heartbeat=87
+ 43:28 8.436m 92.18bar:0 ndl=296:05 tts=0:55 heartbeat=86
+ 43:29 8.331m ndl=320:43 tts=0:54
+ 43:30 8.316m ndl=324:36
+ 43:31 8.311m ndl=325:55
+ 43:32 8.194m ndl=362:26 tts=0:53
+ 43:33 8.175m 92.25bar:0 ndl=369:39
+ 43:34 8.245m ndl=345:11 tts=0:54
+ 43:35 8.232m ndl=349:31
+ 43:36 8.058m ndl=407:23 tts=0:52
+ 43:37 7.912m ndl=455:10 tts=0:51
+ 43:38 8.042m 92.04bar:0 ndl=411:49 tts=0:52
+ 43:39 7.971m ndl=433:59 heartbeat=85
+ 43:40 7.797m ndl=505:13 tts=0:51 heartbeat=86
+ 43:41 7.497m ndl=660:08 tts=0:49
+ 43:42 7.611m ndl=595:56
+ 43:43 7.679m 91.76bar:0 ndl=565:11 tts=0:50 heartbeat=87
+ 43:44 7.645m
+ 43:45 7.594m ndl=580:05 heartbeat=88
+ 43:46 7.428m ndl=604:32 tts=0:49
+ 43:47 7.582m ndl=706:29 tts=0:48
+ 43:48 7.578m ndl=610:45 tts=0:49
+ 43:49 7.378m ndl=612:34 heartbeat=89
+ 43:50 7.424m ndl=732:11 tts=0:48 heartbeat=90
+ 43:51 7.437m ndl=708:40
+ 43:52 7.341m ndl=702:17
+ 43:53 7.332m ndl=752:45
+ 43:54 7.244m ndl=757:45 heartbeat=89
+ 43:55 7.027m ndl=814:32 tts=0:47 heartbeat=88
+ 43:56 6.983m ndl=984:30 tts=0:46
+ 43:57 6.979m ndl=0:00 tts=0:45
+ 43:58 6.81m 91.21bar:0
+ 43:59 6.74m tts=0:44 heartbeat=89
+ 44:00 6.589m
+ 44:01 6.517m tts=0:43
+ 44:02 6.585m tts=0:42 heartbeat=90
+ 44:03 6.646m 90.94bar:0 tts=0:43
+ 44:04 6.51m heartbeat=91
+ 44:05 6.447m tts=0:42
+ 44:06 6.298m
+ 44:07 6.208m tts=0:41 heartbeat=88
+ 44:08 6.223m 91.01bar:0 tts=0:40 heartbeat=87
+ 44:09 6.333m heartbeat=86
+ 44:10 6.334m tts=0:41
+ 44:13 6.328m 90.73bar:0 tts=0:00
+ 44:14 6.326m tts=0:41
+ 44:15 6.314m heartbeat=87
+ 44:16 6.295m heartbeat=86
+ 44:17 6.182m
+ 44:18 6.274m 90.52bar:0 tts=0:40
+ 44:19 6.337m tts=0:41
+ 44:20 6.036m
+ 44:21 6.088m tts=0:39 heartbeat=85
+ 44:23 5.979m tts=0:00
+ 44:24 5.924m tts=0:39
+ 44:25 5.883m tts=0:38
+ 44:28 5.982m 90.25bar:0 tts=0:00
+ 44:29 6.015m tts=0:38 heartbeat=86
+ 44:30 6.131m tts=0:39
+ 44:31 6.163m tts=0:40
+ 44:33 6.025m 90.04bar:0 tts=0:39 heartbeat=85
+ 44:34 6.248m
+ 44:35 6.122m tts=0:41
+ 44:36 6.408m tts=0:40 heartbeat=84
+ 44:37 6.185m tts=0:42
+ 44:38 6.076m 90.11bar:0 tts=0:40 heartbeat=83
+ 44:39 6.217m tts=0:39 heartbeat=82
+ 44:40 6.141m tts=0:40 heartbeat=81
+ 44:41 5.967m heartbeat=80
+ 44:42 5.657m tts=0:39
+ 44:43 5.587m 89.9bar:0 tts=0:37
+ 44:44 5.613m tts=0:36 heartbeat=81
+ 44:45 5.877m
+ 44:46 6.318m tts=0:38
+ 44:47 6.493m tts=0:41
+ 44:48 6.554m 89.63bar:0 tts=0:42 heartbeat=82
+ 44:49 6.559m tts=0:43
+ 44:50 6.61m heartbeat=84
+ 44:51 6.496m heartbeat=87
+ 44:52 6.553m tts=0:42 heartbeat=88
+ 44:53 6.647m 89.76bar:0 tts=0:43 heartbeat=89
+ 44:54 6.738m tts=0:44 heartbeat=90
+ 44:55 6.747m heartbeat=89
+ 44:56 6.796m heartbeat=87
+ 44:58 6.922m 89.49bar:0 tts=0:45 heartbeat=86
+ 44:59 6.935m heartbeat=83
+ 45:00 6.955m heartbeat=82
+ 45:01 6.99m heartbeat=81
+ 45:02 7.024m ndl=985:38 tts=0:46
+ 45:03 7.007m 89.21bar:0 ndl=998:51 tts=0:45
+ 45:04 6.927m ndl=0:00
+ 45:05 6.86m
+ 45:06 6.857m tts=0:44
+ 45:07 6.883m tts=0:45 heartbeat=80
+ 45:08 6.893m 89.08bar:0 tts=0:00
+ 45:09 6.903m tts=0:45
+ 45:12 6.849m tts=0:44
+ 45:13 6.784m 89.01bar:0 tts=0:00
+ 45:14 6.718m tts=0:44 heartbeat=79
+ 45:15 6.739m heartbeat=80
+ 45:16 6.769m heartbeat=81
+ 45:18 6.799m 88.73bar:0 tts=0:00
+ 45:19 6.814m tts=0:44
+ 45:20 6.849m
+ 45:23 6.716m tts=0:00
+ 45:24 6.671m tts=0:43
+ 45:25 6.626m heartbeat=82
+ 45:28 6.741m 88.25bar:0 tts=0:44 heartbeat=81
+ 45:29 6.793m
+ 45:31 6.698m tts=0:43
+ 45:32 6.715m tts=0:44
+ 45:33 6.708m 88.39bar:0 tts=0:00
+ 45:34 6.7m tts=0:43 heartbeat=82
+ 45:35 6.708m tts=0:44 heartbeat=81
+ 45:38 6.819m 88.11bar:0 heartbeat=82
+ 45:39 6.774m heartbeat=81
+ 45:40 6.703m tts=0:43
+ 45:41 6.776m tts=0:44
+ 45:42 6.791m heartbeat=82
+ 45:43 6.749m 88.18bar:0 tts=0:00
+ 45:44 6.707m tts=0:44 heartbeat=83
+ 45:45 6.667m tts=0:43
+ 45:47 6.635m heartbeat=82
+ 45:48 6.654m 87.9bar:0 heartbeat=81
+ 45:49 6.638m
+ 45:50 6.573m heartbeat=82
+ 45:51 6.473m tts=0:42
+ 45:52 6.388m tts=0:41 heartbeat=83
+ 45:53 6.294m 87.63bar:0
+ 45:54 6.185m tts=0:40
+ 45:55 6.019m tts=0:39
+ 45:56 5.95m heartbeat=82
+ 45:57 5.929m tts=0:38 heartbeat=83
+ 45:58 5.89m
+ 45:59 5.839m
+ 46:00 5.781m tts=0:37
+ 46:01 5.729m heartbeat=82
+ 46:02 5.679m heartbeat=83
+ 46:03 5.764m 87.56bar:0 tts=0:00
+ 46:04 5.849m tts=0:38 heartbeat=82
+ 46:06 5.848m heartbeat=83
+ 46:08 5.801m 87.28bar:0 tts=0:00
+ 46:09 5.778m tts=0:37
+ 46:10 5.778m heartbeat=82
+ 46:11 5.804m tts=0:38 heartbeat=83
+ 46:12 5.757m tts=0:37
+ 46:13 5.714m 87.35bar:0 heartbeat=82
+ 46:14 5.759m heartbeat=81
+ 46:15 5.907m tts=0:38 heartbeat=80
+ 46:16 5.883m heartbeat=79
+ 46:18 6.019m 87.08bar:0 tts=0:00
+ 46:19 6.087m tts=0:39
+ 46:20 6.055m heartbeat=80
+ 46:22 5.947m heartbeat=81
+ 46:23 5.874m 86.73bar:0 tts=0:00
+ 46:24 5.802m tts=0:39
+ 46:25 5.743m tts=0:38
+ 46:26 5.899m tts=0:37 heartbeat=82
+ 46:27 5.605m tts=0:38
+ 46:28 5.717m 86.87bar:0 tts=0:36
+ 46:29 5.804m tts=0:37
+ 46:30 5.828m tts=0:38
+ 46:31 5.808m heartbeat=81
+ 46:33 5.855m 86.66bar:0 tts=0:00
+ 46:34 5.879m tts=0:38
+ 46:35 5.908m heartbeat=82
+ 46:36 5.906m heartbeat=83
+ 46:37 5.861m heartbeat=84
+ 46:38 5.872m 86.46bar:0 heartbeat=85
+ 46:39 5.875m
+ 46:41 6.013m
+ 46:42 5.999m tts=0:39 heartbeat=86
+ 46:43 5.87m 86.32bar:0
+ 46:44 5.828m tts=0:38
+ 46:45 5.759m heartbeat=85
+ 46:46 5.768m tts=0:37
+ 46:47 5.609m
+ 46:48 5.415m 86.11bar:0 tts=0:36
+ 46:49 5.192m tts=0:35 heartbeat=86
+ 46:50 4.878m tts=0:34 heartbeat=85
+ 46:51 4.835m tts=0:32
+ 46:52 4.431m tts=0:31
+ 46:53 4.762m 86.25bar:0 tts=0:29
+ 46:54 4.463m tts=0:31
+ 46:55 4.664m tts=0:29
+ 46:56 4.742m tts=0:30
+ 46:57 4.524m tts=0:31
+ 46:58 4.673m 86.04bar:0 tts=0:29 heartbeat=86
+ 46:59 4.866m tts=0:30
+ 47:00 5.102m tts=0:31
+ 47:01 4.971m tts=0:33
+ 47:02 5.005m tts=0:32
+ 47:03 4.987m 85.7bar:0 tts=0:00
+ 47:04 4.969m tts=0:32
+ 47:05 4.897m heartbeat=85
+ 47:06 4.862m heartbeat=86
+ 47:07 4.778m tts=0:31
+ 47:08 4.755m 85.77bar:0
+ 47:09 4.554m
+ 47:10 4.912m tts=0:29
+ 47:11 4.719m tts=0:32
+ 47:12 4.703m tts=0:30
+ 47:13 4.638m 85.49bar:0 heartbeat=85
+ 47:14 4.645m
+ 47:15 4.6m heartbeat=86
+ 47:17 4.615m tts=0:29
+ 47:18 4.977m tts=0:30 heartbeat=87
+ 47:19 4.707m tts=0:32
+ 47:20 4.511m tts=0:30
+ 47:21 4.687m tts=0:29
+ 47:22 5.062m tts=0:30 heartbeat=88
+ 47:23 5.071m tts=0:33
+ 47:24 5.016m heartbeat=87
+ 47:25 4.79m tts=0:32
+ 47:26 4.843m tts=0:31
+ 47:27 4.897m heartbeat=88
+ 47:28 4.945m 84.94bar:0 tts=0:32
+ 47:29 5.141m heartbeat=89
+ 47:30 5.118m tts=0:33
+ 47:31 5.018m tts=0:32
+ 47:32 4.912m
+ 47:33 4.881m 84.8bar:0 tts=0:00
+ 47:34 4.85m tts=0:31
+ 47:35 4.871m heartbeat=90
+ 47:36 4.798m heartbeat=91
+ 47:37 4.828m heartbeat=92
+ 47:38 4.812m 84.52bar:0 heartbeat=93
+ 47:39 4.821m
+ 47:40 4.84m heartbeat=94
+ 47:41 4.961m tts=0:32 heartbeat=93
+ 47:43 4.915m 84.59bar:0 heartbeat=91
+ 47:44 4.945m heartbeat=89
+ 47:45 5.006m heartbeat=87
+ 47:46 4.994m heartbeat=85
+ 47:47 5.007m heartbeat=84
+ 47:48 5.099m 84.32bar:0 tts=0:33 heartbeat=83
+ 47:49 5.187m tts=0:34
+ 47:50 5.314m
+ 47:51 5.182m
+ 47:52 5.283m
+ 47:53 5.291m 84.25bar:0 tts=0:00
+ 47:54 5.299m tts=0:34
+ 47:55 5.329m heartbeat=82
+ 47:56 5.359m tts=0:35
+ 47:57 5.226m tts=0:34
+ 47:58 5.151m tts=0:33
+ 47:59 4.96m tts=0:32
+ 48:00 4.933m heartbeat=83
+ 48:01 4.865m tts=0:31 heartbeat=82
+ 48:02 4.795m
+ 48:03 4.806m tts=0:00
+ 48:04 4.816m tts=0:31
+ 48:07 4.751m heartbeat=83
+ 48:08 4.731m heartbeat=82
+ 48:09 4.938m tts=0:32 heartbeat=83
+ 48:10 5.153m tts=0:33 heartbeat=84
+ 48:11 5.363m tts=0:35 heartbeat=83
+ 48:12 5.416m heartbeat=82
+ 48:13 5.321m 83.7bar:0 tts=0:00
+ 48:14 5.226m tts=0:34
+ 48:15 5.107m tts=0:33 heartbeat=83
+ 48:16 4.972m tts=0:32
+ 48:17 4.875m tts=0:31 heartbeat=84
+ 48:18 4.655m tts=0:30
+ 48:19 4.456m tts=0:29
+ 48:20 4.299m tts=0:28 heartbeat=83
+ 48:21 4.171m tts=0:27 heartbeat=82
+ 48:22 4.108m tts=0:26
+ 48:23 4.222m 83.56bar:0 tts=0:27 heartbeat=81
+ 48:24 4.209m
+ 48:25 4.325m tts=0:28 heartbeat=82
+ 48:26 4.442m tts=0:29
+ 48:27 4.419m tts=0:28 heartbeat=81
+ 48:28 4.464m 83.35bar:0 tts=0:29
+ 48:29 4.586m tts=0:30 heartbeat=80
+ 48:30 4.694m
+ 48:31 4.773m tts=0:31 heartbeat=81
+ 48:32 4.856m
+ 48:33 4.92m 83.08bar:0 tts=0:32 heartbeat=82
+ 48:34 4.938m heartbeat=83
+ 48:35 4.936m heartbeat=84
+ 48:36 4.979m heartbeat=86
+ 48:38 4.752m 83.01bar:0 tts=0:31
+ 48:39 4.679m tts=0:30 heartbeat=85
+ 48:41 4.779m tts=0:31 heartbeat=84
+ 48:42 4.845m heartbeat=83
+ 48:43 4.85m 82.94bar:0 tts=0:00
+ 48:44 4.856m tts=0:31 heartbeat=82
+ 48:45 5.046m tts=0:33 heartbeat=81
+ 48:46 5.151m heartbeat=80
+ 48:47 5.206m tts=0:34
+ 48:48 5.161m 82.59bar:0 tts=0:00
+ 48:49 5.116m tts=0:33 heartbeat=81
+ 48:50 4.877m tts=0:32
+ 48:51 4.744m tts=0:31 heartbeat=82
+ 48:52 4.695m tts=0:30
+ 48:53 4.718m 82.66bar:0 tts=0:00
+ 48:54 4.741m tts=0:31
+ 49:00 4.948m tts=0:32
+ 49:02 5.037m tts=0:33
+ 49:03 5.005m 82.11bar:0 tts=0:32 heartbeat=81
+ 49:04 4.972m
+ 49:06 5.177m
+ 49:07 5.252m tts=0:33
+ 49:08 5.272m 81.84bar:0 tts=0:34 heartbeat=82
+ 49:09 5.365m heartbeat=81
+ 49:10 5.259m tts=0:35
+ 49:11 5.144m tts=0:34
+ 49:12 5.029m tts=0:33 heartbeat=82
+ 49:13 4.887m
+ 49:14 4.505m tts=0:32
+ 49:15 4.427m tts=0:29
+ 49:16 4.469m heartbeat=83
+ 49:18 4.453m 81.56bar:0 heartbeat=82
+ 49:19 4.367m
+ 49:20 4.305m tts=0:28 heartbeat=83
+ 49:23 4.332m 81.7bar:0 heartbeat=84
+ 49:24 4.387m
+ 49:28 4.415m 81.42bar:0 tts=0:29
+ 49:29 4.465m tts=0:28
+ 49:30 4.575m tts=0:29
+ 49:31 4.763m tts=0:30
+ 49:32 4.797m tts=0:31
+ 49:33 4.758m 81.22bar:0 tts=0:00
+ 49:34 4.72m tts=0:31
+ 49:35 4.666m tts=0:30 heartbeat=83
+ 49:36 4.635m heartbeat=84
+ 49:37 4.927m
+ 49:38 4.918m tts=0:32
+ 49:41 4.755m
+ 49:42 4.655m tts=0:31 heartbeat=85
+ 49:43 4.576m 81.08bar:0 tts=0:30
+ 49:44 4.605m
+ 49:45 4.635m heartbeat=86
+ 49:46 4.631m heartbeat=85
+ 49:47 4.548m
+ 49:48 4.514m 80.66bar:0 tts=0:29
+ 49:49 4.371m heartbeat=86
+ 49:50 4.255m tts=0:28
+ 49:51 4.271m tts=0:27
+ 49:52 4.231m tts=0:28
+ 49:53 4.149m 80.59bar:0 tts=0:27
+ 49:54 4.216m heartbeat=85
+ 49:55 4.324m heartbeat=86
+ 49:56 4.478m tts=0:28
+ 49:57 4.711m tts=0:29
+ 49:58 4.873m 80.46bar:0 tts=0:30
+ 49:59 5.103m tts=0:31
+ 50:00 5.123m tts=0:33
+ 50:03 4.806m tts=0:34
+ 50:04 4.909m tts=0:31
+ 50:05 4.867m tts=0:32
+ 50:06 4.97m tts=0:31 heartbeat=87
+ 50:07 4.951m tts=0:32
+ 50:08 5.028m
+ 50:09 5.122m
+ 50:10 5.266m tts=0:33 heartbeat=88
+ 50:11 5.007m tts=0:34
+ 50:12 5.201m tts=0:32
+ 50:13 5.122m 80.04bar:0 tts=0:34 heartbeat=87
+ 50:14 5.159m tts=0:33
+ 50:15 5.146m heartbeat=85
+ 50:16 5.19m tts=0:34
+ 50:17 5.172m tts=0:33
+ 50:18 5.141m 79.77bar:0 tts=0:00
+ 50:19 5.11m tts=0:33
+ 50:20 5.076m
+ 50:21 5.139m heartbeat=84
+ 50:22 5.187m tts=0:34
+ 50:23 5.478m 79.63bar:0 tts=0:35
+ 50:24 5.636m tts=0:36 heartbeat=86
+ 50:25 5.595m heartbeat=85
+ 50:27 5.647m tts=0:37
+ 50:28 5.644m 79.7bar:0 tts=0:00
+ 50:29 5.64m tts=0:37 heartbeat=84
+ 50:30 5.636m tts=0:36
+ 50:31 5.656m tts=0:37
+ 50:32 5.726m heartbeat=85
+ 50:33 5.493m 79.42bar:0 tts=0:36
+ 50:34 5.544m
+ 50:35 5.432m tts=0:35
+ 50:36 5.371m heartbeat=84
+ 50:37 5.392m heartbeat=85
+ 50:38 5.498m 79.28bar:0 tts=0:36 heartbeat=84
+ 50:39 5.603m
+ 50:40 5.497m heartbeat=83
+ 50:41 5.626m
+ 50:42 5.448m tts=0:35
+ 50:43 5.569m 79.15bar:0 tts=0:36 heartbeat=82
+ 50:44 5.708m tts=0:37 heartbeat=83
+ 50:45 5.835m tts=0:38
+ 50:46 5.894m heartbeat=84
+ 50:47 5.949m tts=0:39
+ 50:48 5.988m 79.01bar:0 heartbeat=83
+ 50:49 6.022m heartbeat=82
+ 50:52 5.937m tts=0:38
+ 50:53 5.908m heartbeat=81
+ 50:54 5.896m
+ 50:55 5.861m heartbeat=80
+ 50:56 5.804m
+ 50:57 5.76m tts=0:37
+ 50:58 5.77m 78.73bar:0 heartbeat=81
+ 50:59 5.796m tts=0:38
+ 51:00 5.918m
+ 51:01 5.663m tts=0:37
+ 51:02 5.655m heartbeat=82
+ 51:03 5.8m 78.46bar:0 tts=0:38 heartbeat=81
+ 51:04 5.901m
+ 51:05 5.994m tts=0:39
+ 51:06 5.794m tts=0:38
+ 51:07 6.052m tts=0:39
+ 51:08 5.705m 78.18bar:0 tts=0:37
+ 51:09 5.879m tts=0:38 heartbeat=82
+ 51:12 6.137m tts=0:40 heartbeat=83
+ 51:13 6.254m tts=0:41
+ 51:14 6.222m tts=0:40 heartbeat=85
+ 51:15 6.333m tts=0:41 heartbeat=86
+ 51:17 6.298m heartbeat=87
+ 51:18 6.418m 77.91bar:0 tts=0:42
+ 51:19 6.568m tts=0:43 heartbeat=88
+ 51:20 6.543m tts=0:42 heartbeat=89
+ 51:21 6.602m tts=0:43 heartbeat=90
+ 51:22 6.724m tts=0:44 heartbeat=88
+ 51:23 6.562m 77.77bar:0 tts=0:43
+ 51:24 6.406m tts=0:42
+ 51:25 6.258m tts=0:41 heartbeat=89
+ 51:26 6.269m heartbeat=90
+ 51:27 6.422m tts=0:42
+ 51:28 6.442m 77.84bar:0 tts=0:00
+ 51:29 6.461m tts=0:42
+ 51:32 6.494m heartbeat=88
+ 51:33 6.567m 77.56bar:0 tts=0:43
+ 51:34 6.553m tts=0:42 heartbeat=82
+ 51:35 6.466m heartbeat=83
+ 51:36 6.372m tts=0:41
+ 51:37 6.316m heartbeat=84
+ 51:38 6.271m 77.63bar:0 heartbeat=85
+ 51:39 6.288m
+ 51:40 5.974m tts=0:39
+ 51:43 5.959m 77.42bar:0 heartbeat=84
+ 51:44 5.899m tts=0:38
+ 51:46 5.946m tts=0:39
+ 51:48 5.568m 77.15bar:0 tts=0:36
+ 51:49 5.82m tts=0:38 heartbeat=83
+ 51:50 5.925m
+ 51:53 5.92m 77.22bar:0 tts=0:39
+ 51:54 5.763m tts=0:38
+ 51:55 5.612m tts=0:37
+ 51:56 5.479m tts=0:36 heartbeat=82
+ 51:57 5.212m tts=0:35
+ 51:58 4.982m 76.94bar:0 tts=0:34 heartbeat=83
+ 51:59 4.736m tts=0:32
+ 52:00 4.606m tts=0:31
+ 52:01 4.495m tts=0:30
+ 52:02 4.399m tts=0:29
+ 52:03 4.37m tts=0:28 heartbeat=84
+ 52:04 4.396m
+ 52:05 4.322m heartbeat=83
+ 52:08 4.224m 76.8bar:0 tts=0:00
+ 52:09 4.192m tts=0:28
+ 52:10 4.175m tts=0:27 heartbeat=82
+ 52:12 4.012m
+ 52:13 3.946m tts=0:26 heartbeat=83
+ 52:14 3.766m tts=0:25 heartbeat=84
+ 52:15 3.662m tts=0:24
+ 52:18 3.523m 76.53bar:0 tts=0:23 heartbeat=85
+ 52:19 3.519m
+ 52:21 3.219m tts=0:22 heartbeat=84
+ 52:22 3.056m tts=0:21 heartbeat=85
+ 52:23 2.85m 76.6bar:0 tts=0:20
+ 52:24 2.804m tts=0:18
+ 52:25 2.749m
+ 52:26 2.109m
+ 52:27 2.146m tts=0:13 heartbeat=84
+ 52:28 1.971m tts=0:14
+ 52:29 1.698m tts=0:12
+ 52:30 1.45m tts=0:11
+ 52:31 1.237m tts=0:09
+ 52:32 1.115m tts=0:08
+ 52:33 1.222m 76.25bar:0 tts=0:07 heartbeat=85
+ 52:34 1.223m tts=0:08 heartbeat=84
+ 52:36 0.973m tts=0:07
+ 52:37 0.775m tts=0:06
+ 52:38 0.507m 75.7bar:0 tts=0:05 heartbeat=83
+ 52:39 0.251m tts=0:03 heartbeat=82
+ 52:40 0.082m tts=0:01 heartbeat=81
+ 52:41 0.12m tts=0:00 heartbeat=80
+ 52:43 0.106m tts=0:01
+ 52:44 0.169m tts=0:00
+ 52:45 0.001m tts=0:01
+ 52:46 0.0m 73.84bar:0 tts=0:00 heartbeat=81
+ 52:50 0.085m heartbeat=84
+ 52:56 0.195m heartbeat=86
+ 52:57 0.014m tts=0:01
+ 52:58 0.106m tts=0:00 heartbeat=87
+ 53:00 0.227m heartbeat=86
+ 53:01 0.128m tts=0:01
+ 53:02 0.135m tts=0:00
+ 53:03 0.09m 74.29bar:0
+ 53:04 0.0m
+ 53:05 0.0m 74.32bar:0
+ 53:06 0.0m heartbeat=89
+ 53:08 0.244m tts=0:01 heartbeat=92
+ 53:09 0.126m tts=0:00 heartbeat=93
+ 53:10 0.255m tts=0:01
+ 53:14 0.07m tts=0:00 heartbeat=90
+ 53:16 0.23m tts=0:01 heartbeat=91
+ 53:17 0.105m tts=0:00
+ 53:18 0.165m tts=0:01 heartbeat=92
+ 53:19 0.126m tts=0:00 heartbeat=93
+ 53:21 0.228m tts=0:01
+ 53:22 0.129m tts=0:00 heartbeat=94
+ 53:23 0.1m heartbeat=95
+ 53:24 0.272m tts=0:01 heartbeat=96
+ 53:25 0.056m tts=0:00
+ 53:26 0.175m tts=0:01 heartbeat=97
+ 53:28 0.028m tts=0:00
+ 53:31 0.167m tts=0:01 heartbeat=95
+ 53:32 0.016m tts=0:00 heartbeat=94
+ 53:34 0.193m tts=0:01
+ 53:35 0.152m tts=0:00
+ 53:36 0.11m
+ 53:38 0.164m tts=0:01
+ 53:39 0.127m tts=0:00 heartbeat=93
+ 53:40 0.045m
+ 53:41 0.236m tts=0:01 heartbeat=94
+ 53:42 0.106m tts=0:00
+ 53:45 0.286m tts=0:01 heartbeat=96
+ 53:46 0.319m tts=0:02
+ 53:47 0.146m tts=0:00 heartbeat=97
+ 53:48 0.189m tts=0:01 heartbeat=98
+ 53:49 0.149m tts=0:00 heartbeat=99
+ 53:50 0.242m tts=0:01
+ 53:51 0.059m tts=0:00 heartbeat=100
+ 53:53 0.222m tts=0:01 heartbeat=103
+ 53:54 0.249m
+ 53:55 0.077m tts=0:00
+ 53:56 0.184m tts=0:01 heartbeat=104
+ 53:58 0.322m tts=0:02 heartbeat=107
+ 53:59 0.176m tts=0:01
+ 54:00 0.074m tts=0:00
+ 54:02 0.107m 74.92bar:0
+ 54:06 0.172m tts=0:01 heartbeat=104
+ 54:07 0.293m
+ 54:08 0.108m tts=0:00
+ 54:09 0.222m tts=0:01 heartbeat=103
+ 54:10 0.141m 74.94bar:0 tts=0:00 heartbeat=104
+ 54:11 0.0m
+ 54:13 0.371m tts=0:02 heartbeat=106
+ 54:14 0.218m tts=0:01 heartbeat=105
+ 54:15 0.106m tts=0:00 heartbeat=106
+ 54:20 0.165m tts=0:01 heartbeat=104
+ 54:21 0.22m heartbeat=102
+ 54:23 0.378m tts=0:02
+ 54:25 0.301m tts=0:01 heartbeat=105
+ 54:26 0.348m tts=0:02
+ 54:27 0.185m tts=0:01
+ 54:28 0.364m tts=0:02
+ 54:29 0.175m tts=0:01 heartbeat=104
+ 54:30 0.005m tts=0:00 heartbeat=103
+ 54:31 0.151m heartbeat=102
+ 54:32 0.214m tts=0:01
+ 54:34 0.433m tts=0:02
+ 54:35 0.236m tts=0:01 heartbeat=103
+ 54:38 0.114m 75.09bar:0 tts=0:00
+ 54:39 0.074m tts=0:01 heartbeat=104
+ 54:40 0.0m tts=0:00 heartbeat=103
+ 54:41 0.0m 75.04bar:0
+ 54:42 0.0m 75.09bar:0 heartbeat=100
+ 54:43 0.034m 75.04bar:0
+ 54:45 0.103m 75.09bar:0 heartbeat=101
+ 54:46 0.0m heartbeat=100
+ 54:49 0.253m heartbeat=101
+ 54:50 0.245m tts=0:01
+ 54:51 0.0m
+ 54:52 0.193m tts=0:00
+ 54:53 0.479m tts=0:01
+ 54:54 0.13m tts=0:03
+ 54:55 0.191m tts=0:00 heartbeat=100
+ 54:56 0.227m tts=0:01 heartbeat=99
+ 54:57 0.308m
+ 54:58 0.034m tts=0:02 heartbeat=98
+ 54:59 0.0m tts=0:00 heartbeat=97
+ 55:03 0.221m heartbeat=95
+ 55:04 0.098m 75.12bar:0 tts=0:01
+ 55:05 0.0m 75.09bar:0 tts=0:00 heartbeat=94
+ 55:06 0.002m 75.12bar:0
+ 55:08 0.007m
+ 55:09 0.009m heartbeat=91
+ 55:11 0.0m heartbeat=94
+ 55:13 0.0m heartbeat=101
+ 55:14 0.0m heartbeat=104
+ 55:16 0.082m heartbeat=108
+ 55:17 0.049m heartbeat=111
+ 55:18 0.019m
+ 55:19 0.344m heartbeat=108
+ 55:20 0.508m tts=0:02
+ 55:21 0.667m tts=0:03 heartbeat=106
+ 55:22 0.613m tts=0:04 heartbeat=99
+ 55:24 0.787m
+ 55:25 0.315m tts=0:05
+ 55:26 0.0m 75.14bar:0 tts=0:02
+ 55:27 0.0m tts=0:00
+ 55:28 0.174m
+ 55:29 0.0m tts=0:01 heartbeat=100
+ 55:30 0.0m 75.19bar:0 tts=0:00 heartbeat=99
+ 55:31 0.0m 75.14bar:0
+ 55:32 0.0m heartbeat=100
+ 55:33 0.0m 75.19bar:0
+ 55:34 0.0m 75.14bar:0
+ 55:35 0.0m heartbeat=99
+ 55:36 0.0m
+ 55:37 0.0m
+ 55:38 0.0m 75.19bar:0
+ 55:39 -0.001m
+  0:01 -0.001m

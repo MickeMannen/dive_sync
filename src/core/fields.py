@@ -31,7 +31,7 @@ from src.core.models import GasMixture, UnifiedDive, UnifiedSample
 
 FieldType = Literal["text", "number", "datetime", "gps", "list", "tanks", "samples"]
 LinkDirection = Literal["bidirectional", "to_target", "to_source", "off"]
-ConflictPolicy = Literal["source_wins", "target_wins", "prefer_non_empty", "manual"]
+ConflictPolicy = Literal["source_wins", "target_wins", "prefer_non_empty", "prefer_source", "manual"]
 
 # Field types a match key (FieldLink.match_order) may have.
 MATCH_KEY_TYPES = ("number", "datetime")
@@ -75,6 +75,13 @@ class FieldLink(BaseModel):
     target: str = Field(..., description="Catalogue key of the field this link writes")
     direction: LinkDirection = "bidirectional"
     conflict: ConflictPolicy = "source_wins"
+    # ("prefer_source": mirror whichever side is named "source" whenever it
+    #  has a value, but never blank the other side from an empty source;
+    #  falls back to the non-source side's value when source is empty.
+    #  Added 2026-09-22 for the default `tanks` link: a manual Garmin dive
+    #  with no gas API data must not erase real tank data already recorded
+    #  on the target, but a Garmin dive that *does* have tanks should always
+    #  replace stale target data rather than only filling a blank field.)
     template: Optional[str] = Field(None, description="'{key}' template; required when len(source) > 1")
     reverse: Optional[str] = Field(None, description="Parse pattern for a composite (regex with named groups); later item C21")
     match_order: Optional[int] = Field(None, description="Set: this link is also a match key, tried in this order")
@@ -303,7 +310,12 @@ def is_empty(field_type: str, value: Any) -> bool:
 def copy_value(field_type: str, value: Any) -> Any:
     """Value to write to the other side. Tanks lose their name on the way,
     exactly as the old Garmin->Divelogs gas copy did (Garmin tank names are
-    sensor names, not meaningful on the other service; E5 revisits this)."""
+    sensor names, not meaningful on the other service). tank_role travels
+    through unchanged (E5): it is real multi-tank information a target
+    adapter may itself be unable to store (e.g. Divelogs has no slot for
+    it), in which case the adapter's own write path drops it, but the
+    engine must not discard it pre-emptively for pairs that do model it
+    (Submersion <-> Subsurface)."""
     if value is None:
         return None
     if field_type == "tanks":
@@ -314,6 +326,7 @@ def copy_value(field_type: str, value: Any) -> Any:
                 start_pressure=gm.start_pressure,
                 end_pressure=gm.end_pressure,
                 tank_volume=gm.tank_volume,
+                tank_role=gm.tank_role,
             )
             for gm in value
         ]
@@ -436,11 +449,19 @@ MATCH_KEY_MAX_HOURS = 24  # a match-key hit only counts when the dives start wit
 
 def common_default_links(source_id: str, target_id: str, match_on_dive_number: bool = True) -> List[FieldLink]:
     """The shipped links every pair starts with, on the unified fields both
-    services have. Policy is ``prefer_non_empty`` throughout (decided
+    services have. Scalar fields use ``prefer_non_empty`` (decided
     2026-09-21 after the live baseline): a blank side is filled from the
     other, a real conflict is left alone and logged, nothing is ever wiped.
-    Tanks and samples go one way to the target. The dive-number link is a
-    match key only where both services let the user set the number."""
+    ``tanks`` is ``prefer_source`` (decided 2026-09-22): it is a one-way
+    structural link already (``to_target``), so this mirrors whichever side
+    is the dive computer / source of truth for gas data (Garmin in every
+    pair configured so far) whenever that side has tank data, which fixes
+    the case where a target already had *some* (stale) tanks and
+    ``prefer_non_empty`` refused to update them. A source with no tank data
+    at all (a manually created Garmin dive) still never blanks a target
+    that has real tank data. ``samples`` stays fill-only for now. The dive-number
+    link is a match key only where both services let the user set the
+    number."""
     s, t = source_id, target_id
     fill = "prefer_non_empty"
     links = [
@@ -450,7 +471,7 @@ def common_default_links(source_id: str, target_id: str, match_on_dive_number: b
         FieldLink(id="visibility", source=[f"{s}.visibility"], target=f"{t}.visibility", conflict=fill),
         FieldLink(id="gps", source=[f"{s}.gps"], target=f"{t}.gps", conflict=fill),
         FieldLink(id="samples", source=[f"{s}.samples"], target=f"{t}.samples", direction="to_target", conflict=fill),
-        FieldLink(id="tanks", source=[f"{s}.tanks"], target=f"{t}.tanks", direction="to_target", conflict=fill),
+        FieldLink(id="tanks", source=[f"{s}.tanks"], target=f"{t}.tanks", direction="to_target", conflict="prefer_source"),
     ]
     if match_on_dive_number:
         links.append(FieldLink(id="dive_number", source=[f"{s}.dive_number"], target=f"{t}.dive_number",

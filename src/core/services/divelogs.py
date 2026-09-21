@@ -285,6 +285,9 @@ class DivelogsAdapter(BaseDiveAdapter):
             vol = float(vol) if vol not in [None, ""] else None
 
             t_name = tank.get("tankname") or tank.get("tank") or None
+            # Divelogs has no tank "role" field; leave tank_role unmapped
+            # rather than inventing one from "dbltank" (a manifold/twinset
+            # flag, not a per-tank role).
 
             if self.imperial_units:
                 # PSI to Bar
@@ -498,13 +501,19 @@ class DivelogsAdapter(BaseDiveAdapter):
                     vol = vol / 28.3168
 
             tanks.append({
+                "index": idx,
                 "o2": gas.oxygen,
                 "he": gas.helium,
                 "start_pressure": start_p,
                 "end_pressure": end_p,
                 "vol": vol,
                 "tankname": gas.tank_name or "",
-                "tank": gas.tank_name or ""
+                "tank": gas.tank_name or "",
+                # Divelogs has no per-tank role field; "dbltank" is the one
+                # multi-tank concept it exposes (a manifolded twinset, i.e.
+                # two cylinders sharing one gas supply/reading). We don't
+                # have enough information to infer that safely, so it's left
+                # at the service's own default rather than guessed.
             })
 
         # Convert weight from Garmin to Divelogs unit preference

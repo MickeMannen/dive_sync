@@ -275,6 +275,39 @@ def test_policy_prefer_non_empty_fills_blanks_only(tmp_path):
     assert (g.buddy, d.buddy) == ("A", "B") and not res["updated_on_garmin"] and not res["updated_on_divelogs"]
 
 
+def test_policy_prefer_source_mirrors_when_source_has_data(tmp_path):
+    """prefer_source (added 2026-09-22 for the default tanks link): unlike
+    prefer_non_empty, a non-empty source always overwrites a non-empty
+    target (fixes the real bug where a target's stale tank data survived
+    forever); unlike source_wins, an empty source never blanks a target
+    that already has real data."""
+    link = FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="prefer_source")
+    # source has data, target has different data -> source overwrites (the fix)
+    g, d, res = _one_link(tmp_path, {"buddy": "A"}, {"buddy": "B"}, link)
+    assert (g.buddy, d.buddy) == ("A", "A") and len(res["updated_on_divelogs"]) == 1
+    # source empty, target has data -> target kept, source filled from target (bidirectional fallback)
+    g, d, res = _one_link(tmp_path, {"buddy": None}, {"buddy": "B"}, link)
+    assert (g.buddy, d.buddy) == ("B", "B") and len(res["updated_on_garmin"]) == 1 and not res["updated_on_divelogs"]
+    # both empty -> no-op
+    g, d, res = _one_link(tmp_path, {"buddy": None}, {"buddy": None}, link)
+    assert not res["updated_on_garmin"] and not res["updated_on_divelogs"]
+
+    # one-way (to_target) case, as the default tanks link actually uses:
+    # source non-empty always mirrors, even onto a non-empty target
+    one_way = FieldLink(id="tanks", source=["garmin.tanks"], target="divelogs.tanks", direction="to_target",
+                        conflict="prefer_source")
+    g, d = _pair({"gas_mixtures": [GasMixture(oxygen=32.0, start_pressure=200.0)]},
+                {"gas_mixtures": [GasMixture(oxygen=21.0, start_pressure=150.0)]})
+    engine = _engine(tmp_path, [g], [d], field_links=[one_way])
+    res = engine.run_sync(dry_run=False)
+    assert [t.oxygen for t in d.gas_mixtures] == [32.0] and len(res["updated_on_divelogs"]) == 1
+    # source empty (manual Garmin dive, no gas API data) -> target's real tanks are never wiped
+    g2, d2 = _pair({"gas_mixtures": []}, {"gas_mixtures": [GasMixture(oxygen=21.0, start_pressure=150.0)]})
+    engine2 = _engine(tmp_path, [g2], [d2], field_links=[one_way])
+    res2 = engine2.run_sync(dry_run=False)
+    assert [t.oxygen for t in d2.gas_mixtures] == [21.0] and not res2["updated_on_divelogs"]
+
+
 def test_policy_manual_skips_real_conflicts(tmp_path):
     link = FieldLink(id="notes", source=["garmin.notes"], target="divelogs.notes", conflict="manual")
     g, d, res = _one_link(tmp_path, {"notes": "A"}, {"notes": "B"}, link)

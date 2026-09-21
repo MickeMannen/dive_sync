@@ -8,7 +8,16 @@ class GasMixture(BaseModel):
     start_pressure: Optional[float] = Field(None, description="Starting pressure in bar")
     end_pressure: Optional[float] = Field(None, description="Ending pressure in bar")
     tank_volume: Optional[float] = Field(None, description="Tank volume in liters")
-    tank_name: Optional[str] = Field(None, description="Custom name of the tank/cylinder")
+    tank_name: Optional[str] = Field(None, description="Custom name of the tank/cylinder (e.g. a transmitter name or user label)")
+    tank_role: Optional[str] = Field(
+        None,
+        description=(
+            "Role of this tank in a multi-tank setup, e.g. 'backGas', 'stage', 'deco', 'bailout', "
+            "'sidemountLeft', 'sidemountRight', 'diluent', 'oxygen', 'not_used'. Services model this "
+            "differently (or not at all); see each adapter's mapping. Order in gas_mixtures is the "
+            "primary source of tank order across all services."
+        ),
+    )
 
 class UnifiedSample(BaseModel):
     depth: float = Field(..., description="Depth in meters")

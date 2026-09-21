@@ -550,3 +550,35 @@ def test_engine_passes_zone_override_to_garmin(tmp_path):
     engine.run_sync(dry_run=True)
     assert engine.source.helper.upload_timezone is None  # mock wraps a helper adapter, no override needed
     assert engine.settings.garmin_timezone == "Europe/Stockholm"
+
+
+# ---------------------------------------------------------------- E5: tank order and role
+
+def test_divelogs_sends_tank_index_and_preserves_order():
+    from src.core.services.divelogs import DivelogsAdapter
+    from src.core.models import GasMixture
+    d = DivelogsAdapter("dummy", "dummy")
+    dive = UnifiedDive(date_time=datetime(2026, 6, 22, 12), duration=100, max_depth=10.0, gas_mixtures=[
+        GasMixture(oxygen=21.0, start_pressure=200.0, end_pressure=60.0, tank_volume=11.1, tank_name="Left"),
+        GasMixture(oxygen=32.0, start_pressure=210.0, end_pressure=80.0, tank_volume=7.0, tank_name="Stage"),
+    ])
+    payload = d._map_from_unified(dive)
+    assert [t["index"] for t in payload["tanks"]] == [0, 1]
+    assert [t["tankname"] for t in payload["tanks"]] == ["Left", "Stage"]
+    # round trip back: order preserved, no role invented
+    back = d._map_to_unified({"date": "2026-06-22", "time": "12:00:00", "duration": 100, "maxdepth": 10.0,
+                              "tanks": payload["tanks"]})
+    assert [g.tank_name for g in back.gas_mixtures] == ["Left", "Stage"]
+    assert all(g.tank_role is None for g in back.gas_mixtures)
+
+
+def test_garmin_tank_role_stays_unmapped():
+    """Garmin's diveGases 'status' field has no verified meaning (E4); reading
+    must not invent a role from it."""
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    details = {"summaryDTO": {"startTimeLocal": "2026-06-22T12:00:00", "duration": 100, "maxDepth": 10.0},
+              "diveInfo": {"diveGases": [{"gasIndex": 0, "oxygenContent": 21, "status": 0},
+                                        {"gasIndex": 1, "oxygenContent": 21, "status": 2}]}}
+    dive = g._map_to_unified({}, details)
+    assert len(dive.gas_mixtures) == 2 and all(t.tank_role is None for t in dive.gas_mixtures)

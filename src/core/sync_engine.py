@@ -439,10 +439,14 @@ class SyncEngine:
         sides this link *and* the global directionality allow writing decide:
         with exactly one writable side the other side is the origin and is
         copied over (``prefer_non_empty`` / ``manual`` copy only into a blank
-        field); with both sides writable the link's ``conflict`` policy picks
-        the winner (``source_wins`` / ``target_wins`` always copy, the other
-        two only fill blanks and leave a real conflict alone; ``manual`` also
-        records it). A templated link renders its text first and can only
+        field; ``prefer_source`` copies whenever the source side has a value,
+        never wiping the destination from an empty source); with both sides
+        writable the link's ``conflict`` policy picks the winner
+        (``source_wins`` / ``target_wins`` always copy, ``prefer_non_empty``
+        / ``manual`` only fill blanks and leave a real conflict alone,
+        ``prefer_source`` copies from source whenever source has a value and
+        otherwise falls back to target; ``manual`` also records the
+        conflict). A templated link renders its text first and can only
         write its target."""
         src_dive = self._dive_for(src_spec.service_id, a_dive, b_dive)
         tgt_dive = self._dive_for(tgt_spec.service_id, a_dive, b_dive)
@@ -479,6 +483,8 @@ class SyncEngine:
                 winner = "source"
             elif policy == "target_wins":
                 winner = "target"
+            elif policy == "prefer_source":
+                winner = "source" if not src_empty else ("target" if not tgt_empty else None)
             elif tgt_empty and not src_empty:
                 winner = "source"
             elif src_empty and not tgt_empty:
@@ -487,11 +493,17 @@ class SyncEngine:
                 winner = None
         else:
             origin = "source" if can_write_tgt else "target"
-            if not fill_only:
+            dest_empty = tgt_empty if origin == "source" else src_empty
+            origin_empty = src_empty if origin == "source" else tgt_empty
+            if policy == "prefer_source":
+                # Only one side is writable here, so there is no other side
+                # to fall back to: mirror the writable side whenever it has
+                # a value, and otherwise leave the destination untouched
+                # rather than blank it from an empty origin.
+                winner = origin if not origin_empty else None
+            elif not fill_only:
                 winner = origin
             else:
-                dest_empty = tgt_empty if origin == "source" else src_empty
-                origin_empty = src_empty if origin == "source" else tgt_empty
                 winner = origin if (dest_empty and not origin_empty) else None
 
         label = tgt_spec.label if winner != "target" else src_spec.label
