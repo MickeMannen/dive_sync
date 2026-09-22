@@ -7,9 +7,12 @@ writes as this device's base under its own ``deviceId`` and HLC clock. This
 version publishes a full base each time it writes (simple and correct for a
 few-MB library); incremental changesets are a later optimisation.
 
-Storage is an S3 bucket or a local folder behind ``SyncStore``. End-to-end
-encrypted stores are refused with a clear message. On start-up the adapter
-checks for its own ``.retired.json`` and re-joins with a fresh device id.
+Storage is an S3 bucket or a local folder behind ``SyncStore``. An end-to-end
+encrypted store (rework.md E11) is unlocked in ``login()`` from the cloud
+keyslot file and the passphrase in ``SubmersionCredentials.passphrase``; with
+no passphrase configured (or a wrong one), login fails with a clear message
+rather than reading garbage. On start-up the adapter checks for its own
+``.retired.json`` and re-joins with a fresh device id.
 """
 from __future__ import annotations
 
@@ -18,13 +21,13 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.adapter import BaseDiveAdapter
 from src.core.config import SubmersionCredentials
 from src.core.fields import FieldSpec
 from src.core.models import UnifiedDive
-from src.core.services.submersion import codec, store as st
+from src.core.services.submersion import codec, crypto, store as st
 from src.core.services.submersion.hlc import HlcClock, hlc_key
 from src.core.services.submersion.library import SERVICE_ID, Library, dive_to_unified
 
@@ -114,7 +117,42 @@ class SubmersionAdapter(BaseDiveAdapter):
         if not ok:
             logger.error("Submersion store check failed: %s", message)
             return False
+        try:
+            ok, message = self._resolve_encryption()
+        except Exception as e:
+            logger.error("Submersion encryption check failed: %s", e)
+            return False
+        if not ok:
+            logger.error("Submersion: %s", message)
+            return False
+        if message:
+            logger.info("Submersion: %s", message)
         return True
+
+    def _resolve_encryption(self) -> Tuple[bool, str]:
+        """Fetch the cloud keyslot file, if any, and unlock it with the
+        configured passphrase (rework.md E11). Sets ``self.store.encryption``
+        so every read/write of an ``ssv1.*`` file seals/opens correctly.
+        Returns ``(ok, message)``; an empty message on success means "nothing
+        to do" (the store isn't encrypted) so ``login`` doesn't log noise on
+        every plaintext-store run."""
+        if not self.store.exists(crypto.KeyslotFile.CLOUD_FILE_NAME):
+            self.store.encryption = None
+            return True, ""
+        try:
+            keyslot_file = crypto.KeyslotFile.from_json_bytes(self.store.get(crypto.KeyslotFile.CLOUD_FILE_NAME))
+        except Exception as e:
+            return False, f"the keyslot file ({crypto.KeyslotFile.CLOUD_FILE_NAME}) is unreadable: {e}"
+        if not self.config.passphrase:
+            return False, ("this store is end-to-end encrypted; set a passphrase in its credentials to sync with it "
+                           "(Submersion's own Settings > Sync > End-to-end encryption screen shows it once, when "
+                           "first enabled)")
+        mlk = crypto.try_unwrap(keyslot_file, self.config.passphrase)
+        if mlk is None:
+            return False, "the configured passphrase does not unlock this store's encrypted library"
+        self.store.encryption = st.SubmersionEncryption(
+            data_key=crypto.derive_data_key(mlk), library_key_id=keyslot_file.library_key_id)
+        return True, f"unlocked encrypted library {keyslot_file.library_key_id}"
 
     def _load_library(self) -> None:
         self.library = Library()

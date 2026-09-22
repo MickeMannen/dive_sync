@@ -195,6 +195,7 @@ function credentialsPayload() {
     secret_access_key: $("submersion-secret-access-key").value,
     path_style: $("submersion-path-style").checked,
     folder_path: $("submersion-folder-path").value.trim(),
+    passphrase: $("submersion-passphrase").value,
   };
   const submersionSet = storeType === "folder"
     ? !!submersion.folder_path

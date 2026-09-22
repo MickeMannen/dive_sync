@@ -378,6 +378,31 @@ def test_credentials_api_preserves_subsurface_and_submersion(tmp_path, monkeypat
     assert body["garmin"] is None
 
 
+def test_credentials_test_checks_submersion_passphrase_after_connectivity(monkeypatch):
+    """rework.md E11: once the store itself is reachable, /api/credentials/test
+    also tries to unlock an end-to-end encrypted library, so a wrong or
+    missing passphrase is reported here rather than only on the next sync."""
+    from src.core.services.submersion import store as submersion_store
+    from src.core.services.submersion.adapter import SubmersionAdapter
+    client = TestClient(app)
+    submersion = {"endpoint_url": "https://x", "region": "r", "bucket": "b",
+                  "access_key_id": "id", "secret_access_key": "key"}
+    monkeypatch.setattr(submersion_store, "check_store_access", lambda c: (True, "S3 store OK"))
+
+    monkeypatch.setattr(SubmersionAdapter, "_resolve_encryption",
+                        lambda self: (False, "the configured passphrase does not unlock this store's encrypted library"))
+    body = client.post("/api/credentials/test", json={"submersion": submersion}).json()
+    assert body["submersion"] is False and "does not unlock" in body["submersion_message"]
+
+    monkeypatch.setattr(SubmersionAdapter, "_resolve_encryption", lambda self: (True, ""))
+    body = client.post("/api/credentials/test", json={"submersion": submersion}).json()
+    assert body["submersion"] is True and body["submersion_message"] == "S3 store OK"
+
+    monkeypatch.setattr(SubmersionAdapter, "_resolve_encryption", lambda self: (True, "unlocked encrypted library abc"))
+    body = client.post("/api/credentials/test", json={"submersion": submersion}).json()
+    assert body["submersion"] is True and "unlocked encrypted library abc" in body["submersion_message"]
+
+
 # ---------------------------------------------------------------- phase 6 endpoints
 
 class _FakeEngine:

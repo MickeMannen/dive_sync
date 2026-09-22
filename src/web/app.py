@@ -375,6 +375,22 @@ def test_credentials(data: CredentialsSchema):
     if data.submersion is not None and data.submersion.configured:
         from src.core.services.submersion.store import check_store_access
         ok, message = check_store_access(data.submersion)
+        if ok:
+            # Connectivity is fine; also try to unlock an end-to-end
+            # encrypted library so a wrong/missing passphrase surfaces here
+            # rather than only on the next real sync.
+            import tempfile
+            from src.core.services.submersion.adapter import SubmersionAdapter
+            with tempfile.TemporaryDirectory() as scratch:
+                adapter = SubmersionAdapter(data.submersion, device_state_dir=scratch)
+                try:
+                    enc_ok, enc_message = adapter._resolve_encryption()
+                except Exception as e:
+                    enc_ok, enc_message = False, str(e)
+                if not enc_ok:
+                    ok, message = False, enc_message
+                elif enc_message:
+                    message = f"{message} {enc_message}."
         results["submersion"] = ok
         results["submersion_message"] = message
 

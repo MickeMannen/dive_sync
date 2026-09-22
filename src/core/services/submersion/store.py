@@ -5,10 +5,20 @@ one prefix (see ``docs/submersion_sync_format.md``). ``S3Store`` talks to any
 S3-compatible bucket through ``boto3``; Backblaze B2 is the recommended
 hosted option. ``boto3`` is imported lazily so the rest of dive_sync does not
 need it installed.
+
+When the library is end-to-end encrypted (rework.md E11), every ``ssv1.*``
+and ``submersion_library_epoch.json`` file is an SBE1 envelope (``crypto.py``);
+the one exception is ``submersion_keyslots.json`` itself, always plaintext.
+A store's optional ``encryption`` attribute (``SubmersionEncryption``, set by
+``SubmersionAdapter.login()`` once it has unlocked the keyslot file) is what
+``ensure_plain``/``write_json``/``publish_base`` check to seal writes and open
+reads; a store with no such attribute (or set to ``None``) behaves exactly as
+an unencrypted one always has.
 """
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import hashlib
@@ -18,6 +28,7 @@ import re
 import uuid
 
 from src.core.config import SubmersionCredentials
+from src.core.services.submersion import crypto
 
 logger = logging.getLogger("dive_sync.submersion.store")
 
@@ -64,16 +75,38 @@ class StoreError(RuntimeError):
 
 
 class EncryptedStoreError(StoreError):
-    """The store holds end-to-end encrypted files; dive_sync cannot read them."""
+    """The store holds end-to-end encrypted files dive_sync cannot read: either
+    no passphrase is configured, the configured one does not unlock this
+    library, or (rare) an envelope is corrupt/tampered."""
 
 
-def ensure_plain(data: bytes, name: str) -> bytes:
-    if data[:4] == ENCRYPTED_MAGIC:
+@dataclass(frozen=True)
+class SubmersionEncryption:
+    """Set on a store (``store.encryption``) once ``SubmersionAdapter.login()``
+    has unlocked the cloud keyslot file. ``data_key`` is the HKDF-derived
+    per-purpose key (``crypto.derive_data_key``), never the master library key
+    itself."""
+    data_key: bytes
+    library_key_id: str
+
+
+def ensure_plain(data: bytes, name: str, encryption: Optional[SubmersionEncryption] = None) -> bytes:
+    if data[:4] != ENCRYPTED_MAGIC:
+        return data
+    if encryption is None:
         raise EncryptedStoreError(
-            f"{name} is end-to-end encrypted (SBE1). dive_sync cannot read encrypted Submersion stores; "
-            "turn off end-to-end encryption in Submersion's sync settings for this store."
+            f"{name} is end-to-end encrypted (SBE1). Set a passphrase in this store's Submersion credentials, "
+            "or turn off end-to-end encryption in Submersion's sync settings for this store."
         )
-    return data
+    try:
+        return crypto.open_envelope(data, encryption.data_key, encryption.library_key_id, name)
+    except crypto.WrongLibraryKeyError as e:
+        raise EncryptedStoreError(
+            f"{name} is encrypted under a different library key ({e.library_key_id}); "
+            "the configured passphrase unlocked a different Submersion library than this file belongs to."
+        ) from e
+    except crypto.EnvelopeCorruptError as e:
+        raise EncryptedStoreError(f"{name} failed to decrypt: {e}") from e
 
 
 def data_checksum(data: Dict[str, Any]) -> str:
@@ -87,6 +120,14 @@ def encode_payload(payload: Dict[str, Any]) -> bytes:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def write_bytes(store, name: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+    """``store.put``, sealing ``data`` first when the store is encrypted."""
+    encryption = getattr(store, "encryption", None)
+    if encryption is not None:
+        data = crypto.seal(data, encryption.data_key, encryption.library_key_id, name)
+    store.put(name, data, content_type)
+
+
 def file_checksum(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
@@ -96,6 +137,7 @@ class FolderStore:
 
     def __init__(self, path: str):
         self.path = path
+        self.encryption: Optional[SubmersionEncryption] = None
 
     def list(self, name_prefix: str = "") -> List[str]:
         if not os.path.isdir(self.path):
@@ -134,7 +176,7 @@ def open_store(config: SubmersionCredentials):
 # ---------------------------------------------------------------------------
 
 def read_json(store, name: str) -> Dict[str, Any]:
-    return json.loads(ensure_plain(store.get(name), name).decode("utf-8"))
+    return json.loads(ensure_plain(store.get(name), name, getattr(store, "encryption", None)).decode("utf-8"))
 
 
 def list_devices(store) -> Dict[str, Dict[str, Any]]:
@@ -177,7 +219,7 @@ def read_base(store, device_id: str, manifest: Dict[str, Any]) -> Dict[str, Any]
     chunks = []
     for part in range(parts):
         name = base_name(device_id, seq, part)
-        chunks.append(ensure_plain(store.get(name), name))
+        chunks.append(ensure_plain(store.get(name), name, getattr(store, "encryption", None)))
     data = b"".join(chunks)
     expected = manifest.get("baseChecksum")
     if expected and file_checksum(data) != expected:
@@ -237,12 +279,17 @@ def build_payload(device_id: str, data: Dict[str, List[Dict[str, Any]]], deletio
 def publish_base(store, device_id: str, device_name: str, payload: Dict[str, Any], applied_peer_hlc: Dict[str, str],
                  provider: str, now_ms: int) -> Dict[str, Any]:
     """Write the base parts, then the manifest (last, so readers never see a
-    manifest pointing at missing parts). Returns the manifest."""
+    manifest pointing at missing parts). Returns the manifest.
+
+    Chunking and every checksum are over the plaintext payload, matching what
+    a reader reassembles and checks after decrypting each part - only the
+    bytes actually written to the store are sealed, one envelope per part
+    (each keyed to its own part filename as AAD)."""
     encoded = encode_payload(payload)
     parts = [encoded[i:i + PART_BYTES] for i in range(0, max(len(encoded), 1), PART_BYTES)] or [b""]
     seq = int(payload["seq"])
     for index, chunk in enumerate(parts):
-        store.put(base_name(device_id, seq, index), chunk, "application/json")
+        write_bytes(store, base_name(device_id, seq, index), chunk, "application/json")
     manifest = {
         "formatVersion": FORMAT_VERSION,
         "schemaVersion": SCHEMA_VERSION,
@@ -262,14 +309,14 @@ def publish_base(store, device_id: str, device_name: str, payload: Dict[str, Any
         "appliedPeerHlc": dict(applied_peer_hlc),
         "updatedAt": now_ms,
     }
-    store.put(manifest_name(device_id), encode_payload(manifest), "application/json")
+    write_bytes(store, manifest_name(device_id), encode_payload(manifest), "application/json")
     return manifest
 
 
 def touch_manifest(store, device_id: str, manifest: Dict[str, Any], now_ms: int) -> Dict[str, Any]:
     """Heartbeat: rewrite the manifest with a fresh nonce and timestamp."""
     manifest = dict(manifest, uploadNonce=str(uuid.uuid4()), updatedAt=now_ms)
-    store.put(manifest_name(device_id), encode_payload(manifest), "application/json")
+    write_bytes(store, manifest_name(device_id), encode_payload(manifest), "application/json")
     return manifest
 
 
@@ -286,6 +333,7 @@ class S3Store:
             raise StoreError(f"S3Store needs store_type 's3', got {config.store_type!r}")
         self.config = config
         self._client = None
+        self.encryption: Optional[SubmersionEncryption] = None
 
     @property
     def client(self):

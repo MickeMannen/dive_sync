@@ -128,6 +128,8 @@ class SubmersionCredentials(BaseModel):
     secret_access_key: str = Field("", description="B2: the application key")
     path_style: bool = Field(False, description="Use path-style addressing (needed by some self-hosted stores)")
     folder_path: str = Field("", description="store_type 'folder': the synced folder on this machine")
+    passphrase: str = Field("", description="End-to-end encryption passphrase (rework.md E11), only needed when "
+                             "the Submersion library has E2E encryption turned on. Left blank for a plaintext store")
 
     @property
     def configured(self) -> bool:

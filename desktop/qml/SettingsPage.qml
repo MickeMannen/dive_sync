@@ -133,11 +133,13 @@ ColumnLayout {
                 spacing: 8
                 LabeledField { id: subFolderPath; label: "Folder path"; fieldWidth: 420; text: settingsController.submersionFolderPath }
             }
+            LabeledField { id: subPassphrase; label: "End-to-end encryption passphrase (leave blank if this library isn't E2E encrypted, or to keep the saved one)"; fieldWidth: 420; secret: true }
             RowLayout {
                 Button {
                     text: "Test"
                     onClicked: settingsController.testSubmersion(subStoreType.currentText, subEndpoint.text, subRegion.text,
-                        subBucket.text, subPrefix.text, subAccessKey.text, subSecretKey.text, subPathStyle.checked, subFolderPath.text)
+                        subBucket.text, subPrefix.text, subAccessKey.text, subSecretKey.text, subPathStyle.checked, subFolderPath.text,
+                        subPassphrase.text)
                 }
                 Text { text: settingsController.submersionStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             }
@@ -146,10 +148,10 @@ ColumnLayout {
             Button {
                 text: "Save credentials"
                 onClicked: {
-                    settingsController.save(gUser.text, gPass.text, gToken.text, dUser.text, dPass.text, sEmail.text, sPass.text,
+                    settingsController.save(sEmail.text, sPass.text,
                         subStoreType.currentText, subEndpoint.text, subRegion.text, subBucket.text, subPrefix.text,
-                        subAccessKey.text, subSecretKey.text, subPathStyle.checked, subFolderPath.text)
-                    gPass.text = ""; dPass.text = ""; sPass.text = ""; subSecretKey.text = ""
+                        subAccessKey.text, subSecretKey.text, subPathStyle.checked, subFolderPath.text, subPassphrase.text)
+                    sPass.text = ""; subSecretKey.text = ""; subPassphrase.text = ""
                 }
             }
             Text { text: settingsController.message; color: Theme.muted }

@@ -10,7 +10,7 @@ import pytest
 
 from src.core.models import GasMixture, UnifiedDive, UnifiedSample
 from src.core.config import SubmersionCredentials
-from src.core.services.submersion import store as st
+from src.core.services.submersion import crypto, store as st
 from src.core.services.submersion.adapter import SubmersionAdapter
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "submersion")
@@ -110,6 +110,79 @@ def test_refuses_encrypted_store(tmp_path):
     # login only lists (no read), so it succeeds; the read raises the clear error
     with pytest.raises(st.EncryptedStoreError):
         a.fetch_dives()
+
+
+def _seed_keyslots(store_dir, passphrase: str, kdf=None) -> str:
+    """Write a real ``submersion_keyslots.json`` (the same shape Submersion's
+    app would) with one passphrase slot, and return the library key id."""
+    kdf = kdf or crypto.KdfParams(m=1024, t=3, p=1)  # small params keep tests fast
+    mlk = os.urandom(32)
+    library_key_id = "8f14e45f-ceea-467f-ab37-a10a8d5f4c11"
+    slot = crypto.create_slot("passphrase", passphrase, mlk, kdf=kdf)
+    file = crypto.KeyslotFile(version=1, library_key_id=library_key_id, slots=[slot])
+    st.FolderStore(str(store_dir)).put(crypto.KeyslotFile.CLOUD_FILE_NAME, file.to_json_bytes())
+    return library_key_id
+
+
+def _encrypted_config(path, passphrase=""):
+    return SubmersionCredentials(store_type="folder", folder_path=str(path), passphrase=passphrase)
+
+
+def test_encrypted_store_write_read_round_trip(tmp_path):
+    store_dir = tmp_path / "store"
+    os.makedirs(store_dir)
+    library_key_id = _seed_keyslots(store_dir, "correct horse battery staple")
+
+    a = SubmersionAdapter(_encrypted_config(store_dir, "correct horse battery staple"),
+                          device_state_dir=str(tmp_path / "state_a"), device_id="dev-a")
+    assert a.login()
+    assert a.store.encryption is not None and a.store.encryption.library_key_id == library_key_id
+
+    dive = UnifiedDive(date_time=datetime(2026, 9, 1, 10, 30, 0), duration=2500, max_depth=21.5,
+                       location="Zenobia", notes="Encrypted round trip")
+    new_id = a.add_dive(dive)
+    a.finish()
+
+    # every ssv1.* file actually written is a genuine SBE1 envelope, not
+    # silently plaintext - proves finish() sealed rather than skipped it
+    plain_store = st.FolderStore(str(store_dir))
+    devices = st.list_devices(plain_store)
+    manifest_name = devices["dev-a"]["manifest"]
+    assert plain_store.get(manifest_name)[:4] == crypto.MAGIC
+    base_part_name = devices["dev-a"]["bases"][1][0]
+    assert plain_store.get(base_part_name)[:4] == crypto.MAGIC
+
+    # a second device with the right passphrase reads it back
+    b = SubmersionAdapter(_encrypted_config(store_dir, "correct horse battery staple"),
+                          device_state_dir=str(tmp_path / "state_b"))
+    assert b.login()
+    dives = b.fetch_dives()
+    assert len(dives) == 1
+    assert dives[0].external_ids["submersion"] == new_id
+    assert dives[0].location == "Zenobia" and dives[0].notes == "Encrypted round trip"
+
+
+def test_encrypted_store_wrong_or_missing_passphrase_fails_login(tmp_path):
+    store_dir = tmp_path / "store"
+    os.makedirs(store_dir)
+    _seed_keyslots(store_dir, "correct horse battery staple")
+
+    wrong = SubmersionAdapter(_encrypted_config(store_dir, "wrong guess"), device_state_dir=str(tmp_path / "state_w"))
+    assert wrong.login() is False
+    assert wrong.store.encryption is None
+
+    blank = SubmersionAdapter(_encrypted_config(store_dir, ""), device_state_dir=str(tmp_path / "state_n"))
+    assert blank.login() is False
+    assert blank.store.encryption is None
+
+
+def test_unencrypted_store_login_leaves_encryption_unset(tmp_path):
+    """No submersion_keyslots.json at all -> plaintext, exactly as before E11."""
+    store_dir = tmp_path / "store"
+    os.makedirs(store_dir)
+    a = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state"))
+    assert a.login()
+    assert a.store.encryption is None
 
 
 def test_rejoins_after_retirement(tmp_path):

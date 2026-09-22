@@ -58,9 +58,9 @@ DATA_DIR=~/.dive_sync_test python sync.py --dry-run
 Supported services:
 * **Garmin Connect** and **Divelogs.org**: username and password.
 * **Subsurface Cloud**: the email and password from Subsurface's cloud storage preferences. Verified with one read-only request against the cloud git server.
-* **Submersion**: the S3-compatible bucket Submersion syncs through. Backblaze B2 is the recommended hosted option: create a bucket, then an application key restricted to it; the endpoint is `https://s3.<region>.backblazeb2.com`. Point Submersion's sync provider at the same bucket. Google Drive cannot be used (see [docs/submersion_sync_format.md](docs/submersion_sync_format.md)). Verified with one read-only listing.
+* **Submersion**: the S3-compatible bucket Submersion syncs through. Backblaze B2 is the recommended hosted option: create a bucket, then an application key restricted to it; the endpoint is `https://s3.<region>.backblazeb2.com`. Point Submersion's sync provider at the same bucket. Google Drive cannot be used (see [docs/submersion_sync_format.md](docs/submersion_sync_format.md)). If the library has end-to-end encryption turned on in Submersion, also set a `passphrase` — otherwise leave it blank.
 
-Subsurface Cloud is fully supported (see "Other services" below). The Submersion adapter is still in progress (rework.md Track F); its store credentials are stored and checked now so the setup is ready when it lands.
+Subsurface Cloud and Submersion are both fully supported (see "Other services" below).
 
 #### Single Account Structure (`credentials.json`):
 ```json
@@ -86,7 +86,8 @@ Subsurface Cloud is fully supported (see "Other services" below). The Submersion
     "bucket": "my-submersion-sync",
     "prefix": "submersion-sync/",
     "access_key_id": "…",
-    "secret_access_key": "…"
+    "secret_access_key": "…",
+    "passphrase": ""
   }
 }
 ```
@@ -303,7 +304,7 @@ Run all unit, mock, and API tests to verify execution logic:
 - **Two runners, one account.** Docker (scheduled) and the desktop app (manual) may sync the same accounts from different machines. There is no shared lock and each keeps its own `sync_state.json`, `conflicts.json` and Garmin token cache; both honour `api_cooldown_seconds`, but back-to-back runs from two machines can still hit Garmin's login rate limit (HTTP 429, wait 10–15 minutes). Let one runner finish before starting the other.
 - **Pairs are remembered locally.** Garmin and Divelogs cannot store each other's id, so the matched pairs live in `sync_state.json` next to your settings. Deleting that file makes the next run re-match by time (fine) and forget which dives it uploaded (uploads are not repeated because they now match by time, unless the times were shifted).
 - **Multi-account** works only from the CLI (`--garmin`, `--divelogs`); the scheduler, status page and desktop app assume one account per service.
-- **Submersion** is not synced yet; Google Drive as its store is not reachable by third parties at all (see `docs/submersion_sync_format.md`).
+- **Submersion**: Google Drive as its store is not reachable by third parties at all, so the library's sync provider must be S3, Dropbox or iCloud (see `docs/submersion_sync_format.md`); Dropbox/iCloud need the desktop app pointed at the local synced folder, not the CLI/Docker deployment. dive_sync publishes a full base snapshot on every write rather than incremental changesets, and there is no 7-day heartbeat scheduler yet, so an unattended dive_sync-only peer can go quiet long enough for another device to consider it stale.
 
 ---
 

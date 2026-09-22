@@ -222,16 +222,18 @@ def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratc
     assert s.hasCredentials is False
     s.saveGarminAccounts([{"username": "g@x", "password": "pw", "token_dir": ""}])
     s.saveDivelogsAccounts([{"username": "d", "password": "pw2"}])
-    s.save("me@x.org", "pw3", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "secret", False, "")
+    s.save("me@x.org", "pw3", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "secret", False, "", "hunter2")
     assert s.hasCredentials and s.garminAccounts == [{"username": "g@x", "token_dir": creds_store.DEFAULT_GARMIN_TOKEN_DIR}]
     assert s.divelogsAccounts == [{"username": "d"}] and s.subsurfaceEmail == "me@x.org" and s.message == "Saved to keychain."
     assert s.submersionBucket == "my-bucket"
     assert json.loads(fake_keyring.store[("DiveSync", "submersion_secret")])["secret_access_key"] == "secret"
-    # keeping a blank password keeps the stored one
+    assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
+    # keeping a blank password/passphrase keeps the stored ones
     s.saveGarminAccounts([{"username": "g@x", "password": "", "token_dir": ""}])
-    s.save("me@x.org", "", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "", False, "")
+    s.save("me@x.org", "", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "", False, "", "")
     assert creds_store.load_credentials_model().get_garmin_accounts()[0].password == "pw"
     assert json.loads(fake_keyring.store[("DiveSync", "submersion_secret")])["secret_access_key"] == "secret"
+    assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
 
     path = str(scratch_data_dir / "profile.json")
     assert s.exportProfile(path).startswith("Profile written")

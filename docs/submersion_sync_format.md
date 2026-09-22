@@ -125,7 +125,15 @@ Only the columns relevant to `UnifiedDive`. Every table has `id` (TEXT UUID prim
 
 ## 6. Encryption envelope (only if the user enables E2E)
 
-`"SBE1"(4) | libraryKeyId(16, UUID) | flags(1, bit0 = gzip) | nonce(12) | AES-256-GCM ciphertext | tag(16)`. AAD is the UTF-8 logical filename. The data key is derived from the user's passphrase via `crypto/keyslots.dart` (Argon2/PBKDF-style key slots, plus an EFF-wordlist recovery code). Supporting this means porting `keyslots.dart` and asking the user for the passphrase. **Out of scope for the first version: require E2E off.**
+`"SBE1"(4) | libraryKeyId(16, UUID) | flags(1, bit0 = gzip) | nonce(12) | AES-256-GCM ciphertext | tag(16)`. AAD is the UTF-8 logical filename. The data key is derived from the user's passphrase via `crypto/keyslots.dart` (Argon2id key slots, plus an EFF-wordlist recovery code).
+
+**Implemented 2026-09-22 (rework.md E11)**, ported to `src/core/services/submersion/crypto.py` from `lib/core/services/sync/crypto/keyslots.dart` and `sync_envelope.dart` (commit `2debe84`), verified byte-for-byte against the project's own committed known-answer vectors (`scripts/generate_crypto_test_vectors.py` / `test/fixtures/crypto/crypto_vectors.json`, vendored into `tests/data/submersion/crypto/`):
+
+- The cloud's plaintext `submersion_keyslots.json` (`{version, libraryKeyId, slots: [{type, salt, kdf, nonce, wrapped}]}`) holds one or more wrapped copies of a 32-byte master library key (MLK), one per unlock method (`type: "passphrase"` or `"recovery"`). Each slot wraps the MLK under AES-256-GCM keyed by an Argon2id KEK derived from that method's secret + the slot's own salt/KDF params.
+- The actual per-file data key is `HKDF-SHA256(IKM=MLK, salt=b"", info=b"sbe:v1:data")` - the MLK itself never touches file content directly.
+- dive_sync only ever *joins* an already-encrypted library (never enables encryption, rotates keys, or issues a recovery code - those stay Submersion-app-only actions): given the keyslot file and a passphrase in `SubmersionCredentials.passphrase`, it recovers the MLK, derives the data key, and seals/opens every `ssv1.*` file (and `submersion_library_epoch.json`) through it. The keyslot file itself is always plaintext.
+- **Scope restriction, deliberate**: dive_sync does not generate recovery codes or offer a recovery-code UI, since its only job is to sync as an existing library member, not to be the device someone recovers access through.
+- Dependencies: `argon2-cffi` (Argon2id) and `cryptography` (AES-256-GCM, HKDF) - the same two Python packages Submersion's own KAT-vector generator script uses, so an exact match was expected and verified, not assumed.
 
 ## 7. Profile sample blob (`ProfileSeriesCodec` v1)
 

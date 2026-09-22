@@ -189,9 +189,10 @@ class SettingsController(QObject):
             return message
         self._run(work, lambda text: self._set("_subsurface_status", str(text), self.subsurfaceStatusChanged))
 
-    @Slot(str, str, str, str, str, str, str, bool, str)
+    @Slot(str, str, str, str, str, str, str, bool, str, str)
     def testSubmersion(self, store_type: str, endpoint_url: str, region: str, bucket: str, prefix: str,
-                        access_key_id: str, secret_access_key: str, path_style: bool, folder_path: str) -> None:
+                        access_key_id: str, secret_access_key: str, path_style: bool, folder_path: str,
+                        passphrase: str = "") -> None:
         from src.core.config import SubmersionCredentials
         config = SubmersionCredentials(
             store_type=store_type or "s3",
@@ -203,6 +204,7 @@ class SettingsController(QObject):
             secret_access_key=secret_access_key or self._model.submersion.secret_access_key,
             path_style=path_style,
             folder_path=folder_path,
+            passphrase=passphrase or self._model.submersion.passphrase,
         )
         if not config.configured:
             self._set("_submersion_status", "Fill in the store details first.", self.submersionStatusChanged)
@@ -210,18 +212,30 @@ class SettingsController(QObject):
         self._set("_submersion_status", "Testing…", self.submersionStatusChanged)
 
         def work():
+            import tempfile
             from src.core.services.submersion.store import check_store_access
+            from src.core.services.submersion.adapter import SubmersionAdapter
             ok, message = check_store_access(config)
-            return message
+            if not ok:
+                return message
+            # Connectivity is fine; also try to unlock an end-to-end
+            # encrypted library so a wrong/missing passphrase surfaces here
+            # rather than only on the next real sync.
+            with tempfile.TemporaryDirectory() as scratch:
+                enc_ok, enc_message = SubmersionAdapter(config, device_state_dir=scratch)._resolve_encryption()
+            if not enc_ok:
+                return enc_message
+            return f"{message} {enc_message}." if enc_message else message
         self._run(work, lambda text: self._set("_submersion_status", str(text), self.submersionStatusChanged))
 
     # -- save -------------------------------------------------------------
 
-    @Slot(str, str, str, str, str, str, str, str, str, bool, str)
+    @Slot(str, str, str, str, str, str, str, str, str, bool, str, str)
     def save(self, subsurface_email: str, subsurface_pw: str,
              submersion_store_type: str, submersion_endpoint_url: str, submersion_region: str,
              submersion_bucket: str, submersion_prefix: str, submersion_access_key_id: str,
-             submersion_secret_access_key: str, submersion_path_style: bool, submersion_folder_path: str) -> None:
+             submersion_secret_access_key: str, submersion_path_style: bool, submersion_folder_path: str,
+             submersion_passphrase: str = "") -> None:
         """Subsurface Cloud + Submersion only - Garmin/Divelogs accounts save
         independently via saveGarminAccounts()/saveDivelogsAccounts() (E7),
         since this writes those two sections directly rather than going
@@ -243,6 +257,7 @@ class SettingsController(QObject):
             secret_access_key=submersion_secret_access_key or self._model.submersion.secret_access_key,
             path_style=submersion_path_style,
             folder_path=submersion_folder_path,
+            passphrase=submersion_passphrase or self._model.submersion.passphrase,
         ))
 
         self._model = creds_store.load_credentials_model()

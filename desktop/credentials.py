@@ -251,6 +251,7 @@ def load_credentials_model():
             secret_access_key=submersion_secret.get("secret_access_key", ""),
             path_style=bool(submersion_config.get("path_style")),
             folder_path=submersion_config.get("folder_path", ""),
+            passphrase=submersion_secret.get("passphrase", ""),
         ),
     )
 
@@ -270,6 +271,7 @@ def save_submersion_credentials(submersion) -> None:
         _set_json("submersion_secret", {
             "access_key_id": submersion.access_key_id,
             "secret_access_key": submersion.secret_access_key,
+            "passphrase": submersion.passphrase,
         })
         preferences.set_submersion_config(
             store_type=submersion.store_type, endpoint_url=submersion.endpoint_url, region=submersion.region,
