@@ -50,7 +50,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ["ubuntu:24.04"]
+        # GitHub Actions expressions have no string-replace function, so a
+        # colon-free "label" travels alongside "target" for the artifact
+        # name (upload-artifact rejects ':' in a name) instead of deriving
+        # one from target at usage time.
+        include:
+          - target: "ubuntu:24.04"
+            label: "ubuntu-24.04"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -65,5 +71,5 @@ jobs:
       - run: briefcase package linux system --target ${{ matrix.target }} --adhoc-sign
       - uses: actions/upload-artifact@v4
         with:
-          name: DiveSync-linux-${{ replace(matrix.target, ':', '-') }}
+          name: DiveSync-linux-${{ matrix.label }}
           path: dist/*.deb
