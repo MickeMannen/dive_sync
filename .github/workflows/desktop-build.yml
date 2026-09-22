@@ -62,7 +62,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y socat
       - run: python -m pip install -U pip "briefcase==0.4.5"
       - run: briefcase build linux system --target ${{ matrix.target }} --test
-      - run: briefcase package linux system --target ${{ matrix.target }}
+      - run: briefcase package linux system --target ${{ matrix.target }} --adhoc-sign
       - uses: actions/upload-artifact@v4
         with:
           name: DiveSync-linux-${{ matrix.target }}
