@@ -25,8 +25,8 @@ ColumnLayout {
                 garminAccountsModel.clear()
                 var accounts = settingsController.garminAccounts
                 for (var i = 0; i < accounts.length; i++)
-                    garminAccountsModel.append({username: accounts[i].username, password: "", token_dir: accounts[i].token_dir})
-                if (accounts.length === 0) garminAccountsModel.append({username: "", password: "", token_dir: ""})
+                    garminAccountsModel.append({username: accounts[i].username, password: ""})
+                if (accounts.length === 0) garminAccountsModel.append({username: "", password: ""})
             }
             Component.onCompleted: reload()
             Connections { target: settingsController; function onCredentialsChanged() { garminCard.reload() } }
@@ -36,23 +36,27 @@ ColumnLayout {
                     required property int index
                     required property string username
                     required property string password
-                    required property string token_dir
                     RowLayout {
                         LabeledField { fieldWidth: 220; label: "Username"; text: username; onEditingFinished: garminAccountsModel.setProperty(index, "username", text) }
                         LabeledField { fieldWidth: 220; label: "Password (leave blank to keep the saved one)"; secret: true; text: password; onEditingFinished: garminAccountsModel.setProperty(index, "password", text) }
-                        LabeledField { fieldWidth: 320; label: "Token directory"; text: token_dir; onEditingFinished: garminAccountsModel.setProperty(index, "token_dir", text) }
-                        Button { text: "Test"; onClicked: settingsController.testGarmin(username, password, token_dir) }
+                        Button { text: "Test"; onClicked: settingsController.testGarmin(username, password) }
                         Button { text: "Remove"; flat: true; onClicked: garminAccountsModel.remove(index) }
                     }
                 }
             }
             RowLayout {
-                Button { text: "Add Garmin account"; flat: true; onClicked: garminAccountsModel.append({username: "", password: "", token_dir: ""}) }
+                Button { text: "Add Garmin account"; flat: true; onClicked: garminAccountsModel.append({username: "", password: ""}) }
                 Button {
                     text: "Save Garmin accounts"
                     onClicked: {
+                        // ListModel.get(i) returns a model-data object that PySide6
+                        // marshals as a QObject, not a dict (rows[i].get(...) then
+                        // fails in Python) - copy into a plain JS object instead.
                         var rows = []
-                        for (var i = 0; i < garminAccountsModel.count; i++) rows.push(garminAccountsModel.get(i))
+                        for (var i = 0; i < garminAccountsModel.count; i++) {
+                            var row = garminAccountsModel.get(i)
+                            rows.push({username: row.username, password: row.password})
+                        }
                         settingsController.saveGarminAccounts(rows)
                     }
                 }
@@ -89,8 +93,12 @@ ColumnLayout {
                 Button {
                     text: "Save Divelogs accounts"
                     onClicked: {
+                        // See the Garmin save button above: get(i) is not a dict.
                         var rows = []
-                        for (var i = 0; i < divelogsAccountsModel.count; i++) rows.push(divelogsAccountsModel.get(i))
+                        for (var i = 0; i < divelogsAccountsModel.count; i++) {
+                            var row = divelogsAccountsModel.get(i)
+                            rows.push({username: row.username, password: row.password})
+                        }
                         settingsController.saveDivelogsAccounts(rows)
                     }
                 }

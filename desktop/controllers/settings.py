@@ -146,11 +146,13 @@ class SettingsController(QObject):
 
     # -- tests ------------------------------------------------------------
 
-    @Slot(str, str, str)
-    def testGarmin(self, username: str, password: str, token_dir: str) -> None:
+    @Slot(str, str)
+    def testGarmin(self, username: str, password: str) -> None:
         stored = next((a for a in self._model.get_garmin_accounts() if a.username == username), None)
         password = password or (stored.password if stored else "")
-        token_dir = token_dir or (stored.token_dir if stored else "") or creds_store.DEFAULT_GARMIN_TOKEN_DIR
+        # Not user-configurable (rework.md decision 2026-09-22): the token
+        # directory is internal token-staging plumbing, not a real setting.
+        token_dir = (stored.token_dir if stored else "") or creds_store.DEFAULT_GARMIN_TOKEN_DIR
         if not username or not password:
             self._set("_garmin_status", "Enter a username and password first.", self.garminStatusChanged)
             return
