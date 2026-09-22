@@ -1,44 +1,55 @@
-name: Desktop app build (Briefcase)
+name: Build and attach release artifacts
 
-# Build-only (rework.md E2): confirms the Qt Quick desktop app packages on
-# macOS, Windows and Linux; a PR/dispatch run always adhoc-signs (fast, no
-# Apple credentials needed). Real macOS signing + notarization (E3) is
-# opt-in via workflow_dispatch's "sign" input, since it needs Apple Developer
-# secrets and notarization can take several minutes - not something every PR
-# should pay for. Does not attach anything to a GitHub Release yet (E12,
-# still planned).
+# Manual-only (rework.md E12): you create a GitHub Release yourself first
+# (draft or published), then run this with the platforms you want and its
+# tag. Never triggers on a push - nothing here happens without you picking
+# it from the Actions tab and choosing what to build. macOS always signs
+# with the real Developer ID cert and notarizes (rework.md E3) since this is
+# for something you're actually giving out, unlike desktop-build.yml's
+# adhoc-signed PR/dispatch builds. Docker Hub is only touched when
+# "push_docker" is checked, by calling docker-release.yml as a reusable job.
 
 on:
   workflow_dispatch:
     inputs:
-      sign:
-        description: "macOS: sign with the real Developer ID cert and notarize (needs the Apple secrets below configured)"
+      release_tag:
+        description: "Tag of the existing GitHub Release to attach build artifacts to (e.g. v0.1.0)"
+        required: true
+        type: string
+      build_macos:
+        description: "Build and sign the macOS app"
+        type: boolean
+        default: true
+      build_windows:
+        description: "Build the Windows app"
+        type: boolean
+        default: true
+      build_linux:
+        description: "Build the Linux app"
+        type: boolean
+        default: true
+      push_docker:
+        description: "Also build and push the Docker image to Docker Hub"
         type: boolean
         default: false
-  pull_request:
-    paths:
-      - "desktop/**"
-      - "src/core/**"
-      - "pyproject.toml"
-      - ".github/workflows/desktop-build.yml"
+
+permissions:
+  contents: write
 
 jobs:
   macos:
+    if: ${{ inputs.build_macos }}
     runs-on: macos-latest
     timeout-minutes: 30
-    env:
-      SIGN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: python -m pip install -U pip "briefcase==0.4.5"
-      - run: briefcase build macOS app --test
+      - run: briefcase build macOS app
 
-      # -- E3: real signing + notarization, only when SIGN is true -------
       - name: Import Developer ID certificate
-        if: env.SIGN == 'true'
         env:
           MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -56,7 +67,6 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" build.keychain
 
       - name: Store notarization credentials
-        if: env.SIGN == 'true'
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -68,7 +78,6 @@ jobs:
             --keychain build.keychain
 
       - name: Find the Developer ID signing identity
-        if: env.SIGN == 'true'
         run: |
           set -eu
           IDENTITY=$(security find-identity -v -p codesigning build.keychain \
@@ -80,21 +89,16 @@ jobs:
           echo "Signing identity: $IDENTITY"
           echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
-      - name: Package (real sign + notarize)
-        if: env.SIGN == 'true'
+      - name: Package (sign + notarize)
         run: briefcase package macOS app -i "$IDENTITY"
 
-      # -- Default path: adhoc-sign, no Apple credentials needed ----------
-      - name: Package (adhoc sign)
-        if: env.SIGN != 'true'
-        run: briefcase package macOS app --adhoc-sign
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: DiveSync-macOS
-          path: dist/*.dmg
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" dist/*.dmg --clobber --repo "${{ github.repository }}"
 
   windows:
+    if: ${{ inputs.build_windows }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -102,38 +106,33 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -U pip "briefcase==0.4.5"
-      - run: briefcase build windows app --test
+      - run: briefcase build windows app
       - run: briefcase package windows app
-      - uses: actions/upload-artifact@v4
-        with:
-          name: DiveSync-windows
-          path: dist/*.msi
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" dist/*.msi --clobber --repo "${{ github.repository }}"
 
   linux:
+    if: ${{ inputs.build_linux }}
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # GitHub Actions expressions have no string-replace function, so a
-        # colon-free "label" travels alongside "target" for the artifact
-        # name (upload-artifact rejects ':' in a name) instead of deriving
-        # one from target at usage time.
-        include:
-          - target: "ubuntu:24.04"
-            label: "ubuntu-24.04"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Briefcase's "system" Linux format builds inside a per-distro Docker
-      # container it manages itself; socat is what it uses to talk to that
-      # container (docs: briefcase.beeware.org how-to/building/ci).
       - run: sudo apt-get update && sudo apt-get install -y socat
       - run: python -m pip install -U pip "briefcase==0.4.5"
-      - run: briefcase build linux system --target ${{ matrix.target }} --test
-      - run: briefcase package linux system --target ${{ matrix.target }} --adhoc-sign
-      - uses: actions/upload-artifact@v4
-        with:
-          name: DiveSync-linux-${{ matrix.label }}
-          path: dist/*.deb
+      - run: briefcase build linux system --target ubuntu:24.04
+      - run: briefcase package linux system --target ubuntu:24.04 --adhoc-sign
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" dist/*.deb --clobber --repo "${{ github.repository }}"
+
+  docker:
+    if: ${{ inputs.push_docker }}
+    uses: ./.github/workflows/docker-release.yml
+    with:
+      app_version: ${{ inputs.release_tag }}
+    secrets: inherit

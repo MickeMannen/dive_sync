@@ -144,8 +144,8 @@ Seeded from `todo_txt` and `rework.md`. Add new requests here; move them into th
 | # | Request | Priority | Status | Notes |
 |---|---------|----------|--------|-------|
 | B1 | Telemetry graphs in the desktop dive editor | | ✅ | 2026-09-21 (rework.md E1): depth/temperature profile in `DivesPage.qml`, drawn on a QML `Canvas` rather than QtCharts (crashes this environment - see E1 note) |
-| B2 | Windows and Linux desktop builds | | 🚧 | rework.md E2: Briefcase config + CI workflow added 2026-09-21, not yet verified by an actual run (needs the owner to trigger it) |
-| B3 | macOS signing and notarisation | | 📝 | rework.md E3; deferred, owner has no Apple Developer account yet |
+| B2 | Windows and Linux desktop builds | | ✅ | rework.md E2: Briefcase config + CI workflow added 2026-09-21, actually run and fixed 2026-09-22 (all three platforms build+package clean) |
+| B3 | macOS signing and notarisation | | ✅ | rework.md E3; done 2026-09-22 once the owner had an Apple Developer account and Developer ID certificate |
 | B4 | Sync gas mixtures / tank data Divelogs→Garmin | | 📝 | todo_txt: "check how to handle dive gases" |
 | B5 | Multi-tank data to Divelogs | | 📝 | todo_txt: "multi tank to divelogs - tank data" |
 | B6 | More verification / test coverage, especially Divelogs→Garmin | | 📝 | todo_txt: "add more verification" |
