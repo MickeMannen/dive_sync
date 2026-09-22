@@ -31,3 +31,4 @@ __pycache__/
 /*.dist-info/
 /logs/
 /build/
+/backups/
