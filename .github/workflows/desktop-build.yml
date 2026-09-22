@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -U pip briefcase
+      - run: python -m pip install -U pip "briefcase==0.4.5"
       - run: briefcase build macOS app --test
       - run: briefcase package macOS app --adhoc-sign
       - uses: actions/upload-artifact@v4
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -U pip briefcase
+      - run: python -m pip install -U pip "briefcase==0.4.5"
       - run: briefcase build windows app --test
       - run: briefcase package windows app
       - uses: actions/upload-artifact@v4
@@ -60,7 +60,7 @@ jobs:
       # container it manages itself; socat is what it uses to talk to that
       # container (docs: briefcase.beeware.org how-to/building/ci).
       - run: sudo apt-get update && sudo apt-get install -y socat
-      - run: python -m pip install -U pip briefcase
+      - run: python -m pip install -U pip "briefcase==0.4.5"
       - run: briefcase build linux system --target ${{ matrix.target }} --test
       - run: briefcase package linux system --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4

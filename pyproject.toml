@@ -3,6 +3,7 @@ project_name = "DiveSync"
 bundle = "com.mikaelchristersson"
 version = "0.1.0"
 license = "MIT"
+license-files = ["LICENSE"]
 author = "Mikael Christersson"
 author_email = "mikael.christersson2@gmail.com"
 
