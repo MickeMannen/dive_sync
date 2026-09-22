@@ -65,5 +65,5 @@ jobs:
       - run: briefcase package linux system --target ${{ matrix.target }} --adhoc-sign
       - uses: actions/upload-artifact@v4
         with:
-          name: DiveSync-linux-${{ matrix.target }}
+          name: DiveSync-linux-${{ replace(matrix.target, ':', '-') }}
           path: dist/*.deb
