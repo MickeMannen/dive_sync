@@ -1,0 +1,5 @@
+version 3
+fingerprint model=02e4e9ef serial=d0e57bef deviceid=d1f3619a diveid=4b38b42a data="353136205068756b65742e66697400000000000000000000"
+fingerprint model=ada2b0cd serial=d0e57bef deviceid=d1f3619a diveid=d29c9bd8 data="343930205068756b65742c20486f6d652052756e2e666974"
+units METRIC
+prefs PO2_GRAPH

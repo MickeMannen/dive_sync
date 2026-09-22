@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from src.core.adapter import BaseDiveAdapter
+from src.core.fields import FieldSpec
 from src.core.models import UnifiedDive
 from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
@@ -17,6 +18,13 @@ def get_default_mock_data_dir() -> str:
     return os.path.join(project_root, "tests", "data")
 
 class LocalMockGarminAdapter(BaseDiveAdapter):
+    service_id = GarminAdapter.service_id
+    display_name = GarminAdapter.display_name
+
+    @classmethod
+    def field_catalog(cls) -> List[FieldSpec]:
+        return GarminAdapter.field_catalog()
+
     def __init__(self, mock_data_dir: str = get_default_mock_data_dir(), username: Optional[str] = None):
         if username and os.path.exists(os.path.join(mock_data_dir, "garmin", username)):
             self.mock_dir = os.path.join(mock_data_dir, "garmin", username)
@@ -104,7 +112,7 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
         existing_data["details"]["activityId"] = payload["activityId"]
 
         # Merge simple top-level keys
-        for key in ["activityTypeDTO", "activityName", "description"]:
+        for key in ["activityTypeDTO", "activityName", "locationName", "description"]:
             if key in payload:
                 existing_data["summary"][key] = payload[key]
                 existing_data["details"][key] = payload[key]
@@ -164,6 +172,13 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
         return False
 
 class LocalMockDivelogsAdapter(BaseDiveAdapter):
+    service_id = DivelogsAdapter.service_id
+    display_name = DivelogsAdapter.display_name
+
+    @classmethod
+    def field_catalog(cls) -> List[FieldSpec]:
+        return DivelogsAdapter.field_catalog()
+
     def __init__(self, mock_data_dir: str = get_default_mock_data_dir(), username: Optional[str] = None):
         if username and os.path.exists(os.path.join(mock_data_dir, "divelogs", username)):
             self.mock_dir = os.path.join(mock_data_dir, "divelogs", username)

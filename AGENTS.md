@@ -24,6 +24,10 @@ Welcome, AI Agent! This file outlines the instructions, constraints, and develop
     *   Do not instantiate adapters directly outside of their service boundaries.
 *   **Data Translation**:
     *   Do not hardcode field translation logic. Use the declarative JSONPath mappings defined in [src/core/mapping/](file:///Users/mikael/development/dive_sync/src/core/mapping).
+*   **Field catalogue and links** ([src/core/fields.py](file:///Users/mikael/development/dive_sync/src/core/fields.py)):
+    *   Every adapter sets `service_id` / `display_name` and returns its readable/writable fields from `field_catalog()` (keys are `<service_id>.<name>`). A new synced field is added to the catalogue (and, if it has no `UnifiedDive` attribute, to `service_fields` in `to_unified` / `update_dive`), never as a special case in `SyncEngine.run_sync`.
+    *   What happens on matched dives is defined by `SettingsModel.field_links`; `fields.default_field_links()` must keep reproducing the previous behaviour (guarded by `tests/test_link_engine.py::test_link_loop_reproduces_legacy_loop`).
+    *   Per-run changes go in as `SyncEngine.run_sync(...)` override arguments; `run_sync` reloads `settings.json` first, so mutating `engine.settings` beforehand does nothing.
 *   **Testing & Verification**:
     *   Always write unit or integration test cases in the `tests/` directory for all new functions, endpoints, or adapters added.
     *   Before concluding a task, run the test suite using `./run_tests.sh` to ensure all tests pass and no regressions are introduced.
@@ -34,7 +38,9 @@ Welcome, AI Agent! This file outlines the instructions, constraints, and develop
 *   **API Cooldowns & Rate Limits**: 
     *   Always respect Garmin Connect login thresholds. Rate limiting (HTTP 429) is severe. Ensure cooldowns (`api_cooldown_seconds`) are respected during synchronization.
 *   **Deletion Safety**:
-    *   When deleting dives from the local cache explorer, ensure that BOTH the local JSON file is removed and the corresponding API delete request is sent in a background thread to the remote service (Garmin or Divelogs).
+    *   `src/web/` (the Docker-facing status page) no longer has any dive-editing or deletion UI — that's being rebuilt as a native desktop app (see [rework.md](rework.md)). If/when dive deletion is reintroduced anywhere, ensure that BOTH the local JSON file is removed and the corresponding API delete request is sent in a background thread to the remote service (Garmin or Divelogs), as the old web implementation did.
+*   **Scheduler vs. web coupling**:
+    *   `src/core/scheduler.py` (the background schedule watcher and sync runner) must stay free of FastAPI imports — `src/web/app.py` only wires its `lifespan` to `scheduler.scheduler_loop()`. Keep it this way so non-web entry points can reuse it.
 *   **File Paths & Local Storage**:
     *   Save all temporary files, scratch scripts, or data back-ups in the `.gemini/` app directory or [data/](file:///Users/mikael/development/dive_sync/data/) directory. Do not clutter the workspace root.
 

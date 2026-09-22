@@ -7,11 +7,42 @@ from typing import List, Optional, Dict, Any
 import requests
 
 from src.core.adapter import BaseDiveAdapter
+from src.core.fields import FieldSpec, resample_profile
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 
 logger = logging.getLogger("dive_sync.divelogs")
 
+# Observed on the live API: a longer dive-site name is cut to 50 characters.
+DIVESITE_MAX_LENGTH = 50
+
+
 class DivelogsAdapter(BaseDiveAdapter):
+    service_id = "divelogs"
+    display_name = "Divelogs.org"
+
+    @classmethod
+    def field_catalog(cls) -> List[FieldSpec]:
+        """What _map_to_unified reads. update_dive PUTs the whole payload, so
+        every field here is writable. Numbers follow the account's
+        metric/imperial preference at write time, not per link."""
+        return [
+            FieldSpec(key="divelogs.date_time", label="Start time", type="datetime", unified="date_time"),
+            FieldSpec(key="divelogs.duration", label="Duration", type="number", unified="duration", unit="s"),
+            FieldSpec(key="divelogs.max_depth", label="Max depth", type="number", unified="max_depth", unit="m"),
+            FieldSpec(key="divelogs.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m"),
+            FieldSpec(key="divelogs.temp_min", label="Water temperature", type="number", unified="temp_min", unit="°C"),
+            FieldSpec(key="divelogs.dive_number", label="Dive number", type="number", unified="dive_number", writable=False),  # assigned by Divelogs from date/time
+            FieldSpec(key="divelogs.location", label="Location", type="text"),
+            FieldSpec(key="divelogs.divesite", label="Dive site", type="text", max_length=DIVESITE_MAX_LENGTH),
+            FieldSpec(key="divelogs.notes", label="Notes", type="text", unified="notes"),
+            FieldSpec(key="divelogs.buddy", label="Buddy", type="text", unified="buddy"),
+            FieldSpec(key="divelogs.weight", label="Weight", type="number", unified="weight"),
+            FieldSpec(key="divelogs.visibility", label="Visibility", type="number", unified="visibility"),
+            FieldSpec(key="divelogs.gps", label="GPS position", type="gps", unified="gps"),
+            FieldSpec(key="divelogs.tanks", label="Tanks / gases", type="tanks", unified="tanks"),
+            FieldSpec(key="divelogs.samples", label="Dive profile", type="samples", unified="samples"),
+        ]
+
     def __init__(self, username: str, password: str, cooldown_seconds: float = 1.0):
         self.username = username
         self.password = password
@@ -254,6 +285,9 @@ class DivelogsAdapter(BaseDiveAdapter):
             vol = float(vol) if vol not in [None, ""] else None
 
             t_name = tank.get("tankname") or tank.get("tank") or None
+            # Divelogs has no tank "role" field; leave tank_role unmapped
+            # rather than inventing one from "dbltank" (a manifold/twinset
+            # flag, not a per-tank role).
 
             if self.imperial_units:
                 # PSI to Bar
@@ -279,12 +313,16 @@ class DivelogsAdapter(BaseDiveAdapter):
         dive_number_val = data.get("divenumber")
         dive_number = int(dive_number_val) if dive_number_val is not None and str(dive_number_val).isdigit() else None
 
-        # Build location description
+        # Build the unified site name (historical "location, divesite" join,
+        # kept so uploads to the other service keep working); the two native
+        # fields also travel separately in service_fields.
+        raw_location = data.get("location")
+        raw_divesite = data.get("divesite")
         location_parts = []
-        if data.get("location"):
-            location_parts.append(str(data["location"]))
-        if data.get("divesite"):
-            location_parts.append(str(data["divesite"]))
+        if raw_location:
+            location_parts.append(str(raw_location))
+        if raw_divesite:
+            location_parts.append(str(raw_divesite))
         location = ", ".join(location_parts) if location_parts else None
 
         notes = data.get("notes")
@@ -341,11 +379,13 @@ class DivelogsAdapter(BaseDiveAdapter):
 
         buddy = data.get("buddy")
 
-        # Parse GPS coordinates
+        # Parse GPS coordinates; Divelogs reports 0/0 when none are stored
         lat_val = data.get("lat")
         lat = float(lat_val) if lat_val not in [None, ""] else None
         lng_val = data.get("lng")
         lng = float(lng_val) if lng_val not in [None, ""] else None
+        if lat == 0.0 and lng == 0.0:
+            lat = lng = None
 
         # Parse profile chart data samples
         samples = []
@@ -401,7 +441,8 @@ class DivelogsAdapter(BaseDiveAdapter):
             buddy=buddy,
             lat=lat,
             lng=lng,
-            samples=samples
+            samples=samples,
+            service_fields={"location": raw_location, "divesite": raw_divesite},
         )
 
         try:
@@ -427,13 +468,21 @@ class DivelogsAdapter(BaseDiveAdapter):
             if temp_val is not None:
                 temp_val = (temp_val * 9 / 5) + 32
 
-        # Location splitting if location contains a comma
-        location = ""
-        divesite = dive.location or "Site"
-        if dive.location and "," in dive.location:
-            parts = dive.location.split(",", 1)
-            location = parts[0].strip()
-            divesite = parts[1].strip()
+        # Native location/divesite win when the dive carries them for this
+        # service (a Divelogs dive being updated, or a link that wrote them);
+        # otherwise split the unified site name on its first comma as before.
+        if "location" in dive.service_fields or "divesite" in dive.service_fields:
+            location = dive.service_fields.get("location") or ""
+            divesite = dive.service_fields.get("divesite") or ""
+            if not location and not divesite:
+                divesite = dive.location or "Site"
+        else:
+            location = ""
+            divesite = dive.location or "Site"
+            if dive.location and "," in dive.location:
+                parts = dive.location.split(",", 1)
+                location = parts[0].strip()
+                divesite = parts[1].strip()
 
         tanks = []
         for idx, gas in enumerate(dive.gas_mixtures):
@@ -452,13 +501,19 @@ class DivelogsAdapter(BaseDiveAdapter):
                     vol = vol / 28.3168
 
             tanks.append({
+                "index": idx,
                 "o2": gas.oxygen,
                 "he": gas.helium,
                 "start_pressure": start_p,
                 "end_pressure": end_p,
                 "vol": vol,
                 "tankname": gas.tank_name or "",
-                "tank": gas.tank_name or ""
+                "tank": gas.tank_name or "",
+                # Divelogs has no per-tank role field; "dbltank" is the one
+                # multi-tank concept it exposes (a manifolded twinset, i.e.
+                # two cylinders sharing one gas supply/reading). We don't
+                # have enough information to infer that safely, so it's left
+                # at the service's own default rather than guessed.
             })
 
         # Convert weight from Garmin to Divelogs unit preference
@@ -513,38 +568,31 @@ class DivelogsAdapter(BaseDiveAdapter):
         if dive.lng is not None:
             payload["lng"] = dive.lng
 
-        # Add sampledata and samplerate if samples are present
+        # Add sampledata and samplerate if samples are present. Divelogs keeps
+        # one sample every `samplerate` seconds with no per-sample time, so a
+        # profile with irregular spacing (Garmin records 1 s near events and
+        # several seconds elsewhere) is resampled onto that grid first;
+        # writing the raw list used to compress such dives in time.
         if dive.samples:
+            samplerate, grid = resample_profile(dive.samples)
             sampledata = []
-            for s in dive.samples:
+            for s in grid:
                 d_val = s.depth
                 t_val = s.temp
-                
+
                 if self.imperial_units:
                     # convert depth to feet
                     d_val = d_val * 3.28084
                     # convert temp to fahrenheit
                     if t_val is not None:
                         t_val = (t_val * 9 / 5) + 32
-                        
+
                 if t_val is not None:
                     sampledata.append({"d": round(d_val, 2), "t": round(t_val, 2)})
                 else:
                     sampledata.append(round(d_val, 2))
-            
+
             payload["sampledata"] = sampledata
-            
-            # Calculate samplerate
-            samplerate = 1
-            times = [s.time for s in dive.samples if s.time is not None]
-            if len(times) > 1:
-                diffs = [times[i] - times[i-1] for i in range(1, len(times))]
-                if diffs:
-                    from collections import Counter
-                    c = Counter(diffs)
-                    most_common = c.most_common(1)[0][0]
-                    if most_common > 0:
-                        samplerate = int(most_common)
             payload["samplerate"] = samplerate
         # Override fields using divelogs_to_garmin mappings
         try:

@@ -1,0 +1,88 @@
+[tool.briefcase]
+project_name = "DiveSync"
+bundle = "com.mikaelchristersson"
+version = "0.1.0"
+license = "MIT"
+license-files = ["LICENSE"]
+author = "Mikael Christersson"
+author_email = "mikael.christersson2@gmail.com"
+
+# Briefcase copies each `sources` entry by its basename (see
+# briefcase.commands.create.install_app_code), so a nested entry like
+# "src/core" would land at the bundle's top level as a flattened "core"
+# folder - breaking every `from src.core.X import ...` in that package. The
+# whole "src" tree has to be listed instead so "src/core" (and the harmless,
+# unused-by-desktop "src/web") stay nested exactly as they are in the repo.
+sources = [
+    "src",
+]
+requires = [
+    "pydantic>=2.0.0",
+    "requests>=2.28.0",
+    "boto3>=1.34.0",
+    "dulwich>=0.22.0",
+    "python-multipart>=0.0.9",
+    "garminconnect>=0.2.0",
+    "argon2-cffi>=23.1.0",
+    "cryptography>=42.0.0",
+]
+
+# App key is "desktop" (matching the desktop/ package below) rather than
+# "dive_sync" - Briefcase requires one `sources` entry whose basename equals
+# the app's module name, and the importable package here is "desktop", not
+# "dive_sync" (that name belongs to the whole repo, not this subpackage).
+[tool.briefcase.app.desktop]
+formal_name = "DiveSync"
+description = "Dive log sync and editor for Garmin Connect, Divelogs.org and Subsurface"
+long_description = """\
+DiveSync syncs dive logs between Garmin Connect and Divelogs.org, and lets
+you edit dive metadata on either service. This is the desktop app - for
+scheduled/unattended sync, see the Docker image instead.
+"""
+sources = ["desktop"]
+requires = ["PySide6-Essentials>=6.7", "PySide6-Addons>=6.7", "keyring", "platformdirs"]
+
+[tool.briefcase.app.desktop.macOS]
+universal_build = false
+# PySide6 6.10+ wheels are built for macOS 13 (Ventura) and later; Briefcase
+# resolves wheels for this minimum, so it must match or the install fails.
+min_os_version = "13.0"
+
+[tool.briefcase.app.desktop.windows]
+# Per-machine MSI install (an admin prompt on first install) rather than
+# per-user, matching a normal desktop app install experience.
+system_installer = true
+
+# Briefcase's default Linux format is "system" (a native .deb/.rpm, built
+# inside a per-distro Docker container Briefcase manages itself - see
+# rework.md E2). system_requires below are build-time -dev packages inside
+# that container; system_runtime_requires are what the built .deb declares
+# as runtime dependencies on the end user's machine. This list is a
+# best-effort port of PySide6's documented Linux runtime dependencies
+# (Qt's XCB platform plugin, EGL/GL, fontconfig) - Briefcase itself ships no
+# Qt-specific guidance, so treat this as a starting point to fix up once a
+# real CI build (E2) surfaces what's actually missing.
+[tool.briefcase.app.desktop.linux.system.debian]
+system_requires = [
+    "libgl1-mesa-dev",
+    "libegl1-mesa-dev",
+    "libxkbcommon-dev",
+    "libxcb-cursor-dev",
+    "libfontconfig1-dev",
+    "libfreetype-dev",
+]
+system_runtime_requires = [
+    "libgl1",
+    "libegl1",
+    "libxkbcommon0",
+    "libxkbcommon-x11-0",
+    "libxcb-cursor0",
+    "libfontconfig1",
+    "libfreetype6",
+    "libdbus-1-3",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: needs real test accounts; runs only with DIVE_SYNC_LIVE_DATA_DIR set",
+]

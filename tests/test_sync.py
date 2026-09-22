@@ -1,4 +1,5 @@
 from datetime import datetime
+import pytest
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample
 from src.core.sync_engine import SyncEngine
 
@@ -144,7 +145,7 @@ def test_weight_and_visibility_mapping():
     assert dive_back_imperial.visibility == 29.5
     assert dive_back_imperial.visibility_unit == "foot"
 
-def test_matched_dives_update_fields():
+def test_matched_dives_update_fields(tmp_path):
     g_dive = UnifiedDive(
         date_time=datetime(2026, 6, 22, 12, 0, 0),
         duration=3000,
@@ -177,15 +178,17 @@ def test_matched_dives_update_fields():
         samples=[]
     )
     
-    engine = SyncEngine()
-    
+    engine = SyncEngine(settings_path=str(tmp_path / "settings.json"), credentials_path=str(tmp_path / "credentials.json"))
+
     # Mock settings loading
     from src.core.config import SettingsModel, SyncFilters
+    from src.core.fields import legacy_field_links
     mock_settings = SettingsModel(
         directionality="to_divelogs",
         sync_filters=SyncFilters(only_new=False),
         grace_window_minutes=15,
-        api_cooldown_seconds=0.1
+        api_cooldown_seconds=0.1,
+        field_links=legacy_field_links(),  # this test checks the old Garmin-wins semantics
     )
     
     import src.core.config
@@ -443,3 +446,196 @@ def test_multi_account_handling(tmp_path):
     assert engine.divelogs_username == "user1_divelogs"
     assert engine.garmin_dir_name == os.path.join("garmin", "user2@garmin")
     assert engine.divelogs_dir_name == os.path.join("divelogs", "user1_divelogs")
+
+
+def test_garmin_location_overlay_does_not_duplicate():
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    base = {"summaryDTO": {"startTimeLocal": "2026-06-22T12:00:00", "duration": 3000, "maxDepth": 15.0}}
+    # Garmin's own naming: activity name embeds the location name
+    dive = g._map_to_unified({}, dict(base, activityName="P.Tenggul Single-Gas Dive", locationName="P.Tenggul"))
+    assert dive.location == "P.Tenggul Single-Gas Dive"
+    # identical names (what earlier sync rounds produced)
+    dive = g._map_to_unified({}, dict(base, activityName="Sweden, Malmö, Limhamn Ön", locationName="Sweden, Malmö, Limhamn Ön"))
+    assert dive.location == "Sweden, Malmö, Limhamn Ön"
+    # genuinely different: still joined
+    dive = g._map_to_unified({}, dict(base, activityName="Wreck", locationName="Larnaca"))
+    assert dive.location == "Larnaca, Wreck"
+    dive = g._map_to_unified({}, dict(base, activityName="Wreck"))
+    assert dive.location == "Wreck"
+
+
+def test_divelogs_zero_coordinates_mean_none():
+    from src.core.services.divelogs import DivelogsAdapter
+    d = DivelogsAdapter("dummy", "dummy")
+    dive = d._map_to_unified({"date": "2026-06-22", "time": "12:00:00", "duration": 100, "maxdepth": 10.0, "lat": 0, "lng": 0})
+    assert dive.lat is None and dive.lng is None
+    dive = d._map_to_unified({"date": "2026-06-22", "time": "12:00:00", "duration": 100, "maxdepth": 10.0, "lat": 0, "lng": 5.0})
+    assert (dive.lat, dive.lng) == (0.0, 5.0)
+
+
+def test_divelogs_profile_is_resampled_onto_a_uniform_grid():
+    from src.core.services.divelogs import DivelogsAdapter
+    from src.core.fields import resample_profile
+    # Garmin-style irregular spacing: 1 s near the start, then 7 s
+    irregular = [UnifiedSample(depth=0.0, temp=30.0, time=0), UnifiedSample(depth=1.0, temp=30.0, time=1),
+                 UnifiedSample(depth=2.0, temp=30.0, time=2), UnifiedSample(depth=9.0, temp=29.0, time=9),
+                 UnifiedSample(depth=10.0, temp=29.0, time=10), UnifiedSample(depth=17.0, temp=28.0, time=17)]
+    rate, grid = resample_profile(irregular)
+    assert rate == 1 and [s.time for s in grid] == list(range(0, 18))
+    assert grid[5].depth == 5.0 and grid[5].temp == pytest.approx(29.57, abs=0.01)  # interpolated
+    assert grid[-1].depth == 17.0
+
+    # uniform input passes through untouched
+    uniform = [UnifiedSample(depth=float(i), temp=None, time=i * 10) for i in range(5)]
+    assert resample_profile(uniform) == (10, uniform)
+    # untimed input: rate 1, unchanged
+    untimed = [UnifiedSample(depth=1.0), UnifiedSample(depth=2.0)]
+    assert resample_profile(untimed) == (1, untimed)
+
+    d = DivelogsAdapter("dummy", "dummy")
+    dive = UnifiedDive(date_time=datetime(2026, 6, 22, 12), duration=18, max_depth=17.0, samples=irregular)
+    payload = d._map_from_unified(dive)
+    assert payload["samplerate"] == 1 and len(payload["sampledata"]) == 18
+    assert payload["sampledata"][9] == {"d": 9.0, "t": 29.0}
+
+
+def test_garmin_reads_utc_and_zone_and_stamps_uploads_with_a_real_zone():
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    dive = g._map_to_unified({}, {
+        "activityId": 1, "timeZoneUnitDTO": {"unitId": 135, "unitKey": "Asia/Hong_Kong", "timeZone": "Asia/Hong_Kong"},
+        "summaryDTO": {"startTimeLocal": "1991-10-06T20:00:00.0", "startTimeGMT": "1991-10-06T12:00:00.0", "duration": 100, "maxDepth": 10.0},
+    })
+    assert dive.date_time == datetime(1991, 10, 6, 20) and dive.date_time_utc == datetime(1991, 10, 6, 12)
+    assert dive.timezone == "Asia/Hong_Kong"
+
+    # a Garmin-origin dive keeps its own zone on the way out
+    assert g._map_from_unified(dive)["timeZoneUnitDTO"] == {"unitKey": "Asia/Hong_Kong"}
+
+    # a Divelogs-origin dive (no zone): not logged in -> UTC, no network
+    foreign = UnifiedDive(date_time=datetime(2026, 6, 22, 12), duration=100, max_depth=10.0)
+    assert g._map_from_unified(foreign)["timeZoneUnitDTO"] == {"unitKey": "UTC"}
+
+    # explicit override wins
+    g.upload_timezone = "Asia/Kuala_Lumpur"
+    assert g._map_from_unified(foreign)["timeZoneUnitDTO"] == {"unitKey": "Asia/Kuala_Lumpur"}
+
+    # detection from the newest dive on the account
+    g2 = GarminAdapter("dummy", "dummy")
+    g2.logged_in = True
+    g2.cooldown_seconds = 0
+    class Client:
+        def get_activities(self, start, limit, activitytype=None):
+            if start:
+                return []
+            return [{"activityId": "old", "activityType": {"typeKey": "diving"}, "startTimeLocal": "2020-01-01 10:00:00"},
+                    {"activityId": "new", "activityType": {"typeKey": "diving"}, "startTimeLocal": "2026-01-01 10:00:00"}]
+        def connectapi(self, url, params=None):
+            assert url.endswith("/new")
+            return {"timeZoneUnitDTO": {"unitKey": "Asia/Kuala_Lumpur"}}
+    g2.client = Client()
+    assert g2.resolve_upload_timezone() == "Asia/Kuala_Lumpur"
+    assert g2._map_from_unified(foreign)["timeZoneUnitDTO"] == {"unitKey": "Asia/Kuala_Lumpur"}
+
+
+def test_garmin_update_dive_sends_minimal_summary_dto_not_full_echo():
+    """update_dive() must never echo the whole existing summaryDTO back: a
+    real dive's minElevation is negative (depth under the surface), and
+    Garmin's PUT re-validates every field it receives, rejecting a negative
+    minElevation with 400 MEASUREMENT_NOT_VALID even though it's the dive's
+    own unchanged value. Discovered live 2026-09-23 (docs/garmin_diving_api.md);
+    this is also what makes water temperature (D4) writable through the same
+    call. Only the fields that actually changed may be sent."""
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    g.logged_in = True
+    g.cooldown_seconds = 0
+
+    current_raw = {
+        "activityId": "1",
+        "activityName": "Dive",
+        "summaryDTO": {
+            "startLatitude": 4.805835, "startLongitude": 103.686585,
+            "minElevation": -8.8, "maxElevation": 0.2,
+            "minTemperature": 29.0, "maxTemperature": 30.0, "averageTemperature": 29.0,
+            "maxDepth": 24.0,
+        },
+        "diveInfo": {},
+    }
+    put_calls = []
+
+    class FakeApiClient:
+        @staticmethod
+        def put(_domain, _path, json=None, api=None):
+            put_calls.append(json)
+            return {}
+
+    class FakeClient:
+        client = FakeApiClient()
+
+        def connectapi(self, url, params=None):
+            return current_raw
+
+    g.client = FakeClient()
+
+    new_dive = UnifiedDive(
+        date_time=datetime(2026, 6, 27, 11, 24), duration=2884, max_depth=24.0,
+        location="Dive", lat=4.805935, lng=103.686585, temp_min=29.3, temp_max=30.3, temp_avg=29.3,
+    )
+    assert g.update_dive("1", new_dive) is True
+    assert len(put_calls) == 1
+    summary_dto = put_calls[0]["summaryDTO"]
+    # lng is unchanged, but travels alongside lat anyway: Garmin silently
+    # no-ops a lone startLatitude with no startLongitude (also found live
+    # 2026-09-23, see docs/garmin_diving_api.md).
+    assert summary_dto == {
+        "startLatitude": 4.805935, "startLongitude": 103.686585,
+        "minTemperature": 29.3, "maxTemperature": 30.3, "averageTemperature": 29.3,
+    }
+    assert "minElevation" not in summary_dto and "maxElevation" not in summary_dto
+
+
+def test_engine_passes_zone_override_to_garmin(tmp_path):
+    import json, os
+    from src.core.sync_engine import SyncEngine
+    settings = {"garmin_timezone": "Europe/Stockholm", "sync_filters": {"only_new": False}}
+    path = os.path.join(tmp_path, "settings.json")
+    with open(path, "w") as f:
+        json.dump(settings, f)
+    engine = SyncEngine(settings_path=path, mock_data_dir=str(tmp_path))
+    engine.run_sync(dry_run=True)
+    assert engine.source.helper.upload_timezone is None  # mock wraps a helper adapter, no override needed
+    assert engine.settings.garmin_timezone == "Europe/Stockholm"
+
+
+# ---------------------------------------------------------------- E5: tank order and role
+
+def test_divelogs_sends_tank_index_and_preserves_order():
+    from src.core.services.divelogs import DivelogsAdapter
+    from src.core.models import GasMixture
+    d = DivelogsAdapter("dummy", "dummy")
+    dive = UnifiedDive(date_time=datetime(2026, 6, 22, 12), duration=100, max_depth=10.0, gas_mixtures=[
+        GasMixture(oxygen=21.0, start_pressure=200.0, end_pressure=60.0, tank_volume=11.1, tank_name="Left"),
+        GasMixture(oxygen=32.0, start_pressure=210.0, end_pressure=80.0, tank_volume=7.0, tank_name="Stage"),
+    ])
+    payload = d._map_from_unified(dive)
+    assert [t["index"] for t in payload["tanks"]] == [0, 1]
+    assert [t["tankname"] for t in payload["tanks"]] == ["Left", "Stage"]
+    # round trip back: order preserved, no role invented
+    back = d._map_to_unified({"date": "2026-06-22", "time": "12:00:00", "duration": 100, "maxdepth": 10.0,
+                              "tanks": payload["tanks"]})
+    assert [g.tank_name for g in back.gas_mixtures] == ["Left", "Stage"]
+    assert all(g.tank_role is None for g in back.gas_mixtures)
+
+
+def test_garmin_tank_role_stays_unmapped():
+    """Garmin's diveGases 'status' field has no verified meaning (E4); reading
+    must not invent a role from it."""
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    details = {"summaryDTO": {"startTimeLocal": "2026-06-22T12:00:00", "duration": 100, "maxDepth": 10.0},
+              "diveInfo": {"diveGases": [{"gasIndex": 0, "oxygenContent": 21, "status": 0},
+                                        {"gasIndex": 1, "oxygenContent": 21, "status": 2}]}}
+    dive = g._map_to_unified({}, details)
+    assert len(dive.gas_mixtures) == 2 and all(t.tank_role is None for t in dive.gas_mixtures)

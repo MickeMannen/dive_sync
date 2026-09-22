@@ -98,6 +98,7 @@ def test_mock_sync_offline_mode(tmp_path):
         },
         "grace_window_minutes": 15,
         "api_cooldown_seconds": 0.0,
+        "create_on_garmin": True,  # this test verifies both upload directions (rework.md C16 is off by default)
         "schedule": []
     }
     settings_path = os.path.join(mock_data_dir, "settings.json")
@@ -121,14 +122,16 @@ def test_mock_sync_offline_mode(tmp_path):
     assert len(results["uploaded_to_garmin"]) == 1
     assert results["uploaded_to_garmin"][0]["divelogs_id"] == "50003"
 
-    # Garmin Dive 1 and Divelogs Dive 1 should be matched and cross-linked
-    assert len(results["updated_on_garmin"]) == 1
-    assert results["updated_on_garmin"][0]["id"] == "10001"
-    assert results["updated_on_garmin"][0]["linked_divelogs"] == "50001"
-
-    assert len(results["updated_on_divelogs"]) == 1
-    assert results["updated_on_divelogs"][0]["id"] == "50001"
-    assert results["updated_on_divelogs"][0]["linked_garmin"] == "10001"
+    # Garmin Dive 1 and Divelogs Dive 1 are matched; neither service can store
+    # the other's id, so the pair is remembered in the sync state instead of
+    # being "linked" through an update (nothing else differs on the fill-only board)
+    # Garmin gets the Divelogs notes filled in (the only blank/filled difference); Divelogs needs nothing
+    assert [u["id"] for u in results["updated_on_garmin"]] == ["10001"]
+    assert results["updated_on_divelogs"] == []
+    state = json.load(open(os.path.join(mock_data_dir, "sync_state.json")))
+    assert state["links"]["10001"] == "50001"
+    # ... and the uploads are remembered too (Garmin 2 -> new Divelogs 2, Divelogs 3 -> new Garmin 3)
+    assert state["links"]["10002"] == "2" and state["links"]["3"] == "50003"
 
     # Verify files created/updated in the directories
     # A new Divelogs mock file for dive 2 should exist (Garmin 2 uploaded)
@@ -267,6 +270,44 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
         data = json.load(f)
         assert data["id"] == "777001"
         assert data["location"] == "Mock Live Divelogs site"
+
+def test_download_and_save_raw_data_scoped_to_one_service(tmp_path, monkeypatch):
+    creds_data = {
+        "garmin": {"username": "test_user@garmin", "password": "password"},
+        "divelogs": {"username": "test_user_divelogs", "password": "password"},
+    }
+    creds_path = os.path.join(tmp_path, "credentials.json")
+    with open(creds_path, "w") as f:
+        json.dump(creds_data, f)
+    settings_path = os.path.join(tmp_path, "settings.json")
+    with open(settings_path, "w") as f:
+        json.dump({"schedule": []}, f)
+
+    engine = SyncEngine(settings_path=settings_path, credentials_path=creds_path, mock_data_dir=None)
+
+    garmin_login_calls = []
+    monkeypatch.setattr(engine.garmin, "login", lambda: garmin_login_calls.append(1) or True)
+
+    divelogs_login_calls = []
+    monkeypatch.setattr(engine.divelogs, "login", lambda: divelogs_login_calls.append(1) or True)
+
+    class MockResponse:
+        status_code = 200
+        def json(self):
+            return []
+    monkeypatch.setattr(engine.divelogs.session, "get", lambda url, timeout=None: MockResponse())
+
+    mock_data_dir = str(tmp_path)
+    success = engine.download_and_save_raw_data(
+        mock_data_dir=mock_data_dir, include_garmin=False, include_divelogs=True
+    )
+
+    assert success
+    assert garmin_login_calls == []
+    assert divelogs_login_calls == [1]
+    assert not os.path.exists(os.path.join(mock_data_dir, "garmin"))
+    assert os.path.exists(os.path.join(mock_data_dir, "divelogs"))
+
 
 def test_update_dive_preserves_other_fields(tmp_path):
     mock_data_dir = str(tmp_path)

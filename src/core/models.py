@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 class GasMixture(BaseModel):
@@ -8,7 +8,16 @@ class GasMixture(BaseModel):
     start_pressure: Optional[float] = Field(None, description="Starting pressure in bar")
     end_pressure: Optional[float] = Field(None, description="Ending pressure in bar")
     tank_volume: Optional[float] = Field(None, description="Tank volume in liters")
-    tank_name: Optional[str] = Field(None, description="Custom name of the tank/cylinder")
+    tank_name: Optional[str] = Field(None, description="Custom name of the tank/cylinder (e.g. a transmitter name or user label)")
+    tank_role: Optional[str] = Field(
+        None,
+        description=(
+            "Role of this tank in a multi-tank setup, e.g. 'backGas', 'stage', 'deco', 'bailout', "
+            "'sidemountLeft', 'sidemountRight', 'diluent', 'oxygen', 'not_used'. Services model this "
+            "differently (or not at all); see each adapter's mapping. Order in gas_mixtures is the "
+            "primary source of tank order across all services."
+        ),
+    )
 
 class UnifiedSample(BaseModel):
     depth: float = Field(..., description="Depth in meters")
@@ -17,6 +26,8 @@ class UnifiedSample(BaseModel):
 
 class UnifiedDive(BaseModel):
     date_time: datetime = Field(..., description="Local start date and time of the dive (timezone-naive)")
+    date_time_utc: Optional[datetime] = Field(None, description="Start instant in UTC (timezone-naive) when the service provides it; used for matching and the {date_time_utc} template key")
+    timezone: Optional[str] = Field(None, description="IANA zone of the local start time when the service provides it, e.g. 'Asia/Kuala_Lumpur'")
     duration: int = Field(..., description="Duration of the dive in seconds")
     max_depth: float = Field(..., description="Maximum depth in meters")
     avg_depth: Optional[float] = Field(None, description="Average depth in meters")
@@ -37,3 +48,12 @@ class UnifiedDive(BaseModel):
     lat: Optional[float] = Field(None, description="Latitude coordinate")
     lng: Optional[float] = Field(None, description="Longitude coordinate")
     samples: List[UnifiedSample] = Field(default_factory=list, description="Time-series dive profile samples")
+    service_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Service-specific scalars that have no unified attribute, keyed by their native name "
+            "(Garmin: activityName, locationName; Divelogs: location, divesite). Filled by the adapter's "
+            "to_unified mapping, pushed back by its update_dive, addressed on the mapping board as "
+            "<service_id>.<name>."
+        ),
+    )

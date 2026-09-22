@@ -1,10 +1,21 @@
 name: Build and Push Docker Image
 
+# Publishes to Docker Hub. Runs when a GitHub Release is published, via
+# manual workflow_dispatch, or as a reusable job called from
+# release-build.yml (rework.md E12) when "push_docker" is checked there -
+# never automatically from a plain push.
+
 on:
   release:
     # types: [released]
     types: [published]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      app_version:
+        description: "Version string to bake in (APP_VERSION build arg); falls back to the triggering release tag or ref name when omitted"
+        type: string
+        required: false
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
@@ -48,7 +59,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            APP_VERSION=${{ github.event.release.tag_name || github.ref_name || 'unknown' }}
+            APP_VERSION=${{ inputs.app_version || github.event.release.tag_name || github.ref_name || 'unknown' }}
 
       - name: Update Docker Hub Description
         uses: peter-evans/dockerhub-description@v4

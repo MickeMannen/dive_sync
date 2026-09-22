@@ -1,35 +1,27 @@
-import os
+import json
 import queue
 import logging
 import asyncio
 import threading
-import time
-from datetime import datetime
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional
+from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, CredentialsModel, CronJobModel
-from src.core.sync_engine import SyncEngine
+from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, CredentialsModel, CronJobModel, SyncPairModel
+from src.core.fields import FieldLink, build_catalog
+from src.core.templates import preview as preview_link, validate_links
+from src.core.config import ProfileError, export_profile, import_profile
+from src.core.services.garmin import GarminAdapter
+from src.core.services.divelogs import DivelogsAdapter
+import src.core.scheduler as scheduler
 
 # Configure logger
 logger = logging.getLogger("dive_sync.web")
 logger.setLevel(logging.INFO)
-
-def get_data_directories() -> List[str]:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
-    test_data_dir = os.path.join(project_root, "tests", "data")
-    
-    if "PYTEST_CURRENT_TEST" in os.environ:
-        return [test_data_dir]
-        
-    primary = os.environ.get("DATA_DIR", "./data")
-    return [primary, test_data_dir]
 
 # SSE Queue for log streaming
 sse_log_queue = queue.Queue()
@@ -51,123 +43,19 @@ sse_handler = SSELogHandler(sse_log_queue)
 sse_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
 logging.getLogger("dive_sync").addHandler(sse_handler)
 
-is_sync_running = False
-last_sync_results: Dict[str, Any] = {}
-scheduler_task: Optional[asyncio.Task] = None
-
-def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = None):
-    global is_sync_running, last_sync_results
-    is_sync_running = True
-    job_id = custom_settings.get("id") if custom_settings else "Manual"
-    logger.info("Synchronization started for job '%s' (Dry Run: %s)", job_id, dry_run)
-    try:
-        engine = SyncEngine()
-        if custom_settings:
-            engine.settings.directionality = custom_settings.get("directionality", engine.settings.directionality)
-            if "only_new" in custom_settings:
-                engine.settings.sync_filters.only_new = bool(custom_settings["only_new"])
-            if "sync_gases" in custom_settings:
-                engine.settings.sync_filters.sync_gases = bool(custom_settings["sync_gases"])
-            if "sync_fit" in custom_settings:
-                engine.settings.sync_filters.sync_fit = bool(custom_settings["sync_fit"])
-            if "date_from" in custom_settings:
-                engine.settings.sync_filters.date_from = custom_settings["date_from"]
-            if "date_to" in custom_settings:
-                engine.settings.sync_filters.date_to = custom_settings["date_to"]
-                
-        results = engine.run_sync(dry_run=dry_run)
-        last_sync_results = results
-        logger.info("Synchronization completed successfully.")
-    except Exception as e:
-        logger.error("Sync run encountered an error: %s", e)
-        last_sync_results = {"error": str(e)}
-    finally:
-        is_sync_running = False
-
-async def scheduler_loop():
-    global is_sync_running
-    logger.info("Background schedule watcher started.")
-    last_checked_minute = None
-    
-    # Track last run timestamp for custom minutes jobs
-    job_last_run: Dict[str, float] = {}
-    
-    while True:
-        try:
-            now = datetime.now()
-            current_minute = (now.hour, now.minute)
-            current_time = time.time()
-            
-            if current_minute != last_checked_minute:
-                settings = ConfigManager.load_settings()
-                
-                # Support old schedule slots (daily)
-                for slot in getattr(settings, "schedule", []):
-                    if slot.hour == now.hour and slot.minute == now.minute:
-                        logger.info("Legacy scheduled slot triggered for %02d:%02d", slot.hour, slot.minute)
-                        if not is_sync_running:
-                            threading.Thread(target=run_sync_thread, args=(False,), daemon=True).start()
-                        else:
-                            logger.warning("Scheduled sync skipped: another synchronization is currently running.")
-                
-                # Support new custom cron jobs
-                for job in getattr(settings, "cron_jobs", []):
-                    if not job.enabled:
-                        continue
-                        
-                    should_trigger = False
-                    
-                    if job.frequency == "hourly":
-                        if now.minute == job.minute:
-                            should_trigger = True
-                    elif job.frequency == "daily":
-                        if now.hour == job.hour and now.minute == job.minute:
-                            should_trigger = True
-                    elif job.frequency == "weekly":
-                        mapped_weekday = (now.weekday() + 1) % 7
-                        if mapped_weekday == job.day_of_week and now.hour == job.hour and now.minute == job.minute:
-                            should_trigger = True
-                    elif job.frequency == "custom_minutes":
-                        if job.id not in job_last_run:
-                            job_last_run[job.id] = current_time
-                        elif current_time - job_last_run[job.id] >= job.interval_minutes * 60:
-                            should_trigger = True
-                            
-                    if should_trigger:
-                        logger.info("Cron job '%s' triggered (%s)", job.id, job.frequency)
-                        if job.frequency == "custom_minutes":
-                            job_last_run[job.id] = current_time
-                            
-                        if not is_sync_running:
-                            custom_set = job.model_dump()
-                            threading.Thread(target=run_sync_thread, args=(False, custom_set), daemon=True).start()
-                        else:
-                            logger.warning("Cron job '%s' skipped: another synchronization is currently running.", job.id)
-                            
-                last_checked_minute = current_minute
-                
-            await asyncio.sleep(10)
-        except asyncio.CancelledError:
-            logger.info("Background schedule watcher stopped.")
-            break
-        except Exception as e:
-            logger.error("Error in scheduler loop: %s", e)
-            await asyncio.sleep(30)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Start background scheduler
-    global scheduler_task
-    scheduler_task = asyncio.create_task(scheduler_loop())
+    scheduler_task = asyncio.create_task(scheduler.scheduler_loop())
     yield
     # Shutdown: Stop background scheduler
-    if scheduler_task:
-        scheduler_task.cancel()
-        await asyncio.gather(scheduler_task, return_exceptions=True)
+    scheduler_task.cancel()
+    await asyncio.gather(scheduler_task, return_exceptions=True)
 
 app = FastAPI(
-    title="Dive Sync Dashboard", 
-    description="Dive Sync Web Service Synchronization Dashboard.",
+    title="Dive Sync Status",
+    description="Read-only status and schedule configuration for the Dive Sync scheduled-sync engine.",
     lifespan=lifespan
 )
 
@@ -189,16 +77,28 @@ class CronJobSchema(BaseModel):
     interval_minutes: int
     only_new: bool
     sync_gases: bool
-    sync_fit: bool
     enabled: bool
+    field_links: Optional[List[FieldLink]] = None
+    pair: Optional[str] = None
+    garmin_username: Optional[str] = None
+    divelogs_username: Optional[str] = None
 
 class SettingsSchema(BaseModel):
     directionality: str
     sync_filters: SyncFiltersSchema
     grace_window_minutes: int
     api_cooldown_seconds: float
+    propagate_deletes: bool = False
+    create_on_garmin: bool = False
     schedule: List[Dict[str, int]]
     cron_jobs: List[CronJobSchema] = []
+    # Omitted (None) keeps the board / pairs currently on disk, so a settings
+    # form that does not know about them cannot wipe them.
+    field_links: Optional[List[FieldLink]] = None
+    sync_pairs: Optional[List[SyncPairModel]] = None
+    # Same omitted-keeps-current rule; an explicit "" (an emptied form field,
+    # as opposed to a missing key) disables alerts.
+    notify_url: Optional[str] = None
 
 class SyncTriggerRequest(BaseModel):
     dry_run: bool = False
@@ -207,14 +107,21 @@ class SyncTriggerRequest(BaseModel):
     date_to: Optional[str] = None
     only_new: Optional[bool] = None
     sync_gases: Optional[bool] = None
-    sync_fit: Optional[bool] = None
+    garmin_username: Optional[str] = None
+    divelogs_username: Optional[str] = None
 
 class CredentialsSchema(BaseModel):
-    garmin_username: str = ""
-    garmin_password: str = ""
-    garmin_token_dir: str = "tokens/garmin"
-    divelogs_username: str = ""
-    divelogs_password: str = ""
+    # Repeatable rows (rework.md A8): the Garmin/Divelogs sections of the
+    # form are always fully submitted, so these lists fully replace what was
+    # stored (an empty list means "no accounts"), same as the old single
+    # username/password fields did. A row's password left blank keeps the
+    # stored password for an existing account with the same username (see
+    # save_credentials) rather than wiping it.
+    garmin_accounts: List[GarminCredentials] = Field(default_factory=list)
+    divelogs_accounts: List[DivelogsCredentials] = Field(default_factory=list)
+    # Optional sections; omitted (None) means "leave what is stored".
+    subsurface: Optional[SubsurfaceCredentials] = None
+    submersion: Optional[SubmersionCredentials] = None
 
 @app.get("/api/settings")
 def get_settings():
@@ -225,7 +132,7 @@ def get_settings():
 def save_settings(data: SettingsSchema):
     try:
         schedule_slots = [
-            SyncScheduleSlot(hour=slot["hour"], minute=slot["minute"]) 
+            SyncScheduleSlot(hour=slot["hour"], minute=slot["minute"])
             for slot in data.schedule
         ]
         cron_jobs = [
@@ -239,11 +146,25 @@ def save_settings(data: SettingsSchema):
                 interval_minutes=job.interval_minutes,
                 only_new=job.only_new,
                 sync_gases=job.sync_gases,
-                sync_fit=job.sync_fit,
-                enabled=job.enabled
+                enabled=job.enabled,
+                field_links=job.field_links,
+                pair=job.pair,
+                garmin_username=job.garmin_username,
+                divelogs_username=job.divelogs_username,
             )
             for job in data.cron_jobs
         ]
+        current = ConfigManager.load_settings()
+        field_links = data.field_links if data.field_links is not None else current.field_links
+
+        catalog = _pair_catalog()
+        problems = validate_links(field_links, catalog)
+        for job in cron_jobs:
+            if job.field_links:
+                problems.extend(f"Job '{job.id}': {p}" for p in validate_links(job.field_links, catalog))
+        if problems:
+            raise HTTPException(status_code=400, detail={"message": "Field links are invalid.", "errors": problems})
+
         settings = SettingsModel(
             directionality=data.directionality,
             sync_filters=SyncFilters(
@@ -255,15 +176,83 @@ def save_settings(data: SettingsSchema):
             ),
             grace_window_minutes=data.grace_window_minutes,
             api_cooldown_seconds=data.api_cooldown_seconds,
+            propagate_deletes=data.propagate_deletes,
+            create_on_garmin=data.create_on_garmin,
             schedule=schedule_slots,
-            cron_jobs=cron_jobs
+            cron_jobs=cron_jobs,
+            field_links=field_links,
+            sync_pairs=data.sync_pairs if data.sync_pairs is not None else current.sync_pairs,
+            garmin_timezone=current.garmin_timezone,
+            notify_url=data.notify_url if data.notify_url is not None else current.notify_url,
         )
         ConfigManager.save_settings(settings)
-        logger.info("Configuration updated successfully.")
+        logger.info("Schedule configuration updated successfully.")
         return {"status": "success", "message": "Settings updated."}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to update settings: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _pair_catalog(source=GarminAdapter, target=DivelogsAdapter):
+    return build_catalog(source.field_catalog(), target.field_catalog())
+
+
+class PreviewRequest(BaseModel):
+    link: FieldLink
+
+
+@app.post("/api/fields/preview")
+def preview_field_link(data: PreviewRequest):
+    """Validate one (unsaved) link and render its template from an example dive."""
+    return preview_link(data.link, _pair_catalog())
+
+
+ADAPTER_CLASSES = {"garmin": GarminAdapter, "divelogs": DivelogsAdapter}
+
+
+def _adapter_class(service_id: str):
+    if service_id == "uddf":
+        from src.core.services.uddf import UddfAdapter
+        return UddfAdapter
+    if service_id in ("subsurface", "subsurface-cloud"):
+        from src.core.services.subsurface import SubsurfaceAdapter
+        return SubsurfaceAdapter
+    if service_id == "submersion":
+        from src.core.services.submersion.adapter import SubmersionAdapter
+        return SubmersionAdapter
+    return ADAPTER_CLASSES[service_id]
+
+
+@app.get("/api/fields")
+def get_fields():
+    """Field catalogues per sync pair (the implicit Garmin -> Divelogs pair
+    plus every configured one), for the mapping board. Needs no login."""
+    from src.core.pairs import default_links_for, parse_service_spec
+    settings = ConfigManager.load_settings()
+    specs = [("default", "garmin", "divelogs")] + [(p.id, p.source, p.target) for p in settings.sync_pairs]
+    pairs = []
+    for pair_id, source_spec, target_spec in specs:
+        try:
+            source = _adapter_class(parse_service_spec(source_spec)[0])
+            target = _adapter_class(parse_service_spec(target_spec)[0])
+        except (ValueError, KeyError) as e:
+            logger.warning("Skipping sync pair %s: %s", pair_id, e)
+            continue
+        pairs.append({
+            "id": pair_id,
+            "source": source.service_id,
+            "target": target.service_id,
+            "source_name": source.display_name,
+            "target_name": target.display_name,
+            "default_links": [l.model_dump() for l in default_links_for(source.service_id, target.service_id)],
+            "fields": {
+                source.service_id: [f.model_dump() for f in source.field_catalog()],
+                target.service_id: [f.model_dump() for f in target.field_catalog()],
+            },
+        })
+    return {"pairs": pairs}
 
 @app.get("/api/credentials/status")
 def get_credentials_status():
@@ -278,26 +267,56 @@ def get_credentials_status():
         "garmin_username": garmin_users[0] if garmin_users else "",
         "divelogs_username": divelogs_users[0] if divelogs_users else "",
         "garmin_accounts": garmin_users,
-        "divelogs_accounts": divelogs_users
+        "divelogs_accounts": divelogs_users,
+        # Structured rows (no passwords) for the repeatable-account-row
+        # credentials form; garmin_accounts/divelogs_accounts above stay a
+        # flat username list for dropdown-style consumers (cron job editor).
+        "garmin_account_rows": [{"username": a.username, "token_dir": a.token_dir} for a in garmin_accounts if a.username],
+        "divelogs_account_rows": [{"username": a.username} for a in divelogs_accounts if a.username],
+        "subsurface_configured": creds.subsurface.configured,
+        "subsurface_email": creds.subsurface.email,
+        "submersion_configured": creds.submersion.configured,
+        "submersion_store": {
+            "store_type": creds.submersion.store_type,
+            "endpoint_url": creds.submersion.endpoint_url,
+            "region": creds.submersion.region,
+            "bucket": creds.submersion.bucket,
+            "prefix": creds.submersion.prefix,
+            "path_style": creds.submersion.path_style,
+            "folder_path": creds.submersion.folder_path,
+        },
     }
+
+
+def _merge_passwords(submitted: list, existing: list):
+    """A row with a blank password whose username matches an already-stored
+    account keeps that account's stored password, so adding/removing one
+    account doesn't force retyping every other account's password."""
+    existing_by_username = {a.username: a for a in existing if a.username}
+    merged = []
+    for account in submitted:
+        if not account.password and account.username in existing_by_username:
+            account = account.model_copy(update={"password": existing_by_username[account.username].password})
+        merged.append(account)
+    return merged
 
 
 @app.post("/api/credentials")
 def save_credentials(data: CredentialsSchema):
     try:
-        creds = CredentialsModel(
-            garmin=GarminCredentials(
-                username=data.garmin_username,
-                password=data.garmin_password,
-                token_dir=data.garmin_token_dir
-            ),
-            divelogs=DivelogsCredentials(
-                username=data.divelogs_username,
-                password=data.divelogs_password
-            )
-        )
+        # Only the sections the form sends are replaced; the stored
+        # Subsurface / Submersion entries survive a Garmin/Divelogs save.
+        current = ConfigManager.load_credentials()
+        creds = current.model_copy(update={
+            "garmin": _merge_passwords(data.garmin_accounts, current.get_garmin_accounts()),
+            "divelogs": _merge_passwords(data.divelogs_accounts, current.get_divelogs_accounts()),
+        })
+        if data.subsurface is not None:
+            creds = creds.model_copy(update={"subsurface": data.subsurface})
+        if data.submersion is not None:
+            creds = creds.model_copy(update={"submersion": data.submersion})
         ConfigManager.save_credentials(creds)
-        logger.info("Credentials updated via web dashboard.")
+        logger.info("Credentials updated via status page.")
         return {"status": "success", "message": "Credentials saved successfully."}
     except Exception as e:
         logger.error("Failed to save credentials: %s", e)
@@ -305,58 +324,222 @@ def save_credentials(data: CredentialsSchema):
 
 @app.post("/api/credentials/test")
 def test_credentials(data: CredentialsSchema):
+    """Per-account results (rework.md A8): only rows with both a username
+    and a password can actually be tested - a row kept via the blank-password
+    merge in save_credentials has no password here to test with."""
     results = {"garmin": None, "divelogs": None}
-    
-    if data.garmin_username and data.garmin_password:
-        try:
-            from src.core.services.garmin import GarminAdapter
-            adapter = GarminAdapter(
-                username=data.garmin_username,
-                password=data.garmin_password,
-                token_dir=data.garmin_token_dir,
-                cooldown_seconds=1.0
-            )
-            results["garmin"] = adapter.login()
-        except Exception as e:
-            logger.error("Garmin credential test failed: %s", e)
-            results["garmin"] = False
-    
-    if data.divelogs_username and data.divelogs_password:
-        try:
-            from src.core.services.divelogs import DivelogsAdapter
-            adapter = DivelogsAdapter(
-                username=data.divelogs_username,
-                password=data.divelogs_password,
-                cooldown_seconds=1.0
-            )
-            results["divelogs"] = adapter.login()
-        except Exception as e:
-            logger.error("Divelogs credential test failed: %s", e)
-            results["divelogs"] = False
-    
+
+    garmin_rows = [a for a in data.garmin_accounts if a.username and a.password]
+    if garmin_rows:
+        from src.core.services.garmin import GarminAdapter
+        garmin_results = []
+        for account in garmin_rows:
+            try:
+                adapter = GarminAdapter(
+                    username=account.username,
+                    password=account.password,
+                    token_dir=account.token_dir,
+                    cooldown_seconds=1.0
+                )
+                ok = adapter.login()
+            except Exception as e:
+                logger.error("Garmin credential test failed for %s: %s", account.username, e)
+                ok = False
+            garmin_results.append({"username": account.username, "ok": ok})
+        results["garmin"] = garmin_results
+
+    divelogs_rows = [a for a in data.divelogs_accounts if a.username and a.password]
+    if divelogs_rows:
+        from src.core.services.divelogs import DivelogsAdapter
+        divelogs_results = []
+        for account in divelogs_rows:
+            try:
+                adapter = DivelogsAdapter(
+                    username=account.username,
+                    password=account.password,
+                    cooldown_seconds=1.0
+                )
+                ok = adapter.login()
+            except Exception as e:
+                logger.error("Divelogs credential test failed for %s: %s", account.username, e)
+                ok = False
+            divelogs_results.append({"username": account.username, "ok": ok})
+        results["divelogs"] = divelogs_results
+
+    if data.subsurface is not None and data.subsurface.configured:
+        from src.core.services.subsurface_cloud import check_cloud_login
+        ok, message = check_cloud_login(data.subsurface.email, data.subsurface.password, data.subsurface.base_url)
+        results["subsurface"] = ok
+        results["subsurface_message"] = message
+
+    if data.submersion is not None and data.submersion.configured:
+        from src.core.services.submersion.store import check_store_access
+        ok, message = check_store_access(data.submersion)
+        if ok:
+            # Connectivity is fine; also try to unlock an end-to-end
+            # encrypted library so a wrong/missing passphrase surfaces here
+            # rather than only on the next real sync.
+            import tempfile
+            from src.core.services.submersion.adapter import SubmersionAdapter
+            with tempfile.TemporaryDirectory() as scratch:
+                adapter = SubmersionAdapter(data.submersion, device_state_dir=scratch)
+                try:
+                    enc_ok, enc_message = adapter._resolve_encryption()
+                except Exception as e:
+                    enc_ok, enc_message = False, str(e)
+                if not enc_ok:
+                    ok, message = False, enc_message
+                elif enc_message:
+                    message = f"{message} {enc_message}."
+        results["submersion"] = ok
+        results["submersion_message"] = message
+
     return results
 
+# ---------------------------------------------------------------------------
+# Phase 6: mapping board support (Test mapping, conflicts, profiles, full compare)
+# ---------------------------------------------------------------------------
+
+def _engine_for_pair_id(pair_id: Optional[str]):
+    """The engine for the implicit Garmin -> Divelogs pair or a configured one."""
+    from src.core.pairs import engine_for_pair, find_pair
+    from src.core.sync_engine import SyncEngine
+    if not pair_id or pair_id == "default":
+        engine = SyncEngine()
+        engine.run_overrides = {}
+        return engine
+    return engine_for_pair(find_pair(ConfigManager.load_settings(), pair_id))
+
+
+class MappingTestRequest(BaseModel):
+    pair: Optional[str] = None
+    field_links: Optional[List[FieldLink]] = None
+    limit: int = 10
+
+
+@app.post("/api/mapping/test")
+def test_mapping(data: MappingTestRequest):
+    """Read-only rehearsal of a (possibly unsaved) board on the newest dives
+    of both services. Fetches live, so it takes a while and cannot run next
+    to a sync."""
+    if scheduler.is_sync_running:
+        raise HTTPException(status_code=409, detail="A synchronization run is in progress; try again when it has finished.")
+    try:
+        engine = _engine_for_pair_id(data.pair)
+        links = data.field_links
+        if links is None and engine.run_overrides.get("field_links_override") is not None:
+            links = engine.run_overrides["field_links_override"]
+        return engine.test_mapping(links, limit=max(1, min(data.limit, 50)))
+    except Exception as e:
+        logger.error("Test mapping failed: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/conflicts")
+def list_conflicts(pair: Optional[str] = None):
+    try:
+        engine = _engine_for_pair_id(pair)
+        return {"pair": pair or "default", "source": engine.source_id, "target": engine.target_id,
+                "conflicts": [c.model_dump(mode="json") for c in engine.list_conflicts()]}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class ResolveRequest(BaseModel):
+    winner: str
+    pair: Optional[str] = None
+
+
+@app.post("/api/conflicts/{conflict_id}/resolve")
+def resolve_conflict(conflict_id: str, data: ResolveRequest):
+    if scheduler.is_sync_running:
+        raise HTTPException(status_code=409, detail="A synchronization run is in progress; try again when it has finished.")
+    try:
+        engine = _engine_for_pair_id(data.pair)
+        resolved = engine.resolve_conflict(conflict_id, data.winner)
+        return {"status": "success", "resolved": resolved.model_dump(mode="json")}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Conflict resolution failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sync/full-compare")
+def request_full_compare(pair: Optional[str] = None):
+    """Make the next run of this pair compare every matched dive (the
+    'apply the changed board to all dives' prompt)."""
+    try:
+        engine = _engine_for_pair_id(pair)
+        engine.request_full_compare(True)
+        return {"status": "success", "message": "The next run will compare every matched dive."}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/settings/export")
+def export_settings_profile():
+    profile = export_profile(ConfigManager.load_settings())
+    return JSONResponse(profile, headers={"Content-Disposition": 'attachment; filename="dive_sync_profile.json"'})
+
+
+@app.post("/api/settings/import")
+async def import_settings_profile(file: UploadFile = File(...), apply: bool = False):
+    """Upload a profile. Without ``apply`` only the diff summary comes back;
+    with ``apply=true`` the listed sections replace the current settings."""
+    try:
+        data = json.loads((await file.read()).decode("utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"The file is not valid JSON: {e}")
+    current = ConfigManager.load_settings()
+    try:
+        new_settings, summary = import_profile(data, current, _pair_catalog())
+    except ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    problems = validate_links(new_settings.field_links, _pair_catalog())
+    if problems:
+        raise HTTPException(status_code=400, detail={"message": "The profile's field links are invalid.", "errors": problems})
+    if apply:
+        ConfigManager.save_settings(new_settings)
+        logger.info("Settings replaced from an uploaded profile (%s).", ", ".join(summary.sections))
+    return {"applied": apply, "summary": summary.model_dump()}
+
+
 @app.post("/api/sync/trigger")
-def trigger_sync(request: Optional[SyncTriggerRequest] = None, dry_run: bool = Query(False)):
-    global is_sync_running
-    if is_sync_running:
+def trigger_sync(request: Optional[SyncTriggerRequest] = None):
+    if scheduler.is_sync_running:
         raise HTTPException(status_code=409, detail="A synchronization run is already in progress.")
-        
+
+    dry_run = False
     custom_settings = None
     if request:
         dry_run = request.dry_run
         custom_settings = request.model_dump(exclude_none=True)
-        
-    threading.Thread(target=run_sync_thread, args=(dry_run, custom_settings), daemon=True).start()
+
+    threading.Thread(target=scheduler.run_sync_thread, args=(dry_run, custom_settings), daemon=True).start()
     return {"status": "success", "message": "Sync job triggered in background."}
 
-@app.get("/api/sync/status")
-def get_sync_status():
-    global is_sync_running, last_sync_results
+@app.get("/api/status")
+def get_status():
+    settings = ConfigManager.load_settings()
     return {
-        "is_running": is_sync_running,
-        "last_results": last_sync_results
+        "is_running": scheduler.is_sync_running,
+        "last_results": scheduler.last_sync_results,
+        "next_scheduled_run": scheduler.get_next_scheduled_run(settings)
     }
+
+class NotifyTestRequest(BaseModel):
+    notify_url: str
+
+
+@app.post("/api/notify/test")
+def test_notify(data: NotifyTestRequest):
+    """Send a real test alert to the given URL, without saving it (rework.md
+    A11) - lets the status page's Test button check a URL before Save."""
+    from src.core.notify import send_notification
+    ok, detail = send_notification(data.notify_url, "Dive Sync", "This is a test alert from Dive Sync.")
+    return {"ok": ok, "detail": detail}
+
 
 @app.get("/api/logs/stream")
 def stream_logs():
@@ -367,9 +550,9 @@ def stream_logs():
                 sse_log_queue.get_nowait()
             except Exception:
                 break
-        
+
         # Start streaming
-        logger.info("Web dashboard client connected to log stream.")
+        logger.info("Status page client connected to log stream.")
         while True:
             try:
                 # Poll queue
@@ -379,772 +562,13 @@ def stream_logs():
                 else:
                     await asyncio.sleep(0.2)
             except asyncio.CancelledError:
-                logger.info("Web dashboard client disconnected from log stream.")
+                logger.info("Status page client disconnected from log stream.")
                 break
             except Exception as e:
                 yield f"data: Error: {str(e)}\n\n"
                 break
-                
+
     return StreamingResponse(log_generator(), media_type="text/event-stream")
-
-def get_cached_dives(garmin_username: Optional[str] = None, divelogs_username: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
-    garmin_dives = []
-    divelogs_dives = []
-    
-    # Check paths
-    base_dirs = get_data_directories()
-    
-    from src.core.config import ConfigManager
-    try:
-        creds = ConfigManager.load_credentials()
-        garmin_accounts = creds.get_garmin_accounts()
-        divelogs_accounts = creds.get_divelogs_accounts()
-    except Exception:
-        garmin_accounts = []
-        divelogs_accounts = []
-
-    if not garmin_username:
-        if len(garmin_accounts) == 1:
-            garmin_username = garmin_accounts[0].username
-        elif len(garmin_accounts) > 1:
-            garmin_username = garmin_accounts[0].username
-
-    if not divelogs_username:
-        if len(divelogs_accounts) == 1:
-            divelogs_username = divelogs_accounts[0].username
-        elif len(divelogs_accounts) > 1:
-            divelogs_username = divelogs_accounts[0].username
-    
-    # 1. Garmin
-    garmin_dir = None
-    for d in base_dirs:
-        if garmin_username:
-            path_user = os.path.join(d, "garmin", garmin_username)
-            if os.path.exists(path_user) and os.listdir(path_user):
-                garmin_dir = path_user
-                break
-        path_direct = os.path.join(d, "garmin")
-        if os.path.exists(path_direct) and os.listdir(path_direct):
-            garmin_dir = path_direct
-            break
-            
-    if garmin_dir:
-        import json
-        files_to_process = []
-        for name in os.listdir(garmin_dir):
-            path_name = os.path.join(garmin_dir, name)
-            if os.path.isdir(path_name):
-                for subname in os.listdir(path_name):
-                    if subname.endswith(".json") and subname != "sync_state.json":
-                        files_to_process.append((subname, os.path.join(path_name, subname)))
-            elif name.endswith(".json") and name != "sync_state.json":
-                files_to_process.append((name, path_name))
-                
-        for filename, filepath in files_to_process:
-            try:
-                with open(filepath, "r") as f:
-                    data = json.load(f)
-                
-                summary = data.get("summary", {})
-                details = data.get("details") or {}
-                if not isinstance(details, dict):
-                    details = {}
-                
-                # Parse essential information
-                sum_dto = details.get("summaryDTO", {}) or summary.get("summaryDTO", {}) or {}
-                metadata = details.get("metadataDTO", {}) or summary.get("metadataDTO", {}) or {}
-                
-                dive_num = metadata.get("diveNumber") or filename.replace(".json", "")
-                date_time = sum_dto.get("startTimeLocal") or summary.get("startTimeLocal") or ""
-                duration = sum_dto.get("duration") or summary.get("duration") or 0
-                max_depth = sum_dto.get("maxDepth") or summary.get("maxDepth") or 0.0
-                location = details.get("activityName") or summary.get("activityName") or ""
-                notes = details.get("description") or summary.get("description") or ""
-                
-                info = details.get("diveInfo") or summary.get("diveInfo") or {}
-                weight = info.get("weight")
-                weight_unit = info.get("weightUnit", {}).get("unitKey") if isinstance(info.get("weightUnit"), dict) else ""
-                visibility = info.get("visibility")
-                visibility_unit = info.get("visibilityUnit", {}).get("unitKey") if isinstance(info.get("visibilityUnit"), dict) else ""
-                buddy = info.get("buddy") or ""
-                
-                weight_str = ""
-                if weight is not None:
-                    w_unit = "kg" if "kilogram" in str(weight_unit).lower() else "lbs"
-                    weight_str = f"{weight:g} {w_unit}"
-                    
-                visibility_str = ""
-                if visibility is not None:
-                    v_unit = "m" if "meter" in str(visibility_unit).lower() else "ft"
-                    visibility_str = f"{visibility:g} {v_unit}"
-
-                garmin_dives.append({
-                    "id": str(summary.get("activityId") or ""),
-                    "dive_number": dive_num,
-                    "date_time": date_time,
-                    "duration": duration,
-                    "max_depth": max_depth,
-                    "location": location,
-                    "notes": notes,
-                    "weight": weight_str,
-                    "visibility": visibility_str,
-                    "buddy": buddy,
-                    "filename": filename
-                })
-            except Exception as e:
-                logger.warning("Failed to parse cached Garmin dive file %s: %s", filename, e)
-                    
-    # 2. Divelogs
-    divelogs_dir = None
-    for d in base_dirs:
-        if divelogs_username:
-            path_user = os.path.join(d, "divelogs", divelogs_username)
-            if os.path.exists(path_user) and os.listdir(path_user):
-                divelogs_dir = path_user
-                break
-        path_direct = os.path.join(d, "divelogs")
-        if os.path.exists(path_direct) and os.listdir(path_direct):
-            divelogs_dir = path_direct
-            break
-            
-    if divelogs_dir:
-        import json
-        files_to_process = []
-        for name in os.listdir(divelogs_dir):
-            path_name = os.path.join(divelogs_dir, name)
-            if os.path.isdir(path_name):
-                for subname in os.listdir(path_name):
-                    if subname.endswith(".json") and subname != "sync_state.json":
-                        files_to_process.append((subname, os.path.join(path_name, subname)))
-            elif name.endswith(".json") and name != "sync_state.json":
-                files_to_process.append((name, path_name))
-                
-        for filename, filepath in files_to_process:
-            try:
-                with open(filepath, "r") as f:
-                    data = json.load(f)
-                
-                dive_num = data.get("divenumber") or filename.replace(".json", "")
-                date = data.get("date") or ""
-                time = data.get("time") or "00:00:00"
-                
-                garmin_id = data.get("garmin_id") or ""
-                
-                # Essential information
-                location_parts = []
-                if data.get("location"):
-                    location_parts.append(str(data["location"]))
-                if data.get("divesite"):
-                    location_parts.append(str(data["divesite"]))
-                location = ", ".join(location_parts) if location_parts else ""
-                
-                weights_val = data.get("weights")
-                weight_str = ""
-                if weights_val not in [None, "", 0]:
-                    try:
-                        w_num = float(weights_val)
-                        weight_str = f"{w_num:g}"
-                    except (ValueError, TypeError):
-                        weight_str = str(weights_val)
-                        
-                visibility_str = str(data.get("visibility") or "")
-                buddy = data.get("buddy") or ""
-
-                divelogs_dives.append({
-                    "id": str(data.get("id") or ""),
-                    "dive_number": dive_num,
-                    "date_time": f"{date} {time}",
-                    "duration": data.get("duration") or 0,
-                    "max_depth": data.get("maxdepth") or 0.0,
-                    "location": location,
-                    "notes": data.get("notes") or "",
-                    "garmin_id": garmin_id,
-                    "weight": weight_str,
-                    "visibility": visibility_str,
-                    "buddy": buddy,
-                    "filename": filename
-                })
-            except Exception as e:
-                logger.warning("Failed to parse cached Divelogs dive file %s: %s", filename, e)
-                    
-    # Sort dives by date descending
-    garmin_dives.sort(key=lambda x: x["date_time"], reverse=True)
-    divelogs_dives.sort(key=lambda x: x["date_time"], reverse=True)
-    
-    return {
-        "garmin": garmin_dives,
-        "divelogs": divelogs_dives
-    }
- 
-@app.get("/api/dives")
-def get_dives(garmin_user: Optional[str] = None, divelogs_user: Optional[str] = None):
-    return get_cached_dives(garmin_username=garmin_user, divelogs_username=divelogs_user)
- 
-is_download_running = False
-last_download_error = None
- 
-def run_download_thread(overwrite: bool, base_dir: str, garmin_user: Optional[str] = None, divelogs_user: Optional[str] = None):
-    global is_download_running, last_download_error
-    is_download_running = True
-    last_download_error = None
-    try:
-        engine = SyncEngine(garmin_username=garmin_user, divelogs_username=divelogs_user)
-        success = engine.download_and_save_raw_data(mock_data_dir=base_dir, overwrite=overwrite)
-        if not success:
-            last_download_error = "Download completed with warnings/failures."
-    except Exception as e:
-        last_download_error = str(e)
-        logger.error("Raw data download failed: %s", e)
-    finally:
-        is_download_running = False
- 
-@app.post("/api/dives/download")
-def download_raw_dives(overwrite: bool = Query(True), garmin_user: Optional[str] = None, divelogs_user: Optional[str] = None):
-    global is_sync_running, is_download_running
-    if is_sync_running or is_download_running:
-        raise HTTPException(status_code=409, detail="A synchronization or download job is already in progress.")
-        
-    base_dir = os.environ.get("DATA_DIR", "./data")
-    threading.Thread(target=run_download_thread, args=(overwrite, base_dir, garmin_user, divelogs_user), daemon=True).start()
-    return {"status": "success", "message": "Raw data download started in background."}
- 
-@app.get("/api/dives/download/status")
-def get_download_status():
-    global is_download_running, last_download_error
-    return {
-        "is_running": is_download_running,
-        "error": last_download_error
-    }
- 
-@app.get("/api/dives/raw")
-def get_raw_dive(service: str, filename: str, username: Optional[str] = None):
-    import json
-    base_dirs = get_data_directories()
-    filepath = None
-    for d in base_dirs:
-        if username:
-            path = os.path.join(d, service, username, filename)
-            if os.path.exists(path):
-                filepath = path
-                break
-        path = os.path.join(d, service, filename)
-        if os.path.exists(path):
-            filepath = path
-            break
-        service_dir = os.path.join(d, service)
-        if os.path.exists(service_dir) and os.path.isdir(service_dir):
-            for sub in os.listdir(service_dir):
-                sub_path = os.path.join(service_dir, sub)
-                if os.path.isdir(sub_path):
-                    path = os.path.join(sub_path, filename)
-                    if os.path.exists(path):
-                        filepath = path
-                        break
-            if filepath:
-                break
-                
-    if not filepath or not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="Dive file not found.")
-        
-    try:
-        with open(filepath, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error("Failed to read raw dive file %s: %s", filename, e)
-        raise HTTPException(status_code=500, detail=str(e))
- 
-@app.delete("/api/dives")
-def delete_dive(service: str, filename: str, username: Optional[str] = None):
-    import os
-    import json
-    base_dirs = get_data_directories()
-    filepath = None
-    for d in base_dirs:
-        if username:
-            path = os.path.join(d, service, username, filename)
-            if os.path.exists(path):
-                filepath = path
-                break
-        path = os.path.join(d, service, filename)
-        if os.path.exists(path):
-            filepath = path
-            break
-        service_dir = os.path.join(d, service)
-        if os.path.exists(service_dir) and os.path.isdir(service_dir):
-            for sub in os.listdir(service_dir):
-                sub_path = os.path.join(service_dir, sub)
-                if os.path.isdir(sub_path):
-                    path = os.path.join(sub_path, filename)
-                    if os.path.exists(path):
-                        filepath = path
-                        break
-            if filepath:
-                break
-                
-    if not filepath or not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="Dive file not found.")
-        
-    try:
-        # Load external ID to delete remotely
-        with open(filepath, "r") as f:
-            dive_data = json.load(f)
-            
-        if service == "garmin":
-            summary = dive_data.get("summary", {})
-            activity_id = summary.get("activityId")
-            if activity_id:
-                threading.Thread(
-                    target=delete_garmin_dive_background,
-                    args=(filepath, str(activity_id)),
-                    daemon=True
-                ).start()
-        elif service == "divelogs":
-            dive_id = dive_data.get("id")
-            if dive_id:
-                threading.Thread(
-                    target=delete_divelogs_dive_background,
-                    args=(filepath, str(dive_id)),
-                    daemon=True
-                ).start()
-    except Exception as e:
-        logger.error("Failed to parse dive file %s to trigger remote deletion: %s", filename, e)
-
-    try:
-        os.remove(filepath)
-        logger.info("Deleted local cache file %s: %s", filename, filepath)
-        return {"status": "success", "message": f"Deleted local cache file: {filename}"}
-    except Exception as e:
-        logger.error("Failed to delete local cache file %s: %s", filename, e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-def delete_garmin_dive_background(filepath: str, activity_id: str):
-    import time
-    try:
-        from src.core.config import ConfigManager
-        creds = ConfigManager.load_credentials()
-        
-        # Determine username from filepath (if nested)
-        username = None
-        parts = filepath.replace("\\", "/").split("/")
-        if len(parts) >= 3 and parts[-3] == "garmin":
-            username = parts[-2]
-            
-        garmin_accounts = creds.get_garmin_accounts()
-        if not username:
-            if len(garmin_accounts) == 1:
-                username = garmin_accounts[0].username
-            else:
-                logger.error("Multiple Garmin accounts configured but username could not be determined from path: %s", filepath)
-                return
-                
-        matching = [a for a in garmin_accounts if a.username == username]
-        if not matching:
-            logger.error("No Garmin credentials found for username: %s", username)
-            return
-        active_creds = matching[0]
-        
-        if not active_creds.username or not active_creds.password:
-            logger.warning("Garmin Connect credentials not found, skipping background remote delete.")
-            return
-            
-        from src.core.services.garmin import GarminAdapter
-        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=active_creds.token_dir)
-        
-        logger.info("Background thread deleting Garmin Connect Activity ID %s...", activity_id)
-        success = adapter.delete_dive(str(activity_id))
-        if success:
-            logger.info("Garmin Connect successfully deleted in background for Activity ID %s.", activity_id)
-        else:
-            logger.error("Garmin Connect background delete failed for Activity ID %s.", activity_id)
-    except Exception as e:
-        logger.error("Error in background Garmin remote delete for %s: %s", filepath, e)
-
-def delete_divelogs_dive_background(filepath: str, dive_id: str):
-    import time
-    try:
-        from src.core.config import ConfigManager
-        creds = ConfigManager.load_credentials()
-        
-        # Determine username from filepath (if nested)
-        username = None
-        parts = filepath.replace("\\", "/").split("/")
-        if len(parts) >= 3 and parts[-3] == "divelogs":
-            username = parts[-2]
-            
-        divelogs_accounts = creds.get_divelogs_accounts()
-        if not username:
-            if len(divelogs_accounts) == 1:
-                username = divelogs_accounts[0].username
-            else:
-                logger.error("Multiple Divelogs accounts configured but username could not be determined from path: %s", filepath)
-                return
-                
-        matching = [a for a in divelogs_accounts if a.username == username]
-        if not matching:
-            logger.error("No Divelogs credentials found for username: %s", username)
-            return
-        active_creds = matching[0]
-        
-        if not active_creds.username or not active_creds.password:
-            logger.warning("Divelogs.org credentials not found, skipping background remote delete.")
-            return
-            
-        from src.core.services.divelogs import DivelogsAdapter
-        adapter = DivelogsAdapter(active_creds.username, active_creds.password)
-        
-        logger.info("Background thread deleting Divelogs.org Dive ID %s...", dive_id)
-        success = adapter.delete_dive(str(dive_id))
-        if success:
-            logger.info("Divelogs.org successfully deleted in background for Dive ID %s.", dive_id)
-        else:
-            logger.error("Divelogs.org background delete failed for Dive ID %s.", dive_id)
-    except Exception as e:
-        logger.error("Error in background Divelogs remote delete for %s: %s", filepath, e)
-
-def push_garmin_update_background(filename: str, filepath: str):
-    import json
-    import time
-    try:
-        from src.core.config import ConfigManager
-        creds = ConfigManager.load_credentials()
-        
-        # Determine username from filepath (if nested)
-        username = None
-        parts = filepath.replace("\\", "/").split("/")
-        if len(parts) >= 3 and parts[-3] == "garmin":
-            username = parts[-2]
-            
-        garmin_accounts = creds.get_garmin_accounts()
-        if not username:
-            if len(garmin_accounts) == 1:
-                username = garmin_accounts[0].username
-            else:
-                logger.error("Multiple Garmin accounts configured but username could not be determined from path: %s", filepath)
-                return
-                
-        matching = [a for a in garmin_accounts if a.username == username]
-        if not matching:
-            logger.error("No Garmin credentials found for username: %s", username)
-            return
-        active_creds = matching[0]
-        
-        if not active_creds.username or not active_creds.password:
-            logger.warning("Garmin Connect credentials not found, skipping background remote update.")
-            return
-            
-        with open(filepath, "r") as f:
-            dive_data = json.load(f)
-            
-        summary = dive_data.get("summary", {})
-        details = dive_data.get("details") or {}
-        
-        activity_id = summary.get("activityId")
-        if not activity_id:
-            logger.error("No Garmin activityId found in cache for %s; cannot update remotely.", filename)
-            return
-            
-        from src.core.services.garmin import GarminAdapter
-        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=active_creds.token_dir)
-        
-        # Map raw cached dict to UnifiedDive
-        unified_dive = adapter._map_to_unified(summary, details)
-        
-        logger.info("Background thread updating Garmin Connect for Activity ID %s...", activity_id)
-        success = adapter.update_dive(str(activity_id), unified_dive)
-        if success:
-            logger.info("Garmin Connect successfully updated in background for Activity ID %s.", activity_id)
-        else:
-            logger.error("Garmin Connect background update failed for Activity ID %s.", activity_id)
-    except Exception as e:
-        logger.error("Error in background Garmin remote update for file %s: %s", filename, e)
- 
-def push_divelogs_update_background(filename: str, filepath: str):
-    import json
-    import time
-    try:
-        from src.core.config import ConfigManager
-        creds = ConfigManager.load_credentials()
-        
-        # Determine username from filepath (if nested)
-        username = None
-        parts = filepath.replace("\\", "/").split("/")
-        if len(parts) >= 3 and parts[-3] == "divelogs":
-            username = parts[-2]
-            
-        divelogs_accounts = creds.get_divelogs_accounts()
-        if not username:
-            if len(divelogs_accounts) == 1:
-                username = divelogs_accounts[0].username
-            else:
-                logger.error("Multiple Divelogs accounts configured but username could not be determined from path: %s", filepath)
-                return
-                
-        matching = [a for a in divelogs_accounts if a.username == username]
-        if not matching:
-            logger.error("No Divelogs credentials found for username: %s", username)
-            return
-        active_creds = matching[0]
-        
-        if not active_creds.username or not active_creds.password:
-            logger.warning("Divelogs.org credentials not found, skipping background remote update.")
-            return
-            
-        with open(filepath, "r") as f:
-            dive_data = json.load(f)
-            
-        dive_id = dive_data.get("id")
-        if not dive_id:
-            logger.error("No Divelogs ID found in cache for %s; cannot update remotely.", filename)
-            return
-            
-        from src.core.services.divelogs import DivelogsAdapter
-        adapter = DivelogsAdapter(active_creds.username, active_creds.password)
-        
-        # Map raw cached dict to UnifiedDive
-        unified_dive = adapter._map_to_unified(dive_data)
-        
-        logger.info("Background thread updating Divelogs.org for Dive ID %s...", dive_id)
-        success = adapter.update_dive(str(dive_id), unified_dive)
-        if success:
-            logger.info("Divelogs.org successfully updated in background for Dive ID %s.", dive_id)
-        else:
-            logger.error("Divelogs.org background update failed for Dive ID %s.", dive_id)
-    except Exception as e:
-        logger.error("Error in background Divelogs remote update for file %s: %s", filename, e)
- 
-class UpdateDiveSchema(BaseModel):
-    service: str  # "garmin" or "divelogs"
-    filename: str
-    username: Optional[str] = None
-    dive_number: Optional[str] = None
-    date_time: Optional[str] = None
-    duration: Optional[int] = None
-    max_depth: Optional[float] = None
-    location: Optional[str] = None
-    notes: Optional[str] = None
-    weight: Optional[str] = None
-    visibility: Optional[str] = None
-    buddy: Optional[str] = None
- 
-@app.post("/api/dives/update")
-def update_dive_endpoint(data: UpdateDiveSchema):
-    import json
-    base_dirs = get_data_directories()
-    filepath = None
-    for d in base_dirs:
-        if data.username:
-            path = os.path.join(d, data.service, data.username, data.filename)
-            if os.path.exists(path):
-                filepath = path
-                break
-        path = os.path.join(d, data.service, data.filename)
-        if os.path.exists(path):
-            filepath = path
-            break
-        service_dir = os.path.join(d, data.service)
-        if os.path.exists(service_dir) and os.path.isdir(service_dir):
-            for sub in os.listdir(service_dir):
-                sub_path = os.path.join(service_dir, sub)
-                if os.path.isdir(sub_path):
-                    path = os.path.join(sub_path, data.filename)
-                    if os.path.exists(path):
-                        filepath = path
-                        break
-            if filepath:
-                break
-                
-    if not filepath or not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="Dive file not found.")
-        
-    try:
-        with open(filepath, "r") as f:
-            dive_data = json.load(f)
-            
-        if data.service == "garmin":
-            summary = dive_data.get("summary", {})
-            details = dive_data.get("details") or {}
-            if not isinstance(details, dict):
-                details = {}
-                dive_data["details"] = details
-            
-            # Update fields in Garmin structure
-            if data.dive_number is not None:
-                if "metadataDTO" not in summary:
-                    summary["metadataDTO"] = {}
-                if "metadataDTO" not in details:
-                    details["metadataDTO"] = {}
-                summary["metadataDTO"]["diveNumber"] = data.dive_number
-                details["metadataDTO"]["diveNumber"] = data.dive_number
-                
-            if data.date_time is not None:
-                if "summaryDTO" not in summary:
-                    summary["summaryDTO"] = {}
-                if "summaryDTO" not in details:
-                    details["summaryDTO"] = {}
-                summary["startTimeLocal"] = data.date_time
-                details["startTimeLocal"] = data.date_time
-                summary["summaryDTO"]["startTimeLocal"] = data.date_time
-                details["summaryDTO"]["startTimeLocal"] = data.date_time
-                
-            if data.duration is not None:
-                if "summaryDTO" not in summary:
-                    summary["summaryDTO"] = {}
-                if "summaryDTO" not in details:
-                    details["summaryDTO"] = {}
-                summary["duration"] = data.duration
-                details["duration"] = data.duration
-                summary["summaryDTO"]["duration"] = data.duration
-                details["summaryDTO"]["duration"] = data.duration
-                summary["summaryDTO"]["bottomTime"] = data.duration
-                details["summaryDTO"]["bottomTime"] = data.duration
-                
-            if data.max_depth is not None:
-                if "summaryDTO" not in summary:
-                    summary["summaryDTO"] = {}
-                if "summaryDTO" not in details:
-                    details["summaryDTO"] = {}
-                summary["maxDepth"] = data.max_depth
-                details["maxDepth"] = data.max_depth
-                summary["summaryDTO"]["maxDepth"] = data.max_depth
-                details["summaryDTO"]["maxDepth"] = data.max_depth
-                
-            if data.location is not None:
-                summary["activityName"] = data.location
-                details["activityName"] = data.location
-                details["locationName"] = data.location
-                summary["locationName"] = data.location
-                
-            if data.notes is not None:
-                val = None if (data.notes == "" or data.notes == "None") else data.notes
-                summary["description"] = val
-                details["description"] = val
-                
-            if "diveInfo" not in summary or not isinstance(summary["diveInfo"], dict):
-                summary["diveInfo"] = {}
-            if "diveInfo" not in details or not isinstance(details["diveInfo"], dict):
-                details["diveInfo"] = {}
-                
-            if data.weight is not None:
-                import re
-                weight_val = None
-                weight_unit = "kilogram"
-                match = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)?$", data.weight)
-                if match:
-                    weight_val = float(match.group(1))
-                    unit_str = (match.group(2) or "").strip().lower()
-                    if "lb" in unit_str or "pound" in unit_str:
-                        weight_unit = "pound"
-                else:
-                    try:
-                        weight_val = float(data.weight)
-                    except ValueError:
-                        pass
-                
-                summary["diveInfo"]["weight"] = weight_val
-                details["diveInfo"]["weight"] = weight_val
-                if weight_val is not None:
-                    u_key = weight_unit
-                    u_id = 8 if u_key == "kilogram" else 9
-                    factor = 1000.0 if u_key == "kilogram" else 453.59237
-                    u_info = {"unitId": u_id, "unitKey": u_key, "factor": factor}
-                    summary["diveInfo"]["weightUnit"] = u_info
-                    details["diveInfo"]["weightUnit"] = u_info
-                else:
-                    summary["diveInfo"]["weightUnit"] = None
-                    details["diveInfo"]["weightUnit"] = None
-                    
-            if data.visibility is not None:
-                import re
-                vis_val = None
-                vis_unit = "meter"
-                match = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)?$", data.visibility)
-                if match:
-                    vis_val = float(match.group(1))
-                    unit_str = (match.group(2) or "").strip().lower()
-                    if "ft" in unit_str or "foot" in unit_str or "feet" in unit_str:
-                        vis_unit = "foot"
-                else:
-                    try:
-                        vis_val = float(data.visibility)
-                    except ValueError:
-                        pass
-                        
-                summary["diveInfo"]["visibility"] = vis_val
-                details["diveInfo"]["visibility"] = vis_val
-                if vis_val is not None:
-                    u_key = vis_unit
-                    u_id = 1 if u_key == "meter" else 2
-                    factor = 100.0 if u_key == "meter" else 30.48
-                    u_info = {"unitId": u_id, "unitKey": u_key, "factor": factor}
-                    summary["diveInfo"]["visibilityUnit"] = u_info
-                    details["diveInfo"]["visibilityUnit"] = u_info
-                else:
-                    summary["diveInfo"]["visibilityUnit"] = None
-                    details["diveInfo"]["visibilityUnit"] = None
-                    
-            if data.buddy is not None:
-                val = None if (data.buddy == "" or data.buddy == "None") else data.buddy
-                summary["diveInfo"]["buddy"] = val
-                details["diveInfo"]["buddy"] = val
-                
-        elif data.service == "divelogs":
-            if data.date_time is not None:
-                dt_parts = data.date_time.split(" ", 1)
-                dive_data["date"] = dt_parts[0]
-                if len(dt_parts) > 1:
-                    dive_data["time"] = dt_parts[1]
-                    
-            if data.duration is not None:
-                dive_data["duration"] = data.duration
-                
-            if data.max_depth is not None:
-                dive_data["maxdepth"] = data.max_depth
-                
-            if data.location is not None:
-                if "," in data.location:
-                    parts = data.location.split(",", 1)
-                    dive_data["location"] = parts[0].strip()
-                    dive_data["divesite"] = parts[1].strip()
-                else:
-                    dive_data["location"] = data.location
-                    dive_data["divesite"] = ""
-                    
-            if data.notes is not None:
-                dive_data["notes"] = data.notes
-                
-            if data.weight is not None:
-                dive_data["weights"] = data.weight
-                
-            if data.visibility is not None:
-                dive_data["visibility"] = data.visibility
-                
-            if data.buddy is not None:
-                dive_data["buddy"] = data.buddy
-
-        with open(filepath, "w") as f:
-            json.dump(dive_data, f, indent=2)
-            
-        logger.info("Successfully updated cached %s dive filename %s.", data.service, data.filename)
-        
-        # Trigger background update to remote site
-        if data.service == "garmin":
-            threading.Thread(
-                target=push_garmin_update_background,
-                args=(data.filename, filepath),
-                daemon=True
-            ).start()
-        elif data.service == "divelogs":
-            threading.Thread(
-                target=push_divelogs_update_background,
-                args=(data.filename, filepath),
-                daemon=True
-            ).start()
-            
-        return {"status": "success", "message": "Dive updated."}
-        
-    except Exception as e:
-        logger.error("Failed to update dive: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/version")
 def get_app_version():
