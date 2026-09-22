@@ -1,14 +1,15 @@
 name: Build and Push Docker Image
 
-# Publishes to Docker Hub. Runs when a GitHub Release is published, via
+# Publishes to Docker Hub. Deliberately manual-only (rework.md E12, per the
+# owner's explicit instruction 2026-09-22): a "release: published" trigger
+# used to fire this automatically the moment a GitHub Release was created,
+# which pushed a build before the owner had any chance to review or choose
+# to do so - removed for exactly that reason (caught and cancelled mid-run
+# on v0.2.0-alpha, confirmed nothing reached Docker Hub). Runs only via
 # manual workflow_dispatch, or as a reusable job called from
-# release-build.yml (rework.md E12) when "push_docker" is checked there -
-# never automatically from a plain push.
+# release-build.yml when "push_docker" is checked there.
 
 on:
-  release:
-    # types: [released]
-    types: [published]
   workflow_dispatch:
   workflow_call:
     inputs:
