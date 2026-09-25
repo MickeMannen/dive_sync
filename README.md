@@ -308,6 +308,7 @@ docker run -d \
   --name dive_sync \
   -p 8080:8000 \
   -v /absolute/path/to/local/dir:/app/data \
+  -e TZ=Europe/Stockholm \
   mickemannen/dive_sync:latest
 ```
 
@@ -329,6 +330,7 @@ services:
     environment:
       - DIVE_SYNC_PORT=8000
       - DIVE_SYNC_HOST=0.0.0.0
+      - TZ=Europe/Stockholm     # your time zone; scheduled jobs run on this clock
     restart: unless-stopped
 ```
 ```bash
@@ -342,6 +344,9 @@ docker compose logs -f        # follow the log
 | `DIVE_SYNC_PORT` | `8000` | Port of the dashboard inside the container |
 | `DIVE_SYNC_HOST` | `0.0.0.0` | Bind address inside the container |
 | `DATA_DIR` | `/app/data` | Settings, credentials, tokens and caches |
+| `TZ` | UTC | Time zone of the container's clock, e.g. `Europe/Stockholm` |
+
+**Time zone.** Scheduled jobs run on the container's clock, and a container runs on UTC unless `TZ` is set: without it, a job set to 06:00 runs at 06:00 UTC (08:00 in Swedish summer time). Set `TZ` to your [time zone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) and check it with `docker exec dive_sync date`, which should print your local time.
 
 To reach the dashboard from other machines, drop the `127.0.0.1:` prefix only on a private network or behind a VPN or an authenticating reverse proxy (see "🔒 Security").
 
