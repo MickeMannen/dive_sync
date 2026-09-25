@@ -15,8 +15,8 @@
       </div>
       <button type="button" class="nav-item" data-page="sync">Sync</button>
       <button type="button" class="nav-item" data-page="mapping">Mapping</button>
-      <button type="button" class="nav-item" data-page="dives">Garmin dives</button>
-      <button type="button" class="nav-item" data-page="accounts">Accounts</button>
+      <button type="button" class="nav-item" data-page="conflicts">Conflicts</button>
+      <button type="button" class="nav-item" data-page="settings">Settings</button>
       <button type="button" class="nav-item" data-page="about">About</button>
     </nav>
 
@@ -28,14 +28,23 @@
         <div><span class="label">Sync running</span><span id="status-running">–</span></div>
         <div><span class="label">Next scheduled run</span><span id="status-next">–</span></div>
       </div>
+      <div class="board-toolbar">
+        <label>Source (read from) <select id="trigger-source"></select></label>
+        <span class="muted">&rarr;</span>
+        <label>Target (written to) <select id="trigger-target"></select></label>
+        <button type="button" class="secondary" id="trigger-swap" title="Swap source and target">&#8644;</button>
+        <label id="trigger-garmin-account-label" hidden>Garmin account <select id="trigger-garmin-account"></select></label>
+        <label id="trigger-divelogs-account-label" hidden>Divelogs account <select id="trigger-divelogs-account"></select></label>
+      </div>
       <div class="actions">
         <label class="inline-checkbox"><input type="checkbox" id="trigger-dry-run"> Dry run</label>
-        <label class="inline-checkbox" title="Read a Garmin dive from the local cache when Garmin's list shows it unchanged, instead of downloading it again. Edits to only notes, buddy, weight or visibility are not visible in that list: untick to pick those up."><input type="checkbox" id="trigger-garmin-cache" checked> Use cached Garmin dives</label>
-        <label>Garmin account <select id="trigger-garmin-account"></select></label>
-        <label>Divelogs account <select id="trigger-divelogs-account"></select></label>
+        <label class="inline-checkbox"><input type="checkbox" id="trigger-only-new" checked> Only new dives</label>
+        <label class="inline-checkbox"><input type="checkbox" id="trigger-gases" checked> Sync gases</label>
+        <label class="inline-checkbox" title="Read a Garmin dive from the local copy when Garmin's list shows it unchanged, instead of downloading it again. Edits to only notes, buddy, weight or visibility are not visible in that list: untick to pick those up."><input type="checkbox" id="trigger-garmin-cache" checked> Use cached Garmin dives</label>
         <button type="button" id="trigger-sync">Sync now</button>
         <span id="trigger-message" class="muted"></span>
       </div>
+      <p class="muted">A sync from here never deletes dives; making a target an exact copy of a source (Mirror) is done from the desktop app.</p>
       <div id="status-progress" class="job-progress" hidden>
         <progress id="status-progress-bar" max="1"></progress>
         <span id="status-progress-text" class="muted"></span>
@@ -158,38 +167,19 @@
       </div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="conflicts" hidden>
     <section class="card">
-      <h2>Conflicts</h2>
-      <p class="muted">Rules with the policy "manual" record here when both sides hold different values. Pick which side should win; the other side is updated on the service.</p>
-      <div class="scroll-x">
-        <table id="conflicts-table">
-          <thead><tr><th>Dive</th><th>Link</th><th>Source</th><th>Target</th><th>Seen</th><th></th></tr></thead>
-          <tbody id="conflicts-body"></tbody>
-        </table>
-      </div>
+      <h2>Conflicts <button type="button" class="secondary" id="conflicts-reload">Reload</button></h2>
+      <p class="muted">A rule with the policy "Fill blanks, ask about real differences" waits here when both sides hold a different value. Pick the value to keep; the other service is updated.</p>
       <span id="conflicts-message" class="muted"></span>
+      <div id="conflict-groups"></div>
     </section>
     </div>
 
-    <div class="page" data-page="dives" hidden>
-    <section class="card">
-      <h2>Garmin dives</h2>
-      <p class="muted">The dives the last refresh cached from Garmin Connect, and whether each one's original <code>.fit</code> has been downloaded. FIT files are saved under <code>data/garmin_fit/</code> with the same name as the dive's cached JSON: <code>&lt;dive #&gt;_&lt;date&gt;_&lt;time&gt;_&lt;activity id&gt;</code>. Dives marked <em>manual</em> were logged by hand: they have no dive-computer file (Garmin would only generate a summary-only FIT from the typed-in fields), so they are never downloaded.</p>
-      <div class="actions">
-        <button type="button" id="dives-refresh" class="secondary">Refresh from Garmin</button>
-        <button type="button" id="dives-download-missing">Download missing FITs</button>
-        <span id="dives-message" class="muted"></span>
-      </div>
-      <div class="scroll-x">
-        <table id="dives-table">
-          <thead><tr><th>Date</th><th>Time</th><th>Dive #</th><th>Location</th><th>Max depth</th><th>Duration</th><th>FIT</th></tr></thead>
-          <tbody id="dives-body"></tbody>
-        </table>
-      </div>
-    </section>
-    </div>
 
-    <div class="page" data-page="accounts" hidden>
+    <div class="page" data-page="settings" hidden>
     <section class="card">
       <h2>Credentials</h2>
       <form id="credentials-form">
@@ -215,46 +205,16 @@
         <span id="credentials-message" class="muted"></span>
       </form>
     </section>
-    </div>
-
-    <div class="page" data-page="sync" hidden>
     <section class="card">
-      <h2>Default sync settings</h2>
-      <form id="defaults-form" class="inline-form">
-        <label>Directionality
-          <select id="default-directionality" title="A run writes one side only; to sync both ways, schedule one job per direction">
-            <option value="to_divelogs">To Divelogs</option>
-            <option value="to_garmin">To Garmin</option>
-          </select>
-        </label>
-        <label>Grace window (min) <input type="number" id="grace-window" min="0"></label>
-        <label>API cooldown (sec) <input type="number" step="0.1" id="api-cooldown" min="0"></label>
-        <label><input type="checkbox" id="default-only-new"> Only new dives</label>
-        <label><input type="checkbox" id="default-sync-gases"> Sync gases</label>
-        <label title="What scheduled jobs use. Reads an unchanged Garmin dive from the local cache instead of downloading it again; edits to only notes, buddy, weight or visibility need a Full refresh or a run with this off."><input type="checkbox" id="default-use-garmin-cache"> Use cached Garmin dives</label>
-        <label><input type="checkbox" id="default-propagate-deletes"> Propagate deletes</label>
-        <label><input type="checkbox" id="default-create-on-garmin"> Create on Garmin</label>
-      </form>
-      <p class="muted">Propagate deletes: delete the linked dive on the other side when one is deleted here. Only ever acted on during a full sync - an incremental (only-new) run has no reliable way to tell "deleted" apart from "outside this run's date window", so it never deletes on an incremental run regardless of this setting.</p>
-      <p class="muted">Create on Garmin: off by default. A dive found only on the other side is created on Garmin only when this is on; matched-dive field updates are never affected. Uploads the other way (to Divelogs, or to a non-Garmin pair) are unaffected either way.</p>
-    </section>
-
-    <section class="card">
-      <h2>Failure alerts</h2>
-      <p class="muted">A webhook POSTed a short plain-text message when a scheduled or manual sync run fails. Works with ntfy (paste your topic URL, e.g. https://ntfy.sh/your-topic) and most generic webhook receivers; Gotify needs its endpoint to accept a raw text body.</p>
+      <h2>Sync settings</h2>
       <div class="inline-form">
-        <label>Webhook URL <input type="text" id="notify-url" placeholder="https://ntfy.sh/your-topic" style="min-width:320px"></label>
-        <div class="actions">
-          <button type="button" id="notify-test">Test</button>
-          <button type="button" id="notify-save">Save</button>
-        </div>
-        <span id="notify-message" class="muted"></span>
+        <label title="Pause between requests to Garmin and Divelogs; raise it if Garmin answers 429 (too many requests)">API cooldown (seconds) <input type="number" step="0.1" id="api-cooldown" min="0"></label>
+        <button type="button" id="save-sync-settings">Save</button>
+        <span id="sync-settings-message" class="muted"></span>
       </div>
-    </section>
-
-    <section class="card">
-      <h2>Sync pairs</h2>
-      <p class="muted">Garmin ↔ Divelogs is always available. Add a pair to sync with a UDDF file, a Subsurface checkout (paths under the data directory) or Subsurface Cloud; each pair gets its own board.</p>
+      <details>
+        <summary>Advanced: file pairs (UDDF file, Subsurface checkout)</summary>
+        <p class="muted">Pairs between your accounts appear on their own (Mapping page). Add one here to sync with a UDDF file or a Subsurface git checkout (paths under the data directory).</p>
       <div class="scroll-x">
         <table id="pairs-table">
           <thead><tr><th>ID</th><th>Source</th><th>Target</th><th>Direction</th><th>Enabled</th><th></th></tr></thead>
@@ -263,29 +223,10 @@
       </div>
       <div class="actions">
         <button type="button" class="secondary" id="add-pair">Add pair</button>
-        <span class="muted">Saved together with the schedule.</span>
+        <span class="muted">Saved with Save above.</span>
       </div>
-    </section>
 
-    <section class="card">
-      <h2>Scheduled jobs</h2>
-      <div class="scroll-x">
-        <table id="cron-table">
-          <thead>
-            <tr>
-              <th>ID</th><th>Pair</th><th>Direction</th><th>Frequency</th><th>Hour</th><th>Min</th>
-              <th>Day</th><th>Interval (min)</th><th>Only new</th><th>Gases</th><th>Enabled</th>
-              <th>Garmin account</th><th>Divelogs account</th><th></th>
-            </tr>
-          </thead>
-          <tbody id="cron-body"></tbody>
-        </table>
-      </div>
-      <div class="actions">
-        <button type="button" id="add-cron-job">Add job</button>
-        <button type="button" id="save-schedule">Save settings</button>
-      </div>
-      <span id="schedule-message" class="muted"></span>
+      </details>
     </section>
 
     <section class="card">
@@ -300,6 +241,68 @@
       <pre id="profile-summary" class="summary" hidden></pre>
       <span id="profile-message" class="muted"></span>
     </section>
+    </div>
+
+    <div class="page" data-page="sync" hidden>
+    <section class="card">
+      <h2>Scheduled jobs</h2>
+      <p class="muted">Syncs the Docker image runs on its own. A job writes its target only; for both directions add a job each way.</p>
+      <ul id="jobs-list" class="jobs-list"></ul>
+      <details id="job-editor" class="job-editor">
+        <summary id="job-editor-title">Add a job</summary>
+        <div class="board-toolbar">
+          <label>Source (read from) <select id="job-source"></select></label>
+          <span class="muted">&rarr;</span>
+          <label>Target (written to) <select id="job-target"></select></label>
+          <label id="job-garmin-account-label" hidden>Garmin account <select id="job-garmin-account"></select></label>
+          <label id="job-divelogs-account-label" hidden>Divelogs account <select id="job-divelogs-account"></select></label>
+        </div>
+        <div class="board-toolbar">
+          <label>Runs
+            <select id="job-frequency">
+              <option value="daily">Every day</option>
+              <option value="weekly">Every week</option>
+              <option value="hourly">Every hour</option>
+              <option value="custom_minutes">Every N minutes</option>
+            </select>
+          </label>
+          <label id="job-day-label">On
+            <select id="job-day">
+              <option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option>
+              <option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option>
+            </select>
+          </label>
+          <label id="job-time-label">At <input type="time" id="job-time" value="06:00"></label>
+          <label id="job-minute-label">At minute <input type="number" id="job-minute" min="0" max="59" value="0"></label>
+          <label id="job-interval-label">Every <input type="number" id="job-interval" min="5" value="60"> minutes</label>
+        </div>
+        <div class="actions">
+          <label class="inline-checkbox"><input type="checkbox" id="job-only-new" checked> Only new dives</label>
+          <label class="inline-checkbox"><input type="checkbox" id="job-gases" checked> Sync gases</label>
+          <label class="inline-checkbox"><input type="checkbox" id="job-garmin-cache" checked> Use cached Garmin dives</label>
+          <button type="button" id="job-add">Add job</button>
+          <button type="button" class="secondary" id="job-cancel">Cancel</button>
+        </div>
+      </details>
+      <div class="actions">
+        <button type="button" id="save-schedule">Save schedule</button>
+        <span id="schedule-message" class="muted"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Failure alerts</h2>
+      <p class="muted">Get told when an unattended sync fails: the dashboard sends a short text message to this address whenever a scheduled or manual run fails. Works with ntfy (paste your topic URL, e.g. https://ntfy.sh/your-topic) and most generic webhook receivers; Gotify needs its endpoint to accept a raw text body.</p>
+      <div class="inline-form">
+        <label>Webhook URL <input type="text" id="notify-url" placeholder="https://ntfy.sh/your-topic" style="min-width:320px"></label>
+        <div class="actions">
+          <button type="button" id="notify-test">Test</button>
+          <button type="button" id="notify-save">Save</button>
+        </div>
+        <span id="notify-message" class="muted"></span>
+      </div>
+    </section>
+
     </div>
 
     <div class="page" data-page="about" hidden>

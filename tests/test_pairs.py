@@ -192,3 +192,12 @@ def test_board_pairs_offer_configured_combinations_not_saved_yet():
         ("g2s", "garmin", "subsurface-cloud", True),                    # already saved: not offered twice
         ("divelogs_subsurface", "divelogs", "subsurface-cloud", False),
     ]
+
+
+def test_board_pairs_leave_out_a_disabled_service():
+    """A saved Garmin <-> Submersion pair stays in settings while Submersion
+    is disabled, but no page offers it (and listing conflicts doesn't fail)."""
+    from src.core.pairs import board_pairs
+    settings = SettingsModel()
+    settings.sync_pairs.append(SyncPairModel(id="garmin_submersion", source="garmin", target="submersion"))
+    assert [b["id"] for b in board_pairs(settings, ["garmin", "divelogs"])] == ["garmin_divelogs"]

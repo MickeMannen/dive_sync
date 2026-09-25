@@ -139,6 +139,11 @@ class CronJobModel(BaseModel):
         None, description="Optional per-job mapping board; None means the global field_links apply"
     )
     pair: Optional[str] = Field(None, description="Id of a configured sync pair; None = Garmin -> Divelogs")
+    # A job can instead name its two sides, like the Sync page: the pair (and
+    # board) between them is found either way round (pairs.engine_for).
+    source: Optional[str] = Field(None, description="Source service spec (with target, instead of pair)")
+    target: Optional[str] = Field(None, description="Target service spec, the side the job writes")
+    use_garmin_cache: Optional[bool] = Field(None, description="None = the saved default (sync_filters.use_garmin_cache)")
     garmin_username: Optional[str] = Field(None, description="Which configured Garmin account to use; None picks the only one, or errors if several are configured")
     divelogs_username: Optional[str] = Field(None, description="Which configured Divelogs account to use; None picks the only one, or errors if several are configured")
 

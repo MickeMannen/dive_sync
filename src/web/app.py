@@ -82,6 +82,10 @@ class CronJobSchema(BaseModel):
     enabled: bool
     field_links: Optional[List[FieldLink]] = None
     pair: Optional[str] = None
+    # a job may name its two sides instead of a pair (CronJobModel)
+    source: Optional[str] = None
+    target: Optional[str] = None
+    use_garmin_cache: Optional[bool] = None
     garmin_username: Optional[str] = None
     divelogs_username: Optional[str] = None
 
@@ -109,6 +113,9 @@ class SettingsSchema(BaseModel):
 
 class SyncTriggerRequest(BaseModel):
     dry_run: bool = False
+    # The two sides, as on the desktop Sync page; None = the default pair
+    source: Optional[str] = None
+    target: Optional[str] = None
     directionality: Optional[str] = None
     date_from: Optional[str] = None
     date_to: Optional[str] = None
@@ -164,6 +171,9 @@ def save_settings(data: SettingsSchema):
                 enabled=job.enabled,
                 field_links=job.field_links,
                 pair=job.pair,
+                source=job.source,
+                target=job.target,
+                use_garmin_cache=job.use_garmin_cache,
                 garmin_username=job.garmin_username,
                 divelogs_username=job.divelogs_username,
             )
@@ -465,12 +475,21 @@ def test_credentials(data: CredentialsSchema):
 # Phase 6: mapping board support (Test mapping, conflicts, profiles, full compare)
 # ---------------------------------------------------------------------------
 
+def _boards():
+    from src.core.pairs import board_pairs
+    return board_pairs(ConfigManager.load_settings(), ConfigManager.load_credentials().configured_services())
+
+
 def _engine_for_pair_id(pair_id: Optional[str]):
-    """The engine for a configured pair; None / "default" = the garmin_divelogs pair."""
-    from src.core.pairs import engine_for_pair, find_pair
+    """The engine for a board: a saved pair or a combination of configured
+    services the Mapping page offers; None / "default" = garmin_divelogs."""
+    from src.core.pairs import engine_for_board
     if not pair_id or pair_id == "default":
         pair_id = DEFAULT_PAIR_ID
-    return engine_for_pair(find_pair(ConfigManager.load_settings(), pair_id))
+    board = next((b for b in _boards() if b["id"] == pair_id), None)
+    if board is None:
+        raise ValueError(f"No sync pair named {pair_id!r}")
+    return engine_for_board(ConfigManager.load_settings(), board)
 
 
 class MappingTestRequest(BaseModel):
@@ -505,6 +524,50 @@ def list_conflicts(pair: Optional[str] = None):
                 "conflicts": [c.model_dump(mode="json") for c in engine.list_conflicts()]}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/conflicts/all")
+def list_all_conflicts():
+    """Every board's waiting conflicts, grouped by pair, with field labels and
+    readable values (the Conflicts page)."""
+    import os
+    from src.core import config
+    from src.core.conflicts import ConflictStore, display_value
+    from src.core.pairs import conflicts_file_for, display_name_of, field_catalog_of, service_id_of
+
+    def label(key: str) -> str:
+        try:
+            return next((f.label for f in field_catalog_of(key.split(".")[0]) if f.key == key), key)
+        except ValueError:
+            return key
+
+    groups = []
+    for board in _boards():
+        items = ConflictStore(conflicts_file_for(board, os.path.dirname(config.SETTINGS_FILE))).load()
+        if not items:
+            continue
+        names = {service_id_of(board["source"]): display_name_of(board["source"]),
+                 service_id_of(board["target"]): display_name_of(board["target"])}
+        groups.append({
+            "pair_id": board["id"],
+            "label": f"{display_name_of(board['source'])} ↔ {display_name_of(board['target'])}",
+            "conflicts": [dict(c.model_dump(mode="json"), pair_id=board["id"],
+                               source_name=names.get(c.source_service, c.source_service),
+                               target_name=names.get(c.target_service, c.target_service),
+                               field_label=label(c.target_key),
+                               source_text=display_value(c.source_value),
+                               target_text=display_value(c.target_value)) for c in items],
+        })
+    return {"groups": groups}
+
+
+@app.get("/api/sync/endpoints")
+def sync_endpoints():
+    """What the Source and Target pickers offer (Sync now, scheduled jobs)."""
+    from src.core.pairs import sync_endpoints as endpoints
+    settings = ConfigManager.load_settings()
+    return {"endpoints": endpoints(settings, ConfigManager.load_credentials().configured_services()),
+            "boards": _boards()}
 
 
 class ResolveRequest(BaseModel):
@@ -577,6 +640,19 @@ def trigger_sync(request: Optional[SyncTriggerRequest] = None):
     if request:
         dry_run = request.dry_run
         custom_settings = request.model_dump(exclude_none=True)
+        if request.source and request.target:
+            # the two sides of the Sync page: the pair between them, either way
+            # round, writing the target. Sync now never deletes (the desktop
+            # app's Mirror is the one way to delete from a manual run).
+            from src.core.pairs import board_between, service_id_of
+            if request.source == request.target:
+                raise HTTPException(status_code=400, detail="Pick two different services to sync.")
+            board = board_between(_boards(), request.source, request.target)
+            if board and board["saved"]:
+                custom_settings.pop("source"), custom_settings.pop("target")
+                custom_settings["pair"] = board["id"]
+            custom_settings["directionality"] = f"to_{service_id_of(request.target)}"
+            custom_settings["propagate_deletes"] = False
 
     threading.Thread(target=scheduler.run_sync_thread, args=(dry_run, custom_settings), daemon=True).start()
     return {"status": "success", "message": "Sync job triggered in background."}

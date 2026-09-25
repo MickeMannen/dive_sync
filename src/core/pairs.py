@@ -175,13 +175,13 @@ def board_pairs(settings: SettingsModel, configured: List[str]) -> List[dict]:
     which adds it to ``sync_pairs``. What the Sync page runs for such a
     combination (engine_for) uses that saved pair, so both pages agree.
     Entries: {id, source, target (specs), saved}."""
-    out = [{"id": p.id, "source": p.source, "target": p.target, "saved": True} for p in settings.sync_pairs]
-    joined = []
+    out, joined = [], []
     for p in settings.sync_pairs:
         try:
             joined.append({service_id_of(p.source), service_id_of(p.target)})
         except ValueError:
-            continue
+            continue            # a disabled (Submersion) or unknown service: no board to offer
+        out.append({"id": p.id, "source": p.source, "target": p.target, "saved": True})
     ids = {p.id for p in settings.sync_pairs}
     specs = [CONFIGURED_SPECS[s] for s in configured if s in CONFIGURED_SPECS]
     for i, source in enumerate(specs):
@@ -195,6 +195,47 @@ def board_pairs(settings: SettingsModel, configured: List[str]) -> List[dict]:
             ids.add(pair_id)
             out.append({"id": pair_id, "source": source, "target": target, "saved": False})
     return out
+
+
+def sync_endpoints(settings: SettingsModel, configured: List[str]) -> List[dict]:
+    """What a Source or Target picker offers: every configured service, then
+    the other ends of saved pairs (e.g. a UDDF file), as {spec, id, label}."""
+    out, seen = [], set()
+    specs = [CONFIGURED_SPECS[s] for s in configured if s in CONFIGURED_SPECS]
+    specs += [spec for p in settings.sync_pairs for spec in (p.source, p.target)]
+    for spec in specs:
+        if spec in seen:
+            continue
+        seen.add(spec)
+        try:
+            out.append({"spec": spec, "id": service_id_of(spec), "label": display_name_of(spec)})
+        except ValueError:
+            continue
+    return out
+
+
+def board_between(boards: List[dict], a_spec: str, b_spec: str) -> Optional[dict]:
+    """The board (board_pairs entry) joining two specs, either way round; a
+    saved pair before an unsaved combination."""
+    matches = [b for b in boards if {b["source"], b["target"]} == {a_spec, b_spec}]
+    return next((b for b in matches if b["saved"]), matches[0] if matches else None)
+
+
+def engine_for_board(settings: SettingsModel, board: dict, **kwargs):
+    """The engine of a board_pairs entry: a saved pair by its settings, a
+    combination by its two specs."""
+    if board["saved"]:
+        return engine_for_pair(find_pair(settings, board["id"]), **kwargs)
+    return engine_for(board["source"], board["target"], **kwargs)
+
+
+def conflicts_file_for(board: dict, state_dir: str) -> str:
+    """Where a board's engine keeps its conflicts (beside its state file,
+    SyncEngine), so they can be listed without building an engine."""
+    from src.core.conflicts import conflicts_path_for
+    s, t = service_id_of(board["source"]), service_id_of(board["target"])
+    name = "sync_state.json" if (s, t) == ("garmin", "divelogs") else f"sync_state_{s}_{t}.json"
+    return conflicts_path_for(os.path.join(state_dir or ".", name))
 
 
 def find_pair(settings: SettingsModel, pair_id: str) -> SyncPairModel:

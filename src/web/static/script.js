@@ -7,9 +7,11 @@ let credentialsAccounts = { garmin: [], divelogs: [] };  // usernames, for accou
 // ---------------------------------------------------------------- pages / sidebar nav
 
 function selectPage(page) {
+  if (!document.querySelector(`.nav-item[data-page="${page}"]`)) page = "sync";   // a page that no longer exists
   document.querySelectorAll(".page").forEach((el) => { el.hidden = el.dataset.page !== page; });
   document.querySelectorAll(".nav-item").forEach((el) => el.classList.toggle("active", el.dataset.page === page));
   if (page === "mapping") requestAnimationFrame(drawLines);  // board was laid out while hidden (0-size rects)
+  if (page === "conflicts") loadConflicts();
   try { localStorage.setItem("dive_sync_page", page); } catch (e) { /* private mode etc. */ }
 }
 
@@ -122,7 +124,6 @@ async function loadStatus() {
     $("status-running").textContent = data.is_running ? "yes" : "no";
     $("status-next").textContent = data.next_scheduled_run ? new Date(data.next_scheduled_run).toLocaleString() : "none";
     renderProgress(data);
-    updateDivesJob(data);
     renderJobResults(data.last_results);
     const busy = !!(data.is_running || data.is_downloading || data.progress);
     const wanted = busy ? 1000 : 15000;
@@ -134,7 +135,14 @@ async function loadStatus() {
 
 async function triggerSync() {
   $("trigger-message").textContent = "Starting…";
-  const payload = { dry_run: $("trigger-dry-run").checked, use_garmin_cache: $("trigger-garmin-cache").checked };
+  const payload = {
+    dry_run: $("trigger-dry-run").checked,
+    source: $("trigger-source").value,
+    target: $("trigger-target").value,
+    only_new: $("trigger-only-new").checked,
+    sync_gases: $("trigger-gases").checked,
+    use_garmin_cache: $("trigger-garmin-cache").checked,
+  };
   const garminAccount = $("trigger-garmin-account").value;
   const divelogsAccount = $("trigger-divelogs-account").value;
   if (garminAccount) payload.garmin_username = garminAccount;
@@ -147,6 +155,45 @@ async function triggerSync() {
   const data = await res.json();
   $("trigger-message").textContent = res.ok ? "Sync started." : (data.detail || "Failed to start.");
   setTimeout(loadStatus, 2000);
+}
+
+// ---- source / target pickers (Sync now and scheduled jobs), as in the app
+
+let syncEndpoints = [];     // [{spec, id, label}]
+
+async function loadEndpoints() {
+  try {
+    syncEndpoints = (await (await fetch("/api/sync/endpoints")).json()).endpoints || [];
+  } catch (e) {
+    syncEndpoints = [];
+  }
+  for (const prefix of ["trigger", "job"]) {
+    const source = $(`${prefix}-source`);
+    source.innerHTML = optionList(syncEndpoints.map((e) => [e.spec, e.label]), source.value);
+    fillTargets(prefix);
+  }
+}
+
+function endpointOf(spec) {
+  return syncEndpoints.find((e) => e.spec === spec) || null;
+}
+
+function endpointLabel(spec) {
+  return endpointOf(spec)?.label || spec;
+}
+
+// every endpoint but the source's own service
+function fillTargets(prefix, keep) {
+  const source = endpointOf($(`${prefix}-source`).value);
+  const target = $(`${prefix}-target`);
+  const wanted = keep ?? target.value;
+  target.innerHTML = optionList(syncEndpoints.filter((e) => !source || e.id !== source.id).map((e) => [e.spec, e.label]), wanted);
+}
+
+function swapEndpoints(prefix) {
+  const source = $(`${prefix}-source`).value, target = $(`${prefix}-target`).value;
+  $(`${prefix}-source`).value = target;
+  fillTargets(prefix, source);
 }
 
 function appendLogLine(line) {
@@ -228,8 +275,12 @@ async function loadCredentialsStatus() {
   renderAccountRows("garmin", data.garmin_account_rows || []);
   renderAccountRows("divelogs", data.divelogs_account_rows || []);
   credentialsAccounts = { garmin: data.garmin_accounts || [], divelogs: data.divelogs_accounts || [] };
-  populateAccountSelect("trigger-garmin-account", credentialsAccounts.garmin, true);
-  populateAccountSelect("trigger-divelogs-account", credentialsAccounts.divelogs, true);
+  for (const prefix of ["trigger", "job"]) {
+    populateAccountSelect(`${prefix}-garmin-account`, credentialsAccounts.garmin, true);
+    populateAccountSelect(`${prefix}-divelogs-account`, credentialsAccounts.divelogs, true);
+    $(`${prefix}-garmin-account-label`).hidden = credentialsAccounts.garmin.length < 2;
+    $(`${prefix}-divelogs-account-label`).hidden = credentialsAccounts.divelogs.length < 2;
+  }
   if (data.subsurface_email) $("subsurface-email").value = data.subsurface_email;
 }
 
@@ -281,14 +332,7 @@ async function testCredentials() {
 // ---------------------------------------------------------------- settings, pairs, schedule
 
 function populateDefaults(settings) {
-  $("default-directionality").value = settings.directionality;
-  $("grace-window").value = settings.grace_window_minutes;
   $("api-cooldown").value = settings.api_cooldown_seconds;
-  $("default-only-new").checked = settings.sync_filters.only_new;
-  $("default-sync-gases").checked = settings.sync_filters.sync_gases;
-  $("default-use-garmin-cache").checked = settings.sync_filters.use_garmin_cache !== false;
-  $("default-propagate-deletes").checked = !!settings.propagate_deletes;
-  $("default-create-on-garmin").checked = !!settings.create_on_garmin;
   $("notify-url").value = settings.notify_url || "";
 }
 
@@ -386,84 +430,143 @@ function readPairsTable() {
   });
 }
 
-function cronRowHtml(job) {
-  const pairOptions = [["", "Garmin ↔ Divelogs"], ...pairIds().map((id) => [id, id])];
-  const garminOptions = [["", "Default account"], ...credentialsAccounts.garmin.map((u) => [u, u])];
-  const divelogsOptions = [["", "Default account"], ...credentialsAccounts.divelogs.map((u) => [u, u])];
-  return `
-    <td><input class="f-id" value="${escapeHtml(job.id)}"></td>
-    <td><select class="f-pair">${optionList(pairOptions, job.pair || "")}</select></td>
-    <td><input class="f-direction" value="${escapeHtml(job.directionality || "")}" placeholder="pair's direction" title="to_<service>, to_target or to_source; empty = the pair's saved direction. One side per job - schedule two jobs for a two-way sync"></td>
-    <td>
-      <select class="f-frequency">${optionList([["hourly", "Hourly"], ["daily", "Daily"], ["weekly", "Weekly"], ["custom_minutes", "Every N minutes"]], job.frequency)}</select>
-    </td>
-    <td><input class="f-hour" type="number" min="0" max="23" value="${job.hour}"></td>
-    <td><input class="f-minute" type="number" min="0" max="59" value="${job.minute}"></td>
-    <td><input class="f-day" type="number" min="0" max="6" value="${job.day_of_week}"></td>
-    <td><input class="f-interval" type="number" min="1" value="${job.interval_minutes}"></td>
-    <td><input class="f-only-new" type="checkbox" ${job.only_new ? "checked" : ""}></td>
-    <td><input class="f-gases" type="checkbox" ${job.sync_gases ? "checked" : ""}></td>
-    <td><input class="f-enabled" type="checkbox" ${job.enabled ? "checked" : ""}></td>
-    <td><select class="f-garmin-account">${optionList(garminOptions, job.garmin_username || "")}</select></td>
-    <td><select class="f-divelogs-account">${optionList(divelogsOptions, job.divelogs_username || "")}</select></td>
-    <td><button type="button" class="secondary remove-row">✕</button></td>
-  `;
+// ---- scheduled jobs: a readable list and one editor; ids are made up here
+
+let jobs = [];              // the cron_jobs being edited
+let editingJob = -1;        // index in jobs, or -1 for a new one
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function pad2(n) { return String(n).padStart(2, "0"); }
+
+// A job's two sides: its own source/target, or those of the pair it names
+// (older jobs), turned the way its direction writes.
+function jobSides(job) {
+  if (job.source && job.target) return [job.source, job.target];
+  const pair = (currentSettings?.sync_pairs || []).find((p) => p.id === (job.pair || DEFAULT_PAIR));
+  if (!pair) return [job.pair || "?", ""];
+  const direction = job.directionality || pair.directionality || "to_target";
+  const targetId = (spec) => (endpointOf(spec)?.id || spec.split(":")[0]);
+  const reversed = direction === "to_source" || direction === `to_${targetId(pair.source)}`;
+  return reversed ? [pair.target, pair.source] : [pair.source, pair.target];
 }
 
-function addCronRow(job) {
-  const defaultJob = {
-    id: `job-${Date.now()}`, pair: "", directionality: "", frequency: "daily",
-    hour: 0, minute: 0, day_of_week: 0, interval_minutes: 60, only_new: true, sync_gases: true, enabled: true,
-    garmin_username: "", divelogs_username: "",
-  };
-  const row = document.createElement("tr");
-  row.innerHTML = cronRowHtml(job || defaultJob);
-  row.dataset.links = JSON.stringify(job?.field_links ?? null);
-  row.querySelector(".remove-row").addEventListener("click", () => row.remove());
-  $("cron-body").appendChild(row);
+function jobWhen(job) {
+  const at = `${pad2(job.hour)}:${pad2(job.minute)}`;
+  if (job.frequency === "hourly") return `every hour at :${pad2(job.minute)}`;
+  if (job.frequency === "weekly") return `every ${WEEKDAYS[job.day_of_week] || "week"} at ${at}`;
+  if (job.frequency === "custom_minutes") return `every ${job.interval_minutes} minutes`;
+  return `every day at ${at}`;
 }
 
-function populateCronTable(jobs) {
-  $("cron-body").innerHTML = "";
-  jobs.forEach(addCronRow);
+function jobOptions(job) {
+  const bits = [job.only_new ? "only new dives" : "all dives"];
+  if (!job.sync_gases) bits.push("no gases");
+  if (job.use_garmin_cache === false) bits.push("no Garmin cache");
+  if (job.garmin_username) bits.push(job.garmin_username);
+  if (job.divelogs_username) bits.push(job.divelogs_username);
+  return bits.join(", ");
 }
 
-function readCronTable() {
-  return Array.from($("cron-body").querySelectorAll("tr")).map((row) => ({
-    id: row.querySelector(".f-id").value,
-    pair: row.querySelector(".f-pair").value || null,
-    directionality: row.querySelector(".f-direction").value.trim() || null,
-    frequency: row.querySelector(".f-frequency").value,
-    hour: parseInt(row.querySelector(".f-hour").value, 10),
-    minute: parseInt(row.querySelector(".f-minute").value, 10),
-    day_of_week: parseInt(row.querySelector(".f-day").value, 10),
-    interval_minutes: parseInt(row.querySelector(".f-interval").value, 10),
-    only_new: row.querySelector(".f-only-new").checked,
-    sync_gases: row.querySelector(".f-gases").checked,
-    enabled: row.querySelector(".f-enabled").checked,
-    field_links: JSON.parse(row.dataset.links || "null"),
-    garmin_username: row.querySelector(".f-garmin-account").value || null,
-    divelogs_username: row.querySelector(".f-divelogs-account").value || null,
-  }));
+function renderJobs() {
+  const list = $("jobs-list");
+  list.innerHTML = "";
+  if (!jobs.length) list.innerHTML = `<li class="muted">No scheduled jobs yet.</li>`;
+  jobs.forEach((job, i) => {
+    const [source, target] = jobSides(job);
+    const li = document.createElement("li");
+    li.innerHTML = `<label class="inline-checkbox" title="Enabled"><input type="checkbox" class="job-enabled" ${job.enabled ? "checked" : ""}></label>
+      <span class="job-what"><strong>${escapeHtml(endpointLabel(source))} &rarr; ${escapeHtml(endpointLabel(target))}</strong>,
+      ${escapeHtml(jobWhen(job))} <span class="muted">(${escapeHtml(jobOptions(job))})</span></span>
+      <button type="button" class="secondary job-edit">Edit</button>
+      <button type="button" class="secondary danger job-remove" title="Remove">&#x2715;</button>`;
+    li.querySelector(".job-enabled").addEventListener("change", (e) => { job.enabled = e.target.checked; });
+    li.querySelector(".job-edit").addEventListener("click", () => openJobEditor(i));
+    li.querySelector(".job-remove").addEventListener("click", () => { jobs.splice(i, 1); renderJobs(); });
+    list.appendChild(li);
+  });
 }
 
+function showJobTimeFields() {
+  const f = $("job-frequency").value;
+  $("job-day-label").hidden = f !== "weekly";
+  $("job-time-label").hidden = !["daily", "weekly"].includes(f);
+  $("job-minute-label").hidden = f !== "hourly";
+  $("job-interval-label").hidden = f !== "custom_minutes";
+}
+
+function openJobEditor(index) {
+  editingJob = index;
+  const job = index >= 0 ? jobs[index] : null;
+  const [source, target] = job ? jobSides(job) : [$("job-source").value, $("job-target").value];
+  if (source) $("job-source").value = source;
+  fillTargets("job", target);
+  $("job-frequency").value = job?.frequency || "daily";
+  $("job-day").value = String(job?.day_of_week ?? 1);
+  $("job-time").value = job ? `${pad2(job.hour)}:${pad2(job.minute)}` : "06:00";
+  $("job-minute").value = job?.minute ?? 0;
+  $("job-interval").value = job?.interval_minutes ?? 60;
+  $("job-only-new").checked = job ? !!job.only_new : true;
+  $("job-gases").checked = job ? !!job.sync_gases : true;
+  $("job-garmin-cache").checked = job ? job.use_garmin_cache !== false : true;
+  $("job-garmin-account").value = job?.garmin_username || "";
+  $("job-divelogs-account").value = job?.divelogs_username || "";
+  $("job-editor-title").textContent = job ? "Change job" : "Add a job";
+  $("job-add").textContent = job ? "Apply" : "Add job";
+  showJobTimeFields();
+  $("job-editor").open = true;
+}
+
+function jobId(source, target, frequency) {
+  const base = `${endpointOf(source)?.id || "source"}-to-${endpointOf(target)?.id || "target"}-${frequency.replace("custom_minutes", "interval")}`;
+  let id = base, n = 2;
+  while (jobs.some((j, i) => j.id === id && i !== editingJob)) id = `${base}-${n++}`;
+  return id;
+}
+
+function applyJobEditor() {
+  const source = $("job-source").value, target = $("job-target").value;
+  if (!source || !target) return;
+  const [hh, mm] = ($("job-time").value || "06:00").split(":").map((x) => parseInt(x, 10));
+  const frequency = $("job-frequency").value;
+  const old = editingJob >= 0 ? jobs[editingJob] : {};
+  const job = Object.assign({}, old, {
+    id: old.id || jobId(source, target, frequency),
+    source, target, pair: null,
+    directionality: `to_${endpointOf(target)?.id || target}`,
+    frequency,
+    hour: frequency === "hourly" || frequency === "custom_minutes" ? 0 : hh,
+    minute: frequency === "hourly" ? parseInt($("job-minute").value, 10) || 0 : (frequency === "custom_minutes" ? 0 : mm),
+    day_of_week: parseInt($("job-day").value, 10),
+    interval_minutes: Math.max(5, parseInt($("job-interval").value, 10) || 60),
+    only_new: $("job-only-new").checked,
+    sync_gases: $("job-gases").checked,
+    use_garmin_cache: $("job-garmin-cache").checked,
+    enabled: old.enabled ?? true,
+    garmin_username: $("job-garmin-account").value || null,
+    divelogs_username: $("job-divelogs-account").value || null,
+  });
+  if (editingJob >= 0) jobs[editingJob] = job; else jobs.push(job);
+  editingJob = -1;
+  $("job-editor").open = false;
+  $("schedule-message").textContent = "Not saved yet - press Save schedule.";
+  renderJobs();
+}
+
+// The saved settings with what this page edits applied. The Garmin <->
+// Divelogs pair's options (direction, grace window, deletes, create on
+// Garmin) are edited on the Mapping page and come in through ``extra``.
 function settingsPayload(extra) {
+  const saved = currentSettings || {};
   return Object.assign({
-    directionality: $("default-directionality").value,
-    sync_filters: {
-      date_from: currentSettings?.sync_filters?.date_from ?? null,
-      date_to: currentSettings?.sync_filters?.date_to ?? null,
-      only_new: $("default-only-new").checked,
-      sync_gases: $("default-sync-gases").checked,
-      use_garmin_cache: $("default-use-garmin-cache").checked,
-    },
-    grace_window_minutes: parseInt($("grace-window").value, 10),
+    directionality: saved.directionality,
+    sync_filters: Object.assign({}, saved.sync_filters || {}),
+    grace_window_minutes: saved.grace_window_minutes,
     api_cooldown_seconds: parseFloat($("api-cooldown").value),
-    propagate_deletes: $("default-propagate-deletes").checked,
-    create_on_garmin: $("default-create-on-garmin").checked,
-    create_device_dives_on_submersion: !!currentSettings?.create_device_dives_on_submersion,
-    schedule: (currentSettings?.schedule || []).map((s) => ({ hour: s.hour, minute: s.minute })),
-    cron_jobs: readCronTable(),
+    propagate_deletes: !!saved.propagate_deletes,
+    create_on_garmin: !!saved.create_on_garmin,
+    create_device_dives_on_submersion: !!saved.create_device_dives_on_submersion,
+    schedule: (saved.schedule || []).map((s) => ({ hour: s.hour, minute: s.minute })),
+    cron_jobs: jobs,
     sync_pairs: readPairsTable(),
   }, extra || {});
 }
@@ -489,7 +592,8 @@ async function loadSettings() {
   populateDefaults(currentSettings);
   $("pairs-body").innerHTML = "";
   (currentSettings.sync_pairs || []).filter((p) => p.id !== DEFAULT_PAIR).forEach(addPairRow);
-  populateCronTable(currentSettings.cron_jobs || []);
+  jobs = JSON.parse(JSON.stringify(currentSettings.cron_jobs || []));
+  renderJobs();
 }
 
 async function saveSchedule() {
@@ -671,7 +775,6 @@ function selectPair(pairId, force) {
   closeEditor();
   renderViewSelects();
   renderBoard();
-  loadConflicts();
   return true;
 }
 
@@ -1303,15 +1406,15 @@ async function saveBoard() {
   const info = boardPairInfo();
   if (!info) return;
   const rulesChanged = isDirty();
-  if (board.pairId === DEFAULT_PAIR) {
-    // its options are the global defaults (the form on the Sync page)
-    $("default-directionality").value = $("pair-direction").value;
-    $("grace-window").value = $("pair-grace").value;
-    $("default-propagate-deletes").checked = $("pair-propagate-deletes").checked;
-    $("default-create-on-garmin").checked = $("pair-create-on-garmin").checked;
-  }
+  // the Garmin <-> Divelogs pair's options are the global defaults
+  const globals = board.pairId === DEFAULT_PAIR ? {
+    directionality: $("pair-direction").value,
+    grace_window_minutes: parseInt($("pair-grace").value, 10),
+    propagate_deletes: $("pair-propagate-deletes").checked,
+    create_on_garmin: $("pair-create-on-garmin").checked,
+  } : {};
   const others = readPairsTable().filter((p) => p.id !== board.pairId);
-  const payload = settingsPayload({ sync_pairs: [boardPairEntry(), ...others] });
+  const payload = settingsPayload(Object.assign(globals, { sync_pairs: [boardPairEntry(), ...others] }));
   const { ok, message } = await postSettings(payload);
   $("board-message").textContent = message;
   if (!ok) return;
@@ -1384,42 +1487,50 @@ async function testBoard() {
 // ---------------------------------------------------------------- conflicts
 
 async function loadConflicts() {
-  const res = await fetch(`/api/conflicts?pair=${encodeURIComponent(board.pairId || DEFAULT_PAIR)}`);
-  const body = $("conflicts-body");
-  body.innerHTML = "";
-  if (!res.ok) {
-    $("conflicts-message").textContent = "Could not load conflicts.";
+  const box = $("conflict-groups");
+  let data;
+  try {
+    const res = await fetch("/api/conflicts/all");
+    data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.status);
+  } catch (e) {
+    $("conflicts-message").textContent = `Could not load conflicts: ${e.message || e}`;
     return;
   }
-  const data = await res.json();
-  if (!data.conflicts.length) {
-    $("conflicts-message").textContent = "No conflicts waiting.";
-    return;
-  }
-  $("conflicts-message").textContent = "";
-  data.conflicts.forEach((c) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${escapeHtml(c.dive_time)}</td><td>${escapeHtml(c.link_id)}</td>
-      <td><span class="key">${escapeHtml(c.source_key)}</span><br>${escapeHtml(JSON.stringify(c.source_value))}</td>
-      <td><span class="key">${escapeHtml(c.target_key)}</span><br>${escapeHtml(JSON.stringify(c.target_value))}</td>
-      <td>${escapeHtml(c.seen_at)}</td>
-      <td><button type="button" class="secondary pick-source">Use source</button> <button type="button" class="secondary pick-target">Use target</button></td>`;
-    tr.querySelector(".pick-source").addEventListener("click", () => resolveConflict(c.id, "source"));
-    tr.querySelector(".pick-target").addEventListener("click", () => resolveConflict(c.id, "target"));
-    body.appendChild(tr);
+  box.innerHTML = "";
+  $("conflicts-message").textContent = data.groups.length ? "" : "No conflicts waiting.";
+  data.groups.forEach((group) => {
+    const section = document.createElement("div");
+    section.className = "conflict-group";
+    section.innerHTML = `<h3>${escapeHtml(group.label)} <span class="muted">- ${group.conflicts.length} ${group.conflicts.length === 1 ? "conflict" : "conflicts"}</span></h3>`;
+    group.conflicts.forEach((c) => {
+      const item = document.createElement("div");
+      item.className = "conflict";
+      item.innerHTML = `<div><strong>${escapeHtml(c.field_label)}</strong> <span class="muted">dive ${escapeHtml(c.dive_time)}</span></div>
+        <table class="about-table">
+          <tr><th>${escapeHtml(c.source_name)}</th><td>${escapeHtml(c.source_text)}</td>
+              <td><button type="button" class="secondary keep-source" title="Writes this value to ${escapeHtml(c.target_name)}">Keep this</button></td></tr>
+          <tr><th>${escapeHtml(c.target_name)}</th><td>${escapeHtml(c.target_text)}</td>
+              <td><button type="button" class="secondary keep-target" title="Writes this value to ${escapeHtml(c.source_name)}">Keep this</button></td></tr>
+        </table>`;
+      item.querySelector(".keep-source").addEventListener("click", () => resolveConflict(c.pair_id, c.id, "source"));
+      item.querySelector(".keep-target").addEventListener("click", () => resolveConflict(c.pair_id, c.id, "target"));
+      section.appendChild(item);
+    });
+    box.appendChild(section);
   });
 }
 
-async function resolveConflict(id, winner) {
-  $("conflicts-message").textContent = "Resolving…";
+async function resolveConflict(pairId, id, winner) {
+  $("conflicts-message").textContent = "Updating the service…";
   const res = await fetch(`/api/conflicts/${encodeURIComponent(id)}/resolve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ winner, pair: board.pairId }),
+    body: JSON.stringify({ winner, pair: pairId }),
   });
   const data = await res.json();
+  await loadConflicts();
   $("conflicts-message").textContent = res.ok ? "Resolved." : (data.detail || "Failed.");
-  loadConflicts();
 }
 
 // ---------------------------------------------------------------- profile
@@ -1458,72 +1569,6 @@ async function checkProfile(apply) {
 
 // ---------------------------------------------------------------- Garmin dives + FIT files
 
-// Set while a refresh or FIT download started from this page runs, so the
-// status poll knows to reload the list once it finishes.
-let divesJobRunning = false;
-
-async function loadGarminDives() {
-  const body = $("dives-body");
-  try {
-    const res = await fetch("/api/dives/garmin");
-    const data = await res.json();
-    const dives = data.dives || [];
-    if (!dives.length) {
-      body.innerHTML = `<tr><td colspan="7" class="muted">No cached Garmin dives — press Refresh from Garmin.</td></tr>`;
-      return;
-    }
-    body.innerHTML = dives.map((d) => {
-      const fitCell = d.manual
-        ? `<span class="muted" title="Hand-logged dive: no dive-computer file">manual</span>`
-        : d.fit
-        ? `<a href="/api/dives/garmin/fit/${encodeURIComponent(d.id)}${d.account ? `?account=${encodeURIComponent(d.account)}` : ""}" title="${escapeHtml(d.fit_file)}">✓ Save</a>`
-        : `<button type="button" class="secondary fit-download" data-filename="${escapeHtml(d.filename)}">Download</button>`;
-      return `<tr><td>${escapeHtml(d.date || "")}</td><td>${escapeHtml(d.time || "")}</td>` +
-        `<td>${escapeHtml(String(d.dive_number ?? ""))}</td><td>${escapeHtml(d.location || "")}</td>` +
-        `<td>${escapeHtml(String(d.max_depth ?? ""))}</td><td>${escapeHtml(String(d.duration ?? ""))}</td>` +
-        `<td>${fitCell}</td></tr>`;
-    }).join("");
-    const manual = dives.filter((d) => d.manual).length;
-    const downloaded = dives.filter((d) => !d.manual && d.fit).length;
-    if (!divesJobRunning) $("dives-message").textContent =
-      `${dives.length} dive(s): ${downloaded} of ${dives.length - manual} FIT(s) downloaded, ${manual} hand-logged.`;
-  } catch (e) {
-    body.innerHTML = `<tr><td colspan="7" class="muted">Failed to load dives: ${escapeHtml(String(e))}</td></tr>`;
-  }
-}
-
-async function startDivesJob(url, payload) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: payload ? JSON.stringify(payload) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    $("dives-message").textContent = data.detail || `Failed (${res.status})`;
-    return;
-  }
-  if (data.status === "nothing_to_do") {
-    $("dives-message").textContent = "Every dive's FIT is already downloaded.";
-    return;
-  }
-  divesJobRunning = true;
-  $("dives-message").textContent = "Working…";
-  loadStatus();
-}
-
-// Called from loadStatus: progress while a dives job runs, then a reload.
-function updateDivesJob(data) {
-  if (!divesJobRunning) return;
-  if (data.is_downloading || data.progress) {
-    const p = data.progress;
-    $("dives-message").textContent = p ? `${p.message || "Working…"}${p.total > 0 ? ` — ${p.done} of ${p.total}` : ""}` : "Working…";
-    return;
-  }
-  divesJobRunning = false;
-  loadGarminDives();
-}
-
 // ---------------------------------------------------------------- init
 
 async function init() {
@@ -1541,21 +1586,28 @@ async function init() {
   // Cron rows read credentialsAccounts to populate their account dropdowns,
   // so it must be loaded before the cron table renders.
   await loadCredentialsStatus();
+  await loadEndpoints();
   loadSettings().then(loadFields);
+  loadConflicts();
 
   $("trigger-sync").addEventListener("click", triggerSync);
-  loadGarminDives();
-  $("dives-refresh").addEventListener("click", () => startDivesJob("/api/dives/garmin/refresh"));
-  $("dives-download-missing").addEventListener("click", () => startDivesJob("/api/dives/garmin/fit", {}));
-  $("dives-body").addEventListener("click", (e) => {
-    const button = e.target.closest(".fit-download");
-    if (button) startDivesJob("/api/dives/garmin/fit", { filenames: [button.dataset.filename] });
+  $("trigger-source").addEventListener("change", () => fillTargets("trigger"));
+  $("trigger-swap").addEventListener("click", () => swapEndpoints("trigger"));
+  $("job-source").addEventListener("change", () => fillTargets("job"));
+  $("job-frequency").addEventListener("change", showJobTimeFields);
+  $("job-add").addEventListener("click", applyJobEditor);
+  $("job-cancel").addEventListener("click", () => { editingJob = -1; $("job-editor").open = false; });
+  $("job-editor").addEventListener("toggle", () => { if ($("job-editor").open && editingJob < 0) openJobEditor(-1); });
+  $("conflicts-reload").addEventListener("click", loadConflicts);
+  $("save-sync-settings").addEventListener("click", async () => {
+    const { ok, message } = await postSettings(settingsPayload());
+    $("sync-settings-message").textContent = message;
+    if (ok) { await loadSettings(); await loadFields(); await loadEndpoints(); }
   });
   $("credentials-form").addEventListener("submit", saveCredentials);
   $("test-credentials").addEventListener("click", testCredentials);
   $("garmin-add-account").addEventListener("click", () => addAccountRow("garmin"));
   $("divelogs-add-account").addEventListener("click", () => addAccountRow("divelogs"));
-  $("add-cron-job").addEventListener("click", () => addCronRow());
   $("add-pair").addEventListener("click", () => addPairRow());
   $("save-schedule").addEventListener("click", saveSchedule);
   $("notify-save").addEventListener("click", saveNotifyUrl);

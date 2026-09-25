@@ -406,3 +406,16 @@ input[type="file"] { display: inline; width: auto; max-width: none; }
 .about-table { border-collapse: collapse; }
 .about-table th { text-align: left; font-weight: normal; color: var(--muted); padding: 0.2rem 1.5rem 0.2rem 0; }
 .about-table td { padding: 0.2rem 0; }
+
+/* scheduled jobs: a readable list and one editor */
+.jobs-list { list-style: none; margin: 0 0 0.75rem; padding: 0; }
+.jobs-list li { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0; border-bottom: 1px solid var(--border); }
+.jobs-list .job-what { flex: 1; }
+.job-editor { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; margin-bottom: 0.75rem; }
+.job-editor summary { cursor: pointer; font-weight: 600; }
+.job-editor[open] summary { margin-bottom: 0.6rem; }
+
+/* conflicts page */
+.conflict-group h3 { margin: 1rem 0 0.4rem; font-size: 0.95rem; }
+.conflict { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; margin-bottom: 0.5rem; }
+.conflict td { padding-right: 1.2rem; }

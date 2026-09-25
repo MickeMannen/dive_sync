@@ -346,3 +346,23 @@ def test_overwrite_only_refetches_garmin(tmp_path):
     engine.download_and_save_raw_data(mock_data_dir=str(tmp_path), overwrite=True)
     assert not (tmp_path / "garmin" / "1.json").exists()
     assert (tmp_path / "divelogs" / "1.json").exists()
+
+
+def test_scheduled_job_with_source_and_target(monkeypatch):
+    """A job saved from the web dashboard names its two sides; the scheduler
+    runs the pair between them, writing the target, with the job's options."""
+    from src.core import pairs
+    seen = {}
+
+    class Engine:
+        run_overrides = {}
+        def run_sync(self, dry_run=False, **kw):
+            seen["run"] = kw
+            return {}
+
+    monkeypatch.setattr(pairs, "engine_for", lambda s, t, **kw: seen.update(sides=(s, t)) or Engine())
+    job = CronJobModel(id="garmin-to-subsurface-daily", source="garmin", target="subsurface-cloud",
+                       directionality="to_subsurface", frequency="daily", hour=6, use_garmin_cache=False)
+    scheduler.run_sync_thread(False, job.model_dump())
+    assert seen["sides"] == ("garmin", "subsurface-cloud")
+    assert seen["run"]["direction_override"] == "to_subsurface" and seen["run"]["use_garmin_cache_override"] is False

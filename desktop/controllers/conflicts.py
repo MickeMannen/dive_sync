@@ -15,20 +15,7 @@ from desktop import credentials
 from desktop.jobs import Worker
 
 
-def brief(value: Any) -> str:
-    """A recorded conflict value as a person reads it: text as is, numbers
-    without a float tail, lists joined, tanks/profiles as a count."""
-    if value is None or value == "" or value == []:
-        return "(empty)"
-    if isinstance(value, float):
-        return f"{value:g}"
-    if isinstance(value, list):
-        if value and isinstance(value[0], dict):
-            return f"{len(value)} item(s)"
-        if len(value) == 2 and all(isinstance(v, (int, float)) for v in value):
-            return f"{value[0]:.6g}, {value[1]:.6g}"          # a position
-        return ", ".join(str(v) for v in value)
-    return str(value)
+from src.core.conflicts import display_value as brief  # noqa: E402  (kept importable as brief)
 
 
 class ConflictsController(QObject):

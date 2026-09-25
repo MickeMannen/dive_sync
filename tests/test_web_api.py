@@ -514,3 +514,66 @@ def test_about_and_version_endpoints(monkeypatch):
     assert about["version"] and about["version"] != "local-dev" and about["project_url"].startswith("https://")
     v = c.get("/api/version").json()                        # the keys the sidebar label reads
     assert v["current_version"] == about["version"] and "update_available" in v
+
+
+def _web_client(tmp_path, monkeypatch, credentials=None):
+    import json
+    from fastapi.testclient import TestClient
+    from src.core import config
+    from src.web import app as webapp
+    creds_path, settings_path = str(tmp_path / "credentials.json"), str(tmp_path / "settings.json")
+    (tmp_path / "credentials.json").write_text(json.dumps(credentials or {}))
+    monkeypatch.setattr(config, "SETTINGS_FILE", settings_path)
+    monkeypatch.setattr(config, "CREDENTIALS_FILE", creds_path)
+    # the loaders bind their default path at import; point them here
+    load_s, load_c, save_s = config.ConfigManager.load_settings, config.ConfigManager.load_credentials, config.ConfigManager.save_settings
+    monkeypatch.setattr(config.ConfigManager, "load_settings", staticmethod(lambda path=None: load_s(path or settings_path)))
+    monkeypatch.setattr(config.ConfigManager, "load_credentials", staticmethod(lambda path=None: load_c(path or creds_path)))
+    monkeypatch.setattr(config.ConfigManager, "save_settings", staticmethod(lambda s, path=None: save_s(s, path or settings_path)))
+    return TestClient(webapp.app)
+
+
+def test_web_sync_now_takes_a_source_and_target_and_never_deletes(tmp_path, monkeypatch):
+    from src.core import scheduler
+    c = _web_client(tmp_path, monkeypatch, {"garmin": {"username": "g", "password": "p"},
+                                            "divelogs": {"username": "d", "password": "p"},
+                                            "subsurface": {"email": "me@x.org", "password": "p"}})
+    ends = c.get("/api/sync/endpoints").json()
+    assert [e["spec"] for e in ends["endpoints"]] == ["garmin", "divelogs", "subsurface-cloud"]
+    seen = {}
+    monkeypatch.setattr(scheduler, "run_sync_thread", lambda dry_run, custom=None: seen.update(custom=custom))
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    assert c.post("/api/sync/trigger", json={"dry_run": True, "source": "divelogs", "target": "garmin"}).status_code == 200
+    import time; time.sleep(0.2)
+    assert seen["custom"]["pair"] == "garmin_divelogs" and seen["custom"]["directionality"] == "to_garmin"
+    assert seen["custom"]["propagate_deletes"] is False
+    c.post("/api/sync/trigger", json={"dry_run": True, "source": "subsurface-cloud", "target": "garmin"})
+    time.sleep(0.2)
+    assert (seen["custom"]["source"], seen["custom"]["target"]) == ("subsurface-cloud", "garmin")
+    assert "pair" not in seen["custom"] and seen["custom"]["directionality"] == "to_garmin"
+    assert c.post("/api/sync/trigger", json={"source": "garmin", "target": "garmin"}).status_code == 400
+
+
+def test_web_jobs_with_source_and_target_and_all_conflicts(tmp_path, monkeypatch):
+    from src.core.config import ConfigManager
+    from src.core.conflicts import Conflict, ConflictStore
+    c = _web_client(tmp_path, monkeypatch, {"garmin": {"username": "g", "password": "p"},
+                                            "subsurface": {"email": "me@x.org", "password": "p"}})
+    settings = c.get("/api/settings").json()
+    settings["cron_jobs"] = [{"id": "garmin-to-subsurface-daily", "source": "garmin", "target": "subsurface-cloud",
+                              "directionality": "to_subsurface", "frequency": "daily", "hour": 6, "minute": 0,
+                              "day_of_week": 1, "interval_minutes": 60, "only_new": True, "sync_gases": True,
+                              "enabled": True, "use_garmin_cache": False}]
+    assert c.post("/api/settings", json=settings).status_code == 200
+    job = ConfigManager.load_settings(str(tmp_path / "settings.json")).cron_jobs[0]
+    assert (job.source, job.target, job.use_garmin_cache) == ("garmin", "subsurface-cloud", False)
+
+    ConflictStore(str(tmp_path / "conflicts_garmin_subsurface.json")).save([Conflict(
+        id="c1", link_id="buddy", source_service="garmin", target_service="subsurface", source_key="garmin.buddy",
+        target_key="subsurface.buddy", field_type="text", dive_ids={"garmin": "1", "subsurface": "x"},
+        source_value="Anna", target_value="Bob", dive_time="2026-06-27 09:20:00")])
+    groups = c.get("/api/conflicts/all").json()["groups"]
+    assert [g["pair_id"] for g in groups] == ["garmin_subsurface"]
+    item = groups[0]["conflicts"][0]
+    assert (item["field_label"], item["source_text"], item["target_text"]) == ("Buddy", "Anna", "Bob")
+    assert (item["source_name"], item["target_name"]) == ("Garmin Connect", "Subsurface Cloud")

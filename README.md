@@ -17,7 +17,7 @@ It features two-way syncing (one direction per run), detailed telemetry parsing 
 
 It comes in two forms that share the same sync engine and settings format:
 * **The desktop app** (DiveSync, PySide6/Qt Quick; macOS first, Windows and Linux builds in CI): run syncs by hand, browse and edit your dives on each service, edit the mapping board, resolve conflicts.
-* **The Docker image**: an unattended, scheduled sync with a web dashboard (status, live log, mapping board, conflicts, accounts, schedule). It has no dive editing beyond the Garmin dive list.
+* **The Docker image**: an unattended, scheduled sync with a web dashboard (Sync now, scheduled jobs, live log, mapping board, conflicts, accounts). It syncs only; browsing and editing dives is the desktop app's job.
 
 <p align="left">
   <a href="https://skillicons.dev">
@@ -318,14 +318,12 @@ Start the web dashboard locally without Docker:
 ```bash
 python docker_run.py
 ```
-Open `http://localhost:8000` in your web browser. The pages:
-1. **Sync**: whether a sync is running, the last result, the next scheduled run, a **Sync now** button (dry run optional) and the live log; below, the default sync settings, failure alerts (a webhook such as ntfy), extra sync pairs (UDDF file, Subsurface checkout or Cloud), scheduled jobs and the sync profile export/import.
-2. **Mapping**: the mapping board for a source → target and the conflict queue — see the "🗺️ Mapping Board" section above.
-3. **Garmin dives**: the dives the last refresh cached, with their FIT files to download.
-4. **Accounts**: set and test Garmin, Divelogs.org and Subsurface Cloud credentials without editing `credentials.json` by hand.
+Open `http://localhost:8000` in your web browser. It is the unattended side of the project: it syncs, it does not browse or edit dives (that is the desktop app). The pages:
+1. **Sync**: whether a sync is running, the next scheduled run, and **Sync now** for a source → target (dry run, only new dives, sync gases, use cached Garmin dives) with its progress and the live log; **Scheduled jobs** as a list ("Garmin Connect → Divelogs.org, every day at 06:00") with **Add job** asking what and when; and **Failure alerts**: a webhook (e.g. an ntfy topic) that gets a short message whenever a run fails. A sync from here never deletes dives — Mirror is desktop-only.
+2. **Mapping**: the mapping board for a source → target and the pair's options — see the "🗺️ Mapping Board" section above.
+3. **Conflicts**: every pair's queued conflicts with **Keep this** per side.
+4. **Settings**: Garmin, Divelogs.org and Subsurface Cloud credentials (with a test), the API cooldown, file pairs (UDDF file, Subsurface checkout) under *Advanced*, and the sync profile export/import.
 5. **About**: version (the Docker image's `APP_VERSION`), update check and license.
-
-Dive editing is the desktop app's job; the dashboard is for the scheduled, unattended side.
 
 ---
 
