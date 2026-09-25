@@ -248,8 +248,9 @@
       <h2>Scheduled jobs</h2>
       <p class="muted">Syncs the Docker image runs on its own. A job writes its target only; for both directions add a job each way.</p>
       <ul id="jobs-list" class="jobs-list"></ul>
-      <details id="job-editor" class="job-editor">
-        <summary id="job-editor-title">Add a job</summary>
+      <button type="button" class="secondary" id="job-new">+ Add job</button>
+      <div id="job-editor" class="job-editor" hidden>
+        <h3 id="job-editor-title">Add a job</h3>
         <div class="board-toolbar">
           <label>Source (read from) <select id="job-source"></select></label>
           <span class="muted">&rarr;</span>
@@ -283,7 +284,7 @@
           <button type="button" id="job-add">Add job</button>
           <button type="button" class="secondary" id="job-cancel">Cancel</button>
         </div>
-      </details>
+      </div>
       <div class="actions">
         <button type="button" id="save-schedule">Save schedule</button>
         <span id="schedule-message" class="muted"></span>
@@ -293,8 +294,8 @@
     <section class="card">
       <h2>Failure alerts</h2>
       <p class="muted">Get told when an unattended sync fails: the dashboard sends a short text message to this address whenever a scheduled or manual run fails. Works with ntfy (paste your topic URL, e.g. https://ntfy.sh/your-topic) and most generic webhook receivers; Gotify needs its endpoint to accept a raw text body.</p>
-      <div class="inline-form">
-        <label>Webhook URL <input type="text" id="notify-url" placeholder="https://ntfy.sh/your-topic" style="min-width:320px"></label>
+      <div class="inline-form notify-form">
+        <label>Webhook URL <input type="text" id="notify-url" placeholder="https://ntfy.sh/your-topic"></label>
         <div class="actions">
           <button type="button" id="notify-test">Test</button>
           <button type="button" id="notify-save">Save</button>

@@ -513,7 +513,14 @@ function openJobEditor(index) {
   $("job-editor-title").textContent = job ? "Change job" : "Add a job";
   $("job-add").textContent = job ? "Apply" : "Add job";
   showJobTimeFields();
-  $("job-editor").open = true;
+  showJobEditor(true);
+}
+
+// The form is open while a job is added or changed; "+ Add job" otherwise.
+function showJobEditor(open) {
+  $("job-editor").hidden = !open;
+  $("job-new").hidden = open;
+  if (open) $("job-editor").scrollIntoView({ block: "nearest" });
 }
 
 function jobId(source, target, frequency) {
@@ -547,7 +554,7 @@ function applyJobEditor() {
   });
   if (editingJob >= 0) jobs[editingJob] = job; else jobs.push(job);
   editingJob = -1;
-  $("job-editor").open = false;
+  showJobEditor(false);
   $("schedule-message").textContent = "Not saved yet - press Save schedule.";
   renderJobs();
 }
@@ -1597,8 +1604,8 @@ async function init() {
   $("job-frequency").addEventListener("change", showJobTimeFields);
   showJobTimeFields();
   $("job-add").addEventListener("click", applyJobEditor);
-  $("job-cancel").addEventListener("click", () => { editingJob = -1; $("job-editor").open = false; });
-  $("job-editor").addEventListener("toggle", () => { if ($("job-editor").open && editingJob < 0) openJobEditor(-1); });
+  $("job-new").addEventListener("click", () => openJobEditor(-1));
+  $("job-cancel").addEventListener("click", () => { editingJob = -1; showJobEditor(false); });
   $("conflicts-reload").addEventListener("click", loadConflicts);
   $("save-sync-settings").addEventListener("click", async () => {
     const { ok, message } = await postSettings(settingsPayload());
