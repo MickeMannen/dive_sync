@@ -103,13 +103,12 @@ function renderProgress(data) {
   const active = !!(data.is_running || data.is_downloading || p);
   box.hidden = !active;
   if (!active) return;
+  // The bar only shows real progress: a stage without a count (logging in,
+  // reading the dive lists) is its text alone, not an animated bar.
   const bar = $("status-progress-bar");
-  if (p && p.fraction !== null && p.fraction !== undefined) {
-    bar.value = p.fraction;
-    bar.removeAttribute("data-indeterminate");
-  } else {
-    bar.removeAttribute("value");          // an <progress> with no value is indeterminate
-  }
+  const known = !!p && p.fraction !== null && p.fraction !== undefined;
+  bar.hidden = !known;
+  if (known) bar.value = p.fraction;
   const parts = [];
   if (p && p.message) parts.push(p.message);
   if (p && p.total > 0) parts.push(`${p.done} of ${p.total}`);

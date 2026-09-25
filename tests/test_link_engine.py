@@ -1058,3 +1058,20 @@ def test_mirror_makes_the_receiver_a_copy_of_the_sender(tmp_path):
     assert d[0].buddy == "Anna" and d[0].notes == "mine"           # forced; "never overwrite" left alone
     assert len(engine.target.added) == 1                           # the Garmin-only dive created
     assert engine.source.deleted == []                             # the sender is never touched
+
+
+def test_sync_run_reports_real_progress(tmp_path, monkeypatch):
+    """The web dashboard's bar shows only real progress: stages without a
+    count (logging in, reading dives) come with total 0, then every upload
+    and every matched dive is counted up to the total."""
+    from src.core import progress
+    seen = []
+    monkeypatch.setattr(progress, "report", lambda done, total, message="", service="": seen.append((done, total, message)))
+    g = [_dive(external_ids={"garmin": "1", "divelogs": "2"}, buddy="Anna"),
+         _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "3"})]
+    d = [_dive(external_ids={"garmin": "1", "divelogs": "2"})]
+    _engine(tmp_path, g, d).run_sync(dry_run=True)
+    assert seen[0][1] == 0 and seen[0][2].startswith("Logging in") and seen[1][2].startswith("Reading dives")
+    counted = [s for s in seen if s[1] > 0]
+    assert [(done, total) for done, total, _ in counted] == [(0, 2), (1, 2)]
+    assert counted[0][2].startswith("New dive") and counted[1][2].startswith("Comparing dive")

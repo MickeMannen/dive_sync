@@ -887,11 +887,15 @@ class SyncEngine:
             if hasattr(adapter, "upload_timezone") and self.settings.garmin_timezone:
                 adapter.upload_timezone = self.settings.garmin_timezone
 
-        # Login
+        # Login. Progress (src/core/progress.py, the web dashboard's bar): a
+        # stage without a count is reported as text only; the Garmin fetch and
+        # the per-dive work below report done/total.
+        progress.report(0, 0, f"Logging in to {self.source_name} and {self.target_name}")
         if not self.source.login():
             raise RuntimeError(f"Failed to authenticate with {self.source_name}.")
         if not self.target.login():
             raise RuntimeError(f"Failed to authenticate with {self.target_name}.")
+        progress.report(0, 0, f"Reading dives from {self.source_name} and {self.target_name}")
 
         # Determine datetime filters
         date_from: Optional[datetime] = None
@@ -1070,6 +1074,15 @@ class SyncEngine:
         seen_pairs = set()
         sync_results["conflicts"] = []
 
+        # Per-dive work, counted for the progress bar: uploads either way, then
+        # every matched pair compared (and written where it differs).
+        work_total = len(unique_source) + len(unique_target) + len(matched_pairs)
+        work_done = [0]
+
+        def advance(message: str) -> None:
+            progress.report(work_done[0], work_total, message)
+            work_done[0] += 1
+
         # 1. Upload dives only the source has to the target (rework.md C16:
         # creating a new dive on Garmin from another source is opt-in - a
         # matched dive's field updates below are never gated by this)
@@ -1080,6 +1093,7 @@ class SyncEngine:
                 {"reason": "create_on_garmin_off", "time": str(d.date_time)} for d in unique_source)
         elif tgt in writable:
             for dive in unique_source:
+                advance(f"New dive {dive.date_time} -> {self.target_name}")
                 # A dive the receiver expects to import from its own .fit
                 # (rework.md F17) is left for that import to create.
                 if self._awaits_manual_import(tgt, dive):
@@ -1115,6 +1129,7 @@ class SyncEngine:
                 {"reason": "create_on_garmin_off", "time": str(d.date_time)} for d in unique_target)
         elif src in writable:
             for dive in unique_target:
+                advance(f"New dive {dive.date_time} -> {self.source_name}")
                 # A dive the receiver expects to import from its own .fit
                 # (rework.md F17) is left for that import to create.
                 if self._awaits_manual_import(src, dive):
@@ -1143,7 +1158,9 @@ class SyncEngine:
                     sync_results[f"uploaded_to_{src}"].append(entry)
 
         # 3. Matched dives: cross-link IDs, then apply every active rule of the receiver
+        work_done[0] = len(unique_source) + len(unique_target)     # uploads skipped by a gate still count as done
         for a_dive, b_dive in matched_pairs:
+            advance(f"Comparing dive {a_dive.date_time}")
             a_id = a_dive.external_ids.get(src)
             b_id = b_dive.external_ids.get(tgt)
             seen_pairs.add(pair_key({src: a_id, tgt: b_id}))
