@@ -1,9 +1,11 @@
 name: Build and attach release artifacts
 
 # Manual-only (rework.md E12): you create a GitHub Release yourself first
-# (draft or published), then run this with the platforms you want and its
-# tag. Never triggers on a push - nothing here happens without you picking
-# it from the Actions tab and choosing what to build. macOS always signs
+# (draft or published), then run this with the platforms you want, picking
+# the release's tag in the "Use workflow from" dropdown - not a branch. The
+# workflow and code then come from that tag. Never triggers on a push -
+# nothing here happens without you picking it from the Actions tab and
+# choosing what to build. macOS always signs
 # with the real Developer ID cert and notarizes (rework.md E3) since this is
 # for something you're actually giving out, unlike desktop-build.yml's
 # adhoc-signed PR/dispatch builds. Docker Hub is only touched when
@@ -15,10 +17,6 @@ name: Build and attach release artifacts
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Tag of the existing GitHub Release to attach build artifacts to (vX.Y.Z, e.g. v0.1.0) - also the version the apps get"
-        required: true
-        type: string
       build_macos:
         description: "Build and sign the macOS app"
         type: boolean
@@ -40,7 +38,17 @@ permissions:
   contents: write
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a tag
+        if: github.ref_type != 'tag'
+        run: |
+          echo "::error::Pick the release's tag (e.g. v0.2.1) in the 'Use workflow from' dropdown, not a branch."
+          exit 1
+
   macos:
+    needs: check
     if: ${{ inputs.build_macos }}
     runs-on: macos-latest
     timeout-minutes: 30
@@ -52,7 +60,7 @@ jobs:
       - run: python -m pip install -U pip "briefcase==0.4.5"
       - name: Set the version from the release tag
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: python .github/scripts/set_version.py
       - run: briefcase build macOS app
 
@@ -105,9 +113,10 @@ jobs:
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.release_tag }}" dist/*.dmg --clobber --repo "${{ github.repository }}"
+        run: gh release upload "${{ github.ref_name }}" dist/*.dmg --clobber --repo "${{ github.repository }}"
 
   windows:
+    needs: check
     if: ${{ inputs.build_windows }}
     runs-on: windows-latest
     steps:
@@ -118,16 +127,17 @@ jobs:
       - run: python -m pip install -U pip "briefcase==0.4.5"
       - name: Set the version from the release tag
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: python .github/scripts/set_version.py
       - run: briefcase build windows app
       - run: briefcase package windows app
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.release_tag }}" dist/*.msi --clobber --repo "${{ github.repository }}"
+        run: gh release upload "${{ github.ref_name }}" dist/*.msi --clobber --repo "${{ github.repository }}"
 
   linux:
+    needs: check
     if: ${{ inputs.build_linux }}
     runs-on: ubuntu-latest
     steps:
@@ -139,18 +149,19 @@ jobs:
       - run: python -m pip install -U pip "briefcase==0.4.5"
       - name: Set the version from the release tag
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: python .github/scripts/set_version.py
       - run: briefcase build linux system --target ubuntu:24.04
       - run: briefcase package linux system --target ubuntu:24.04 --adhoc-sign
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.release_tag }}" dist/*.deb --clobber --repo "${{ github.repository }}"
+        run: gh release upload "${{ github.ref_name }}" dist/*.deb --clobber --repo "${{ github.repository }}"
 
   docker:
+    needs: check
     if: ${{ inputs.push_docker }}
     uses: ./.github/workflows/docker-release.yml
     with:
-      app_version: ${{ inputs.release_tag }}
+      app_version: ${{ github.ref_name }}
     secrets: inherit
