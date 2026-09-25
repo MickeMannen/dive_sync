@@ -386,6 +386,19 @@ Open `http://localhost:8000` in your web browser. It is the unattended side of t
 
 ---
 
+## 🗄️ Garmin Dive Cache
+
+Garmin Connect is slow: each dive takes three API calls, with a cooldown between calls. **Use cached Garmin dives** (on by default; desktop app, web dashboard, scheduled jobs; `--no-garmin-cache` turns it off on the CLI) makes a sync skip dives it already has. The cache is refreshed as part of every sync, not in a separate step:
+
+1. The sync fetches Garmin's activity list, a few calls in total.
+2. It compares each dive in the list with the copy in the cache: name, location, dive number, duration, depths, temperature, times and a few more fields.
+   - **Unchanged**: the cached copy is used, with no further calls to Garmin.
+   - **New or changed**: the full dive is fetched (three calls) and the cache is updated.
+
+New dives and most edits are always picked up. **The catch:** the activity list doesn't include notes, buddies, weight or visibility, so an edit to *only* those fields on Garmin leaves the dive looking unchanged, and the old cached copy is used. Such an edit is picked up by a sync with the option off, or by a **Full refresh** on the desktop app's Garmin dives page.
+
+For scheduled jobs, a good setup is a frequent job with the cache on, plus a weekly job with it off to catch those edits. The cache lives in `garmin/<account>/` in the data folder.
+
 ## 🧪 Testing
 
 Run all unit, mock, and API tests to verify execution logic:

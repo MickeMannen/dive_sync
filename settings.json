@@ -5,7 +5,7 @@
     "date_to": null,
     "only_new": true,
     "sync_gases": true,
-    "sync_fit": false
+    "use_garmin_cache": true
   },
   "grace_window_minutes": 15,
   "api_cooldown_seconds": 0.5,
@@ -224,7 +224,8 @@
       },
       "match_keys": [],
       "propagate_deletes": null,
-      "create_on_garmin": null
+      "create_on_garmin": null,
+      "create_device_dives_on_submersion": null
     },
     {
       "id": "garmin_submersion",
@@ -423,11 +424,13 @@
       },
       "match_keys": [],
       "propagate_deletes": null,
-      "create_on_garmin": null
+      "create_on_garmin": null,
+      "create_device_dives_on_submersion": null
     }
   ],
   "notify_url": null,
   "propagate_deletes": false,
   "backup_retention_count": 10,
-  "create_on_garmin": false
+  "create_on_garmin": false,
+  "create_device_dives_on_submersion": false
 }
