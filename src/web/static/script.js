@@ -1595,6 +1595,7 @@ async function init() {
   $("trigger-swap").addEventListener("click", () => swapEndpoints("trigger"));
   $("job-source").addEventListener("change", () => fillTargets("job"));
   $("job-frequency").addEventListener("change", showJobTimeFields);
+  showJobTimeFields();
   $("job-add").addEventListener("click", applyJobEditor);
   $("job-cancel").addEventListener("click", () => { editingJob = -1; $("job-editor").open = false; });
   $("job-editor").addEventListener("toggle", () => { if ($("job-editor").open && editingJob < 0) openJobEditor(-1); });
