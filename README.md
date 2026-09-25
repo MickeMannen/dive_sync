@@ -317,7 +317,7 @@ The container exposes:
 
 ### 3. Building a release (GitHub Actions)
 Nothing is built or published automatically. To release:
-1. Set the version in `pyproject.toml` (`version = "…"`; the desktop app shows it on its About page) and create a GitHub Release with a matching tag, e.g. `v0.1.0` (draft or published).
+1. Create a GitHub Release with a `vX.Y.Z` tag, e.g. `v0.1.0` (draft or published). The tag is the version: the build writes it into `pyproject.toml` on the runner (the desktop app shows it on its About page), so there is nothing to bump by hand. Plain numbers only — Windows installers reject tags like `v0.1.0-beta`.
 2. In the **Actions** tab, run **Build and attach release artifacts** (`.github/workflows/release-build.yml`) with that tag and the platforms to build: macOS (signed and notarized), Windows and Linux installers are attached to the release.
 3. Tick **push_docker** there (or run `.github/workflows/docker-release.yml` on its own) to build the multi-architecture image (`linux/amd64`, `linux/arm64`) and push it to Docker Hub; the tag is baked in as `APP_VERSION`, which the web dashboard's About page shows.
 

@@ -8,12 +8,15 @@ name: Build and attach release artifacts
 # for something you're actually giving out, unlike desktop-build.yml's
 # adhoc-signed PR/dispatch builds. Docker Hub is only touched when
 # "push_docker" is checked, by calling docker-release.yml as a reusable job.
+# The release tag sets the version everywhere: the desktop jobs write it into
+# pyproject.toml on the runner (.github/scripts/set_version.py), and Docker
+# gets it as APP_VERSION - no need to bump pyproject.toml by hand.
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Tag of the existing GitHub Release to attach build artifacts to (e.g. v0.1.0)"
+        description: "Tag of the existing GitHub Release to attach build artifacts to (vX.Y.Z, e.g. v0.1.0) - also the version the apps get"
         required: true
         type: string
       build_macos:
@@ -47,6 +50,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -U pip "briefcase==0.4.5"
+      - name: Set the version from the release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python .github/scripts/set_version.py
       - run: briefcase build macOS app
 
       - name: Import Developer ID certificate
@@ -106,6 +113,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -U pip "briefcase==0.4.5"
+      - name: Set the version from the release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python .github/scripts/set_version.py
       - run: briefcase build windows app
       - run: briefcase package windows app
       - name: Upload to the release
@@ -123,6 +134,10 @@ jobs:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y socat
       - run: python -m pip install -U pip "briefcase==0.4.5"
+      - name: Set the version from the release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python .github/scripts/set_version.py
       - run: briefcase build linux system --target ubuntu:24.04
       - run: briefcase package linux system --target ubuntu:24.04 --adhoc-sign
       - name: Upload to the release
