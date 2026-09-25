@@ -315,6 +315,36 @@ The container exposes:
 - **Web dashboard**: available at `http://localhost:8080` — sync status, live log, mapping board, accounts and schedule (see "🌐 Web Dashboard" below)
 - **Volume Mount**: `/app/data/` (contains `settings.json`, `credentials.json`, `tokens/`, `garmin/`, and `divelogs/`)
 
+#### Or with Docker Compose
+Save this as `docker-compose.yml`; `./data` next to it becomes the data folder:
+```yaml
+services:
+  dive_sync:
+    image: mickemannen/dive_sync:latest
+    container_name: dive_sync
+    ports:
+      - "127.0.0.1:8080:8000"   # localhost only - the dashboard has no login
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DIVE_SYNC_PORT=8000
+      - DIVE_SYNC_HOST=0.0.0.0
+    restart: unless-stopped
+```
+```bash
+docker compose up -d          # start (and after editing the file)
+docker compose pull && docker compose up -d   # update to the newest image
+docker compose logs -f        # follow the log
+```
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DIVE_SYNC_PORT` | `8000` | Port of the dashboard inside the container |
+| `DIVE_SYNC_HOST` | `0.0.0.0` | Bind address inside the container |
+| `DATA_DIR` | `/app/data` | Settings, credentials, tokens and caches |
+
+To reach the dashboard from other machines, drop the `127.0.0.1:` prefix only on a private network or behind a VPN or an authenticating reverse proxy (see "🔒 Security").
+
 ### 3. Building a release (GitHub Actions)
 Nothing is built or published automatically. To release:
 1. Create a GitHub Release with a `vX.Y.Z` tag, e.g. `v0.1.0` (draft or published). The tag is the version: the build writes it into `pyproject.toml` on the runner (the desktop app shows it on its About page), so there is nothing to bump by hand. Plain numbers only — Windows installers reject tags like `v0.1.0-beta`.
