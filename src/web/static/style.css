@@ -8,6 +8,7 @@
   --accent: #2563eb;
   --badge-on: #16a34a;
   --badge-off: #9ca3af;
+  --danger: #dc2626;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -17,6 +18,7 @@
     --border: #33373d;
     --text: #e6e8eb;
     --muted: #9aa0a8;
+    --danger: #f87171;
   }
 }
 
@@ -154,6 +156,17 @@ label {
   font-size: 0.9rem;
 }
 
+fieldset details > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
+}
+
+fieldset details[open] > summary {
+  margin-bottom: 0.25rem;
+}
+
 input, select {
   display: block;
   margin-top: 0.25rem;
@@ -185,6 +198,8 @@ input, select {
 
 .account-row:last-child { border-bottom: none; }
 .account-row label { max-width: 220px; margin: 0; flex: 1 1 160px; }
+/* Sits inline at the end of the row it is about, next to the buttons. */
+.row-warning { align-self: center; font-size: 0.8rem; color: var(--danger); }
 
 button {
   padding: 0.45rem 0.9rem;
@@ -263,13 +278,18 @@ td input, td select {
 }
 .board-toolbar label { margin: 0; max-width: 220px; }
 
-.board {
+.receivers { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
+.receiver { border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; }
+.receiver h3 { margin: 0 0 0.6rem; font-size: 0.95rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
+.receiver .badge { font-size: 0.7rem; font-weight: normal; padding: 0.1rem 0.5rem; border-radius: 999px; background: rgba(127, 127, 127, 0.15); color: var(--muted); }
+.receiver .badge.active { background: var(--accent); color: white; }
+.receiver .board {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 2fr 3fr;
   gap: 4rem;
 }
-.board-column h3 { margin: 0 0 0.4rem; font-size: 0.9rem; }
+.board-column h4 { margin: 0 0 0.4rem; font-size: 0.8rem; color: var(--muted); font-weight: normal; }
 .field-list { list-style: none; margin: 0; padding: 0; }
 .field-list li {
   display: flex;
@@ -282,14 +302,24 @@ td input, td select {
   font-size: 0.85rem;
   background: var(--card-bg);
   cursor: grab;
+  min-height: 1.9rem;
 }
 .field-list li.locked { cursor: default; opacity: 0.75; }
 .field-list li.linked { border-color: var(--accent); }
+.field-list li.selected { box-shadow: 0 0 0 2px var(--accent) inset; }
+.field-list li.armed { border-color: var(--accent); border-width: 2px; background: rgba(37, 99, 235, 0.10); }
 .field-list li.drop-ok { outline: 2px dashed var(--accent); }
 .field-list li.drop-no { outline: 2px dashed #dc2626; }
-.field-list .type { width: 1.4rem; text-align: center; color: var(--muted); font-size: 0.8rem; }
+.field-list li.receiver-field { cursor: default; }
+.field-list .type { width: 1.4rem; text-align: center; color: var(--muted); font-size: 0.8rem; flex: none; }
+.field-list .name { flex: none; }
 .field-list .unit { color: var(--muted); font-size: 0.75rem; margin-left: auto; }
 .field-list .lock { font-size: 0.75rem; }
+.field-list .rule { margin-left: auto; font-size: 0.75rem; color: var(--muted); cursor: pointer; text-align: right; }
+.field-list .rule .policy { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.field-list .rule.noop { text-decoration: line-through; }
+.field-list .rule.split { font-style: italic; }
+.field-list button.delete-rule { padding: 0 0.35rem; font-size: 0.7rem; line-height: 1.4; margin-left: 0.3rem; }
 
 .board-lines {
   position: absolute;
@@ -302,6 +332,13 @@ td input, td select {
 .board-lines path { fill: none; stroke: var(--accent); stroke-width: 2; pointer-events: stroke; cursor: pointer; }
 .board-lines path.off { stroke: var(--badge-off); stroke-dasharray: 4 4; }
 .board-lines path.selected { stroke-width: 3.5; }
+.board-lines path.split { stroke-dasharray: 7 3; }
+
+.match-keys { margin: 0.9rem 0 0.25rem; font-size: 0.85rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.match-keys .label { font-weight: 600; }
+.match-keys select { width: auto; max-width: 220px; }
+.match-keys .key-row { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; }
+.match-keys .key-row button { padding: 0 0.3rem; font-size: 0.7rem; margin-left: 0.2rem; }
 
 #links-table { margin-top: 0.75rem; }
 #links-table tr.selected td { background: rgba(37, 99, 235, 0.08); }
@@ -350,6 +387,22 @@ td.result-conflict { color: #dc2626; }
 input[type="file"] { display: inline; width: auto; max-width: none; }
 
 @media (max-width: 700px) {
-  .board { grid-template-columns: 1fr; gap: 1rem; }
+  .receiver .board { grid-template-columns: 1fr; gap: 1rem; }
   .board-lines { display: none; }
 }
+
+/* Progress of a long job (rework.md E14): a Garmin refresh is three API calls
+   per dive with a cool-down between each, so it runs for minutes. */
+.job-progress { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
+.job-progress progress { flex: 1; height: 0.5rem; }
+
+/* mapping board: header holds only the view; options and help fold away */
+.toolbar-spacer { flex: 1; }
+.board-options, .board-help { margin: 0.4rem 0; }
+.board-options summary, .board-help summary, #editor-advanced summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+.link-button { background: none; border: none; padding: 0; color: var(--muted); font-size: 0.85rem; cursor: pointer; }
+.link-button:hover { color: var(--text); }
+
+.about-table { border-collapse: collapse; }
+.about-table th { text-align: left; font-weight: normal; color: var(--muted); padding: 0.2rem 1.5rem 0.2rem 0; }
+.about-table td { padding: 0.2rem 0; }

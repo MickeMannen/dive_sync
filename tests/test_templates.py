@@ -237,3 +237,20 @@ def test_preview_includes_reverse_self_check_when_reverse_is_set():
     # a reverse pattern that doesn't actually invert the template shows as None, not a crash
     mismatched = REVERSIBLE_SITE.model_copy(update={"reverse": r"nope (?P<location>.+)"})
     assert preview(mismatched, cat)["reverse_sample"] is None
+
+
+def test_auto_reverse_is_derived_from_the_template():
+    cat = _catalog()
+    link = FieldLink(id="x", source=["divelogs.location", "divelogs.divesite"], target="garmin.activityName",
+                     direction="bidirectional", template="{divelogs.location}, {divelogs.divesite}", reverse="auto")
+    assert validate_reverse(link, cat) == []
+    assert reverse_parse(link, "Gozo, Blue Hole", cat) == {"divelogs.location": "Gozo", "divelogs.divesite": "Blue Hole"}
+    # spacing around the separator is forgiven; the first separator splits
+    assert reverse_parse(link, " Gozo ,Blue Hole ", cat) == {"divelogs.location": "Gozo", "divelogs.divesite": "Blue Hole"}
+    assert reverse_parse(link, "Gozo, Blue Hole, North", cat)["divelogs.divesite"] == "Blue Hole, North"
+    assert reverse_parse(link, "No separator here", cat) is None
+    # two fields with nothing between them cannot be split
+    glued = link.model_copy(update={"template": "{divelogs.location}{divelogs.divesite}"})
+    assert "text between the fields" in "\n".join(validate_reverse(glued, cat))
+    assert reverse_parse(glued, "GozoBlue", cat) is None
+    assert preview(link, cat)["reverse_sample"]      # the self-check round-trips

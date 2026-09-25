@@ -1,17 +1,24 @@
-"""Read/edit/delete access to the locally cached Garmin & Divelogs dive JSON
-files (data/garmin/, data/divelogs/), plus pushing edits/deletes to the
-remote service. This is the shared logic behind any dive-editing UI (the
-desktop app's Garmin/Divelogs sections) - kept here, rather than duplicated
-per-UI, so there is exactly one place that understands the raw Garmin/
-Divelogs JSON shapes.
+"""Read/edit/delete access to the locally cached dive JSON files
+(data/garmin/, data/divelogs/, data/submersion/, data/subsurface/), plus
+pushing edits/deletes to the remote service. This is the shared logic behind
+any dive-editing UI (the desktop app's per-service Dives sections) - kept
+here, rather than duplicated per-UI, so there is exactly one place that
+understands each cached JSON shape.
+
+Garmin and Divelogs are cached as the raw payload their API returned;
+Submersion and Subsurface are cached as UnifiedDive (see
+UNIFIED_CACHE_SERVICES below).
 """
 import os
 import re
 import json
 import logging
+import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.core import garmin_files
 from src.core.config import ConfigManager
+from src.core.models import recorded_water_temp
 
 logger = logging.getLogger("dive_sync.dive_cache")
 
@@ -107,6 +114,48 @@ def _format_tanks(tanks: List[Dict[str, Any]]) -> str:
     return "; ".join(entries)
 
 
+def _format_sac(tanks: List[Dict[str, Any]], avg_depth: Any, duration_seconds: Any) -> str:
+    """Surface Air Consumption in litres per minute, e.g. "14.2".
+
+    Gas breathed at the surface is ``pressure drop x cylinder volume``, and
+    at depth a breath costs the ambient pressure in atmospheres, so::
+
+        SAC = sum(bar used x litres) / (minutes x (avg depth / 10 + 1))
+
+    Every cylinder is added up, which is what makes the number meaningful on
+    a multi-tank dive. Both services report bar, litres, metres and seconds
+    here, so there is no unit conversion to do.
+
+    Returns "" unless the dive has everything the sum needs: a cylinder with
+    a volume and both pressures, an average depth and a duration. A volume of
+    0 (Divelogs stores that when the cylinder size was never filled in) is
+    missing data, not a zero-litre tank."""
+    try:
+        minutes = float(duration_seconds) / 60.0
+        depth = float(avg_depth)
+    except (TypeError, ValueError):
+        return ""
+    if minutes <= 0 or depth <= 0:
+        return ""
+
+    litres = 0.0
+    for tank in tanks:
+        try:
+            volume = float(tank.get("volume") or 0)
+            start_p = float(tank.get("start_pressure") or 0)
+            end_p = float(tank.get("end_pressure") or 0)
+        except (TypeError, ValueError):
+            continue
+        used = start_p - end_p
+        if volume > 0 and used > 0:
+            litres += used * volume
+    if litres <= 0:
+        return ""
+
+    ata = depth / 10.0 + 1.0
+    return f"{litres / (minutes * ata):.1f}"
+
+
 def _resolve_service_dir(service: str, username: Optional[str], base_dir: Optional[str] = None) -> Optional[str]:
     root = _base_dir(base_dir)
     if username:
@@ -165,24 +214,34 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
     if not service_dir:
         return dives
 
+    # One directory read per account for the FIT column, not one per dive.
+    fit_indexes: Dict[Optional[str], Dict[str, str]] = {}
+
     for filename, filepath in _iter_dive_files(service_dir):
         try:
             with open(filepath, "r") as f:
                 data = json.load(f)
 
+            account = _username_from_filepath("garmin", filepath)
+            if account not in fit_indexes:
+                fit_indexes[account] = garmin_files.fit_index(account, base_dir)
+
             summary = data.get("summary", {})
             details = data.get("details") or {}
             if not isinstance(details, dict):
                 details = {}
+            manual = garmin_files.is_manual_dive(data)
+            fit_file = fit_indexes[account].get(str(summary.get("activityId") or "")) or ""
 
             sum_dto = details.get("summaryDTO", {}) or summary.get("summaryDTO", {}) or {}
             metadata = details.get("metadataDTO", {}) or summary.get("metadataDTO", {}) or {}
 
-            dive_num = metadata.get("diveNumber") or filename.replace(".json", "")
+            dive_num = metadata.get("diveNumber") or ""
             date_time = _normalize_date_time(sum_dto.get("startTimeLocal") or summary.get("startTimeLocal") or "")
             duration = sum_dto.get("duration") or summary.get("duration") or 0
             max_depth = sum_dto.get("maxDepth") or summary.get("maxDepth") or 0.0
             location = details.get("activityName") or summary.get("activityName") or ""
+            location_name = details.get("locationName") or summary.get("locationName") or ""
             notes = details.get("description") or summary.get("description") or ""
 
             avg_depth = sum_dto.get("averageDepth") or summary.get("averageDepth")
@@ -191,22 +250,37 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
             except (TypeError, ValueError):
                 avg_depth_display = str(avg_depth or "")
 
-            water_temp = _format_water_temp(
-                sum_dto.get("minTemperature"), sum_dto.get("maxTemperature"), sum_dto.get("averageTemperature")
-            )
+            # 0 = never entered (hand-logged dives): shown as no temperature
+            temp_min, temp_max, temp_avg = (recorded_water_temp(sum_dto.get(k))
+                                            for k in ("minTemperature", "maxTemperature", "averageTemperature"))
+            water_temp = _format_water_temp(temp_min, temp_max, temp_avg)
 
             info = details.get("diveInfo") or summary.get("diveInfo") or {}
-            tanks = [
-                {
+            # A tank with a transmitter takes its name and pressures from the
+            # sensor (tankSensors[]), as in GarminAdapter._map_to_unified.
+            sensor_doc = data.get("tanksensor")
+            sensors = (sensor_doc.get("tankSensors") or []) if isinstance(sensor_doc, dict) else []
+            by_index = {s.get("tankIndex"): s for s in sensors}
+
+            def _sensor_pressure(sensor, key):
+                value = sensor.get(key)
+                if value is not None and "PSI" in str(sensor.get("pressureUnit") or "BAR").upper():
+                    value = value / 14.5038
+                return round(value, 1) if value is not None else None
+
+            tanks = []
+            for i, gas in enumerate(info.get("diveGases") or []):
+                sensor = by_index.get(gas.get("gasIndex", i)) or by_index.get(i) or {}
+                start_p = _sensor_pressure(sensor, "startingPressure")
+                end_p = _sensor_pressure(sensor, "endingPressure")
+                tanks.append({
                     "oxygen": gas.get("oxygenContent"),
                     "helium": gas.get("heliumContent"),
-                    "start_pressure": gas.get("tankStartingPressure"),
-                    "end_pressure": gas.get("tankEndingPressure"),
+                    "start_pressure": start_p if start_p is not None else gas.get("tankStartingPressure"),
+                    "end_pressure": end_p if end_p is not None else gas.get("tankEndingPressure"),
                     "volume": gas.get("tankSize"),
-                    "tank_name": gas.get("tankName"),
-                }
-                for gas in (info.get("diveGases") or [])
-            ]
+                    "tank_name": gas.get("tankName") or sensor.get("name"),
+                })
 
             weight = info.get("weight")
             weight_unit = info.get("weightUnit", {}).get("unitKey") if isinstance(info.get("weightUnit"), dict) else ""
@@ -234,11 +308,7 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
 
             lat = sum_dto.get("startLatitude")
             lng = sum_dto.get("startLongitude")
-            water_temp_value = sum_dto.get("averageTemperature")
-            if water_temp_value is None:
-                water_temp_value = sum_dto.get("minTemperature")
-            if water_temp_value is None:
-                water_temp_value = sum_dto.get("maxTemperature")
+            water_temp_value = next((t for t in (temp_avg, temp_min, temp_max) if t is not None), None)
 
             date_part, time_part = _split_date_time(date_time)
             dives.append({
@@ -250,6 +320,7 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
                 "duration": duration_display,
                 "max_depth": max_depth_display,
                 "avg_depth": avg_depth_display,
+                "sac": _format_sac(tanks, avg_depth, duration),
                 "water_temp": water_temp,
                 "water_temp_value": water_temp_value,
                 "tanks": _format_tanks(tanks),
@@ -258,11 +329,22 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
                 "lat": lat,
                 "lng": lng,
                 "location": location,
+                "activity_name": location,
+                "location_name": location_name,
                 "notes": notes,
                 "weight": weight_str,
                 "visibility": visibility_str,
                 "buddy": buddy,
                 "filename": filename,
+                "account": account,
+                "manual": manual,
+                # Whether the dive's original .fit has been downloaded
+                # (garmin_files); "✓" is what the dive tables show. A
+                # hand-logged dive has no device file - Connect only makes
+                # up a summary-only FIT from the typed-in fields - so it is
+                # marked "manual" instead and never counted as missing one.
+                "fit": "manual" if manual else ("✓" if fit_file else ""),
+                "fit_file": fit_file,
             })
         except Exception as e:
             logger.warning("Failed to parse cached Garmin dive file %s: %s", filename, e)
@@ -347,6 +429,7 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
                 "duration": _seconds_to_minutes_display(data.get("duration") or 0),
                 "max_depth": data.get("maxdepth") or 0.0,
                 "avg_depth": avg_depth_display,
+                "sac": _format_sac(tanks, data.get("meandepth"), data.get("duration")),
                 "water_temp": water_temp,
                 "water_temp_value": depthtemp,
                 "tanks": _format_tanks(tanks),
@@ -367,6 +450,234 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
 
     dives.sort(key=lambda x: x["date_time"], reverse=True)
     return dives
+
+
+# ---------------------------------------------------------------------------
+# Services cached as UnifiedDive (rework.md F3 services: Submersion, Subsurface)
+# ---------------------------------------------------------------------------
+#
+# Garmin and Divelogs are cached as the raw payload their API returned, and
+# every reader here re-parses that native shape. The later services have no
+# such single payload - their adapters build a UnifiedDive out of a changeset
+# log or a git checkout - so their cache holds the UnifiedDive itself. That
+# makes the readers below trivial (the field names are already the unified
+# ones) and the write path exact: the file IS what update_dive() takes.
+UNIFIED_CACHE_SERVICES = ("submersion", "subsurface")
+
+
+def is_unified_cache(service: str) -> bool:
+    return service in UNIFIED_CACHE_SERVICES
+
+
+def _unified_dive_filename(dive: Dict[str, Any], service: str, index: int) -> str:
+    external = (dive.get("external_ids") or {}).get(service)
+    stem = str(external or dive.get("dive_number") or f"dive_{index}")
+    return _safe_filename(stem) + ".json"
+
+
+def _safe_filename(stem: str) -> str:
+    """Submersion ids are UUIDs and Subsurface's are date-based strings; keep
+    them recognisable but never let one escape the cache directory."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", stem) or "dive"
+
+
+UNIFIED_CACHE_SUBDIR = "dives"
+
+
+def unified_cache_dir(service: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> str:
+    """``DATA_DIR/<service>/dives`` - deliberately NOT ``DATA_DIR/<service>``.
+
+    SubmersionAdapter keeps its device identity and HLC clock in
+    ``DATA_DIR/submersion`` (device.json, hlc_<id>.json): that device id is
+    how the Submersion sync mesh knows this installation, and losing it makes
+    dive_sync republish as a brand-new device, orphaning everything it
+    published before. Caching dives in that same directory would have put
+    them one ``overwrite=True`` (which clears the directory) away from being
+    wiped out, and would have had the listing try to parse those state files
+    as dives. The cache gets its own subdirectory instead."""
+    parts = [_base_dir(base_dir), service, UNIFIED_CACHE_SUBDIR]
+    if username:
+        parts.append(username)
+    return os.path.join(*parts)
+
+
+def prune_cache_dir(directory: str, keep: "set[str]", label: str = "") -> List[str]:
+    """Delete cached ``.json`` files that no longer correspond to a live dive
+    (rework.md E18). Returns the filenames removed.
+
+    A refresh used only ever to *write*, so a dive deleted on the service kept
+    its cached file for ever, and a dive renumbered there got a second file
+    under the new name while the old one lingered - both showed up as ghosts
+    in the dive table. ``keep`` is every filename this pass wrote or
+    deliberately left alone, so both cases fall out of one rule.
+
+    Only ever called after a complete, successful pass. It also refuses to
+    empty a non-empty cache: an API hiccup that answers with an empty list
+    must not be able to delete the whole local copy."""
+    if not os.path.isdir(directory):
+        return []
+    present = {name for name in os.listdir(directory) if name.endswith(".json")}
+    stale = sorted(present - set(keep))
+    if not stale:
+        return []
+    if not keep:
+        logger.warning("Not pruning %s: this pass kept no dives at all, which looks like a failed "
+                       "listing rather than an empty account (%d cached file(s) left alone).",
+                       directory, len(present))
+        return []
+    for name in stale:
+        try:
+            os.remove(os.path.join(directory, name))
+        except OSError as e:
+            logger.warning("Could not remove stale cache file %s: %s", name, e)
+    logger.info("Removed %d %scache file(s) with no matching dive on the service: %s",
+                len(stale), f"{label} " if label else "", ", ".join(stale))
+    return stale
+
+
+def save_unified_dives(service: str, dives: List[Any], username: Optional[str] = None,
+                       base_dir: Optional[str] = None, overwrite: bool = False,
+                       prune: bool = False) -> int:
+    """Write UnifiedDive objects (or plain dicts) into the cache directory for
+    ``service``, one JSON file each. Returns how many were written.
+
+    ``prune`` removes cached files these dives did not account for, so pass it
+    only when ``dives`` really is every dive the service has (a download), not
+    when saving a subset."""
+    directory = unified_cache_dir(service, username, base_dir)
+    if overwrite and os.path.isdir(directory):
+        logger.info("Overwriting existing data. Clearing directory: %s", directory)
+        shutil.rmtree(directory)
+    os.makedirs(directory, exist_ok=True)
+
+    written = 0
+    keep = set()
+    for index, dive in enumerate(dives, 1):
+        data = dive if isinstance(dive, dict) else dive.model_dump(mode="json")
+        filename = _unified_dive_filename(data, service, index)
+        keep.add(filename)
+        with open(os.path.join(directory, filename), "w") as f:
+            json.dump(data, f, indent=2)
+        written += 1
+    if prune:
+        prune_cache_dir(directory, keep, service)
+    return written
+
+
+def download_service_dives(service: str, overwrite: bool = False, base_dir: Optional[str] = None) -> int:
+    """Fetch every dive from a UnifiedDive-cached service and write the cache
+    for it. The Garmin/Divelogs equivalent lives in
+    SyncEngine.download_and_save_raw_data, which has to speak each of those
+    APIs directly; here the adapter already hands back UnifiedDives, which is
+    exactly what this cache stores."""
+    if not is_unified_cache(service):
+        raise ValueError(f"{service!r} is not cached as UnifiedDive; use SyncEngine.download_and_save_raw_data.")
+    adapter = _unified_adapter(service)
+    if not adapter.login():
+        raise RuntimeError(f"Failed to log in to {service}.")
+    try:
+        dives = adapter.fetch_dives()
+    finally:
+        adapter.finish()
+    written = save_unified_dives(service, dives, base_dir=base_dir, overwrite=overwrite, prune=True)
+    logger.info("Cached %d %s dive(s).", written, service)
+    return written
+
+
+def _unified_row(data: Dict[str, Any], service: str, filename: str) -> Dict[str, Any]:
+    """One cached UnifiedDive as the same row dict list_garmin_dives() and
+    list_divelogs_dives() produce, so the dive table and editor need no
+    per-service cases."""
+    tanks = [
+        {
+            "oxygen": gas.get("oxygen"),
+            "helium": gas.get("helium"),
+            "start_pressure": gas.get("start_pressure"),
+            "end_pressure": gas.get("end_pressure"),
+            "volume": gas.get("tank_volume"),
+            "tank_name": gas.get("tank_name"),
+        }
+        for gas in (data.get("gas_mixtures") or [])
+    ]
+    date_time = _normalize_date_time(data.get("date_time"))
+    date_part, time_part = _split_date_time(date_time)
+    weight = data.get("weight")
+    visibility = data.get("visibility")
+    return {
+        "id": str((data.get("external_ids") or {}).get(service) or ""),
+        "dive_number": data.get("dive_number") or "",
+        "date_time": date_time,
+        "date": date_part,
+        "time": time_part,
+        "duration": _seconds_to_minutes_display(data.get("duration") or 0),
+        "max_depth": f"{float(data['max_depth']):.2f}" if data.get("max_depth") is not None else "",
+        "avg_depth": f"{float(data['avg_depth']):.2f}" if data.get("avg_depth") is not None else "",
+        "sac": _format_sac(tanks, data.get("avg_depth"), data.get("duration")),
+        # a 0 °C cached before it counted as "not recorded" is shown as none
+        "water_temp": _format_water_temp(*(recorded_water_temp(data.get(k)) for k in ("temp_min", "temp_max", "temp_avg"))),
+        "water_temp_value": next((t for t in (recorded_water_temp(data.get("temp_avg")), recorded_water_temp(data.get("temp_min")))
+                                  if t is not None), None),
+        "tanks": _format_tanks(tanks),
+        "tanks_detail": tanks,
+        "tanks_editable": True,
+        "lat": data.get("lat"),
+        "lng": data.get("lng"),
+        "location": data.get("location") or "",
+        "notes": data.get("notes") or "",
+        "weight": "" if weight is None else f"{_format_number(weight)} {_weight_unit(data)}".strip(),
+        "visibility": "" if visibility is None else f"{_format_number(visibility)} {_visibility_unit(data)}".strip(),
+        "buddy": data.get("buddy") or "",
+        "filename": filename,
+        # a recorded depth profile: its depths and duration follow from it
+        # (Subsurface writes them only for hand-logged dives)
+        "has_profile": bool(data.get("samples")),
+    }
+
+
+def _weight_unit(data: Dict[str, Any]) -> str:
+    return "kg" if "kilogram" in str(data.get("weight_unit") or "kilogram").lower() else "lbs"
+
+
+def _visibility_unit(data: Dict[str, Any]) -> str:
+    return "m" if "meter" in str(data.get("visibility_unit") or "meter").lower() else "ft"
+
+
+def list_unified_dives(service: str, username: Optional[str] = None,
+                       base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+    dives: List[Dict[str, Any]] = []
+    # Only the cache subdirectory, never the service directory itself - the
+    # adapter's own state files live up there (see unified_cache_dir).
+    service_dir = unified_cache_dir(service, username, base_dir)
+    if not os.path.isdir(service_dir):
+        return dives
+    for filename, filepath in _iter_dive_files(service_dir):
+        try:
+            with open(filepath, "r") as f:
+                dives.append(_unified_row(json.load(f), service, filename))
+        except Exception as e:
+            logger.warning("Failed to parse cached %s dive file %s: %s", service, filename, e)
+    dives.sort(key=lambda x: x["date_time"], reverse=True)
+    return dives
+
+
+def list_dives(service: str, username: Optional[str] = None,
+               base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The cached dive rows for any supported service."""
+    if service == "garmin":
+        return list_garmin_dives(username, base_dir)
+    if service == "divelogs":
+        return list_divelogs_dives(username, base_dir)
+    if is_unified_cache(service):
+        return list_unified_dives(service, username, base_dir)
+    raise ValueError(f"Unknown service: {service!r}")
+
+
+def _parse_unified_samples(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        {"depth": s.get("depth"), "temp": s.get("temp"), "time": s.get("time")}
+        for s in (raw.get("samples") or [])
+        if s.get("depth") is not None
+    ]
 
 
 def read_raw_dive(service: str, filename: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> Dict[str, Any]:
@@ -464,6 +775,8 @@ def get_samples(service: str, filename: str, username: Optional[str] = None, bas
     raw = read_raw_dive(service, filename, username, base_dir)
     if service == "garmin":
         return _parse_garmin_samples(raw)
+    if is_unified_cache(service):
+        return _parse_unified_samples(raw)
     return _parse_divelogs_samples(raw)
 
 
@@ -485,6 +798,8 @@ def update_dive_fields(
     lng: Optional[float] = None,
     water_temp: Optional[float] = None,
     tanks: Optional[List[Dict[str, Any]]] = None,
+    activity_name: Optional[str] = None,
+    location_name: Optional[str] = None,
 ) -> str:
     """Apply the given (non-None) field overrides to the cached dive file and
     write it back. Returns the filepath that was written, for the caller to
@@ -503,7 +818,11 @@ def update_dive_fields(
     `tanks` (a list of {oxygen, helium, start_pressure, end_pressure, volume,
     tank_name} dicts, replacing the cached list wholesale) is a no-op for
     Garmin: its gas API is read-only (rework.md E4), so the desktop editor
-    never offers tank editing for a Garmin-sourced dive in the first place."""
+    never offers tank editing for a Garmin-sourced dive in the first place.
+
+    `activity_name` / `location_name` (Garmin only) set the activity's title
+    and its location name separately; `location` sets both to one text, as it
+    always has."""
     filepath = _find_dive_file(service, filename, username, base_dir)
     if not filepath:
         raise FileNotFoundError(f"Dive file not found: {service}/{filename}")
@@ -577,6 +896,14 @@ def update_dive_fields(
             details["activityName"] = location
             details["locationName"] = location
             summary["locationName"] = location
+
+        if activity_name is not None:
+            summary["activityName"] = activity_name
+            details["activityName"] = activity_name
+
+        if location_name is not None:
+            summary["locationName"] = location_name or None
+            details["locationName"] = location_name or None
 
         if notes is not None:
             val = None if notes == "" else notes
@@ -700,6 +1027,51 @@ def update_dive_fields(
                 for t in tanks
             ]
 
+    elif is_unified_cache(service):
+        # The cache file is already a UnifiedDive, so each edit is a plain
+        # assignment onto the unified field of the same name.
+        if dive_number is not None:
+            try:
+                dive_data["dive_number"] = int(dive_number) if str(dive_number).strip() else None
+            except (TypeError, ValueError):
+                logger.warning("Ignoring non-numeric dive number %r for %s", dive_number, service)
+        if date_time is not None:
+            dive_data["date_time"] = date_time.replace(" ", "T") if date_time else None
+        if duration is not None:
+            dive_data["duration"] = duration
+        if max_depth is not None:
+            dive_data["max_depth"] = max_depth
+        if location is not None:
+            dive_data["location"] = location
+        if notes is not None:
+            dive_data["notes"] = notes
+        if buddy is not None:
+            dive_data["buddy"] = buddy
+        if lat is not None:
+            dive_data["lat"] = lat
+        if lng is not None:
+            dive_data["lng"] = lng
+        if weight is not None:
+            dive_data["weight"] = _leading_number(weight)
+        if visibility is not None:
+            dive_data["visibility"] = _leading_number(visibility)
+        if water_temp is not None:
+            # One entered number collapses the min/max/avg range, exactly as
+            # it does for the other two services.
+            dive_data["temp_min"] = dive_data["temp_max"] = dive_data["temp_avg"] = water_temp
+        if tanks is not None:
+            dive_data["gas_mixtures"] = [
+                {
+                    "oxygen": t.get("oxygen") if t.get("oxygen") is not None else 21.0,
+                    "helium": t.get("helium") if t.get("helium") is not None else 0.0,
+                    "start_pressure": t.get("start_pressure"),
+                    "end_pressure": t.get("end_pressure"),
+                    "tank_volume": t.get("volume"),
+                    "tank_name": t.get("tank_name"),
+                }
+                for t in tanks
+            ]
+
     else:
         raise ValueError(f"Unknown service: {service!r}")
 
@@ -710,14 +1082,23 @@ def update_dive_fields(
     return filepath
 
 
-def delete_dive_local(service: str, filename: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> Tuple[str, Optional[str]]:
-    """Remove the cached dive file. Returns (filepath, external_id) - the
-    external_id (Garmin activityId / Divelogs id), if one could be read
-    before deletion, for the caller to pass to push_remote_delete()."""
+def _leading_number(text: Any) -> Optional[float]:
+    """"6 kg" -> 6.0. The edit form shows weight/visibility with their unit
+    appended, but a UnifiedDive keeps the number and the unit apart."""
+    if text in (None, ""):
+        return None
+    m = re.match(r"\s*(-?\d+(?:\.\d+)?)", str(text))
+    return float(m.group(1)) if m else None
+
+
+def dive_external_id(service: str, filename: str, username: Optional[str] = None,
+                     base_dir: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """(filepath, the dive's id on its service) of a cached dive, reading
+    only: what a staged delete needs to remove it online before the cache
+    file goes."""
     filepath = _find_dive_file(service, filename, username, base_dir)
     if not filepath:
         raise FileNotFoundError(f"Dive file not found: {service}/{filename}")
-
     external_id = None
     try:
         with open(filepath, "r") as f:
@@ -726,9 +1107,18 @@ def delete_dive_local(service: str, filename: str, username: Optional[str] = Non
             external_id = dive_data.get("summary", {}).get("activityId")
         elif service == "divelogs":
             external_id = dive_data.get("id")
+        elif is_unified_cache(service):
+            external_id = (dive_data.get("external_ids") or {}).get(service)
     except Exception as e:
-        logger.error("Failed to read dive file %s before deletion: %s", filename, e)
+        logger.error("Failed to read dive file %s: %s", filename, e)
+    return filepath, str(external_id) if external_id else None
 
+
+def delete_dive_local(service: str, filename: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """Remove the cached dive file. Returns (filepath, external_id) - the
+    external_id (Garmin activityId / Divelogs id), if one could be read
+    before deletion, for the caller to pass to push_remote_delete()."""
+    filepath, external_id = dive_external_id(service, filename, username, base_dir)
     os.remove(filepath)
     logger.info("Deleted local cache file %s: %s", filename, filepath)
     return filepath, str(external_id) if external_id else None
@@ -750,9 +1140,104 @@ def _active_credentials(service: str, username: Optional[str]):
     return matching[0]
 
 
+def _unified_adapter(service: str):
+    """The configured adapter for a UnifiedDive-cached service. These have no
+    per-account list - one Submersion store, one Subsurface Cloud account -
+    so pairs.build_adapter() reads the whole configuration itself."""
+    from src.core.config import ConfigManager
+    from src.core.pairs import build_adapter
+    spec = "subsurface-cloud" if service == "subsurface" else service
+    return build_adapter(spec, ConfigManager.load_settings())
+
+
+def download_garmin_fits(filenames: List[str], username: Optional[str] = None,
+                         base_dir: Optional[str] = None) -> Dict[str, Any]:
+    """Download the original .fit of each cached Garmin dive in
+    ``filenames`` (their JSON cache names), saved under the same name as the
+    JSON (see garmin_files). One login covers the lot. Returns
+    ``{"downloaded": [...], "failed": {filename: reason}}``.
+
+    A hand-logged dive lands in ``failed`` without a download: Connect
+    answers for one with a FIT it generates from the typed-in summary (no
+    profile, no samples), which is no use to an importer."""
+    from src.core import progress
+    from src.core.services.garmin import GarminAdapter
+
+    result: Dict[str, Any] = {"downloaded": [], "failed": {}}
+    # (filename, filepath, account) - resolved first, so a bad name costs no API call
+    targets = []
+    for filename in filenames:
+        filepath = _find_dive_file("garmin", filename, username, base_dir)
+        if not filepath:
+            result["failed"][filename] = "not in the local cache"
+            continue
+        targets.append((filename, filepath, username or _username_from_filepath("garmin", filepath)))
+    if not targets:
+        return result
+
+    adapters: Dict[Optional[str], Any] = {}
+    for index, (filename, filepath, account) in enumerate(targets, 1):
+        progress.report(index - 1, len(targets), f"FIT for {filename}", "garmin")
+        try:
+            with open(filepath, "r") as f:
+                payload = json.load(f)
+            stem = garmin_files.stem_for_payload(payload)
+            activity_id = garmin_files.activity_id_of(stem) if stem else None
+            if not activity_id:
+                result["failed"][filename] = "no Garmin activity id"
+                continue
+            if garmin_files.is_manual_dive(payload):
+                result["failed"][filename] = "hand-logged dive: Garmin has no dive-computer file for it"
+                continue
+            if account not in adapters:
+                creds = _active_credentials("garmin", account)
+                adapter = GarminAdapter(creds.username, creds.password, token_dir=creds.token_dir,
+                                        cooldown_seconds=ConfigManager.load_settings().api_cooldown_seconds)
+                adapters[account] = adapter if adapter.login() else None
+            adapter = adapters[account]
+            if adapter is None:
+                result["failed"][filename] = "Garmin login failed"
+                continue
+            data = adapter.download_fit(activity_id)
+            if not data:
+                result["failed"][filename] = "Garmin has no original file for this dive (hand-logged?)"
+                continue
+            path = garmin_files.save_fit(data, stem, account, base_dir)
+            logger.info("Saved FIT for Garmin activity %s: %s", activity_id, path)
+            result["downloaded"].append(filename)
+        except Exception as e:
+            logger.error("Failed to download FIT for %s: %s", filename, e)
+            result["failed"][filename] = str(e)
+    progress.report(len(targets), len(targets), "FIT download finished", "garmin")
+    return result
+
+
 def push_remote_update(service: str, filepath: str, username: Optional[str] = None) -> bool:
     """Push a cached dive file's current contents to the remote service.
     Call after update_dive_fields() has written the file."""
+    if is_unified_cache(service):
+        from src.core.models import UnifiedDive
+        with open(filepath, "r") as f:
+            dive_data = json.load(f)
+        external_id = (dive_data.get("external_ids") or {}).get(service)
+        if not external_id:
+            logger.error("No %s id found in cache for %s; cannot update remotely.", service, filepath)
+            return False
+        adapter = _unified_adapter(service)
+        if not adapter.login():
+            logger.error("Failed to log in to %s; cannot update remotely.", service)
+            return False
+        logger.info("Updating %s for dive %s...", service, external_id)
+        try:
+            success = adapter.update_dive(str(external_id), UnifiedDive(**dive_data))
+        finally:
+            adapter.finish()
+        if success:
+            logger.info("%s successfully updated remotely.", service.capitalize())
+        else:
+            logger.error("%s remote update failed.", service.capitalize())
+        return success
+
     username = username or _username_from_filepath(service, filepath)
     active_creds = _active_credentials(service, username)
     if not active_creds.username or not active_creds.password:
@@ -797,6 +1282,17 @@ def push_remote_update(service: str, filepath: str, username: Optional[str] = No
 
 
 def push_remote_delete(service: str, external_id: str, username: Optional[str] = None, filepath: Optional[str] = None) -> bool:
+    if is_unified_cache(service):
+        adapter = _unified_adapter(service)
+        if not adapter.login():
+            logger.error("Failed to log in to %s; cannot delete remotely.", service)
+            return False
+        logger.info("Deleting %s remotely for ID %s...", service, external_id)
+        try:
+            return adapter.delete_dive(str(external_id))
+        finally:
+            adapter.finish()
+
     username = username or (_username_from_filepath(service, filepath) if filepath else None)
     active_creds = _active_credentials(service, username)
     if not active_creds.username or not active_creds.password:

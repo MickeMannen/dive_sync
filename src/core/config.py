@@ -1,12 +1,103 @@
 import os
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field, ValidationError
+from urllib.parse import urlparse
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from src.core.fields import FieldLink, default_field_links
+from src.core.fields import FieldLink, SyncRule, default_field_links, links_to_rules, rules_to_links
 
 logger = logging.getLogger("dive_sync.config")
+
+# Submersion sync is switched off for now: it did not work reliably against a
+# real library. The adapter, its credentials model and the cache code stay in
+# place, but no service list, UI or CLI offers it and a pair that names it is
+# refused (see ``pairs.parse_service_spec``). Flip this to bring it back.
+SUBMERSION_ENABLED = False
+
+
+# ---------------------------------------------------------------------------
+# Run direction (rework.md G0)
+# ---------------------------------------------------------------------------
+# A sync run has exactly one receiver: ``directionality`` names it as
+# ``to_<service id>`` (``to_divelogs``, ``to_garmin``, ``to_submersion``, ...)
+# or with the pair-neutral spellings ``to_target`` / ``to_source``. The old
+# ``bidirectional`` run mode - one run writing both sides - is gone: a two-way
+# sync is two directed runs (two cron jobs, two CLI calls), never one, so the
+# second always sees what the first wrote and nothing needs a tiebreak. An
+# older settings file, profile, API payload or job that still says
+# ``bidirectional`` is rewritten on the way in: the pair's declared source is
+# the sender, so it becomes ``to_target`` (``to_divelogs`` for the implicit
+# Garmin -> Divelogs pair), and a cron job that names a pair simply follows
+# that pair's saved direction.
+
+LEGACY_RUN_DIRECTION = "bidirectional"
+DEFAULT_RUN_DIRECTION = "to_divelogs"       # the Garmin -> Divelogs pair
+DEFAULT_PAIR_RUN_DIRECTION = "to_target"    # a named pair: its declared source sends
+
+# ---------------------------------------------------------------------------
+# Receiver rules and the explicit default pair (rework.md G1)
+# ---------------------------------------------------------------------------
+# A board is stored as receiver rules (``sync_pairs[].rules``, keyed by the
+# receiving service id) plus the pair's ordered ``match_keys``. The old
+# ``field_links`` list - top level for the once-implicit Garmin <-> Divelogs
+# pair, per pair otherwise - and the top-level ``directionality`` are still
+# accepted on the way in and folded into ``sync_pairs[0]``, the explicit
+# ``garmin_divelogs`` pair, which every build from now on keeps in the file.
+# ``SettingsModel.directionality`` / ``.field_links`` and
+# ``SyncPairModel.field_links`` stay as properties over that pair's rules so
+# the engine, CLI and both boards keep working unchanged until they read
+# rules directly (G2, G5, G6).
+
+SETTINGS_VERSION = 2
+DEFAULT_PAIR_ID = "garmin_divelogs"
+# spec name -> service id (the Subsurface Cloud adapter shares Subsurface's catalogue and ids)
+SERVICE_ID_ALIASES = {"subsurface-cloud": "subsurface"}
+
+
+def service_id_of_spec(spec: str) -> str:
+    """``garmin`` -> ``garmin``, ``uddf:out.uddf`` -> ``uddf``, ``subsurface-cloud`` -> ``subsurface``."""
+    name = (spec or "").strip().partition(":")[0].strip().lower()
+    return SERVICE_ID_ALIASES.get(name, name)
+
+
+def is_run_direction(value: Any) -> bool:
+    """True for a value the engine can run: ``to_<something>``."""
+    return isinstance(value, str) and value.startswith("to_") and len(value) > 3
+
+
+def _migrate_direction(holder: Dict[str, Any], replacement: Optional[str], where: str,
+                       changes: Optional[List[str]] = None) -> None:
+    if isinstance(holder, dict) and holder.get("directionality") == LEGACY_RUN_DIRECTION:
+        holder["directionality"] = replacement
+        note = f"{where}: '{LEGACY_RUN_DIRECTION}' -> {replacement!r}"
+        if changes is not None:
+            changes.append(note)
+        else:
+            logger.warning("Run direction %s (rework.md G0: a run has one receiver; two-way = two directed runs).", note)
+
+
+def _migrate_job_direction(job: Dict[str, Any], changes: Optional[List[str]] = None) -> None:
+    if isinstance(job, dict):
+        replacement = None if job.get("pair") else DEFAULT_RUN_DIRECTION
+        _migrate_direction(job, replacement, f"cron_jobs[{job.get('id', '?')}].directionality", changes)
+
+
+def migrate_run_directions(data: Dict[str, Any]) -> List[str]:
+    """Rewrite every ``bidirectional`` run direction in a raw settings dict in
+    place and return one line per change (empty when nothing was old)."""
+    changes: List[str] = []
+    if not isinstance(data, dict):
+        return changes
+    _migrate_direction(data, DEFAULT_RUN_DIRECTION, "directionality", changes)
+    for pair in data.get("sync_pairs") or []:
+        if isinstance(pair, dict):
+            _migrate_direction(pair, DEFAULT_PAIR_RUN_DIRECTION,
+                               f"sync_pairs[{pair.get('id', '?')}].directionality", changes)
+    for job in data.get("cron_jobs") or []:
+        _migrate_job_direction(job, changes)
+    return changes
 
 SETTINGS_FILE = os.path.join(os.environ.get("DATA_DIR", "."), "settings.json")
 CREDENTIALS_FILE = os.path.join(os.environ.get("DATA_DIR", "."), "credentials.json")
@@ -16,11 +107,13 @@ class SyncFilters(BaseModel):
     date_to: Optional[str] = Field(None, description="Sync end date, format YYYY-MM-DD")
     only_new: bool = Field(True, description="Sync only new dives since last run")
     sync_gases: bool = Field(True, description="Sync detailed gas mixtures (alias for 'the tanks links are not off')")
-    # rework.md E6: no UI exposes this any more (it never did anything for a
-    # regular sync - only SyncEngine.backup() reads it, for the CLI --backup
-    # FIT-file extraction); still settable by hand in settings.json or via
-    # POST /api/settings for that one purpose.
-    sync_fit: bool = Field(False, description="Include FIT files in a --backup export")
+    use_garmin_cache: bool = Field(
+        True,
+        description="Read a Garmin dive from the local refresh cache when Garmin's activity listing shows it "
+                    "unchanged, instead of fetching it again (three API calls per dive); fetched dives are cached. "
+                    "The listing does not reveal an edit to only notes, buddy, weight or visibility, so such an "
+                    "edit is picked up after a Full refresh or a sync with this off",
+    )
 
 class SyncScheduleSlot(BaseModel):
     hour: int = Field(..., ge=0, le=23)
@@ -28,7 +121,12 @@ class SyncScheduleSlot(BaseModel):
 
 class CronJobModel(BaseModel):
     id: str = Field(..., description="Unique ID for this job")
-    directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
+    directionality: Optional[str] = Field(
+        None,
+        description="Which side this job writes: to_<service id>, to_source or to_target. None = the pair's saved "
+                    "direction (the global one for the implicit Garmin -> Divelogs pair). One receiver per job; "
+                    "a two-way schedule is two jobs (rework.md G0)",
+    )
     frequency: str = Field("daily", description="hourly, daily, weekly, custom_minutes")
     hour: int = Field(0, ge=0, le=23)
     minute: int = Field(0, ge=0, le=59)
@@ -44,6 +142,12 @@ class CronJobModel(BaseModel):
     garmin_username: Optional[str] = Field(None, description="Which configured Garmin account to use; None picks the only one, or errors if several are configured")
     divelogs_username: Optional[str] = Field(None, description="Which configured Divelogs account to use; None picks the only one, or errors if several are configured")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_bidirectional(cls, data: Any) -> Any:
+        _migrate_job_direction(data)
+        return data
+
 class SyncPairModel(BaseModel):
     """One source/target pair the engine can run (rework.md F3). A service
     spec is a service id, optionally with an argument after a colon:
@@ -52,31 +156,98 @@ class SyncPairModel(BaseModel):
     id: str = Field(..., description="Unique name of the pair, used by --pair and by cron jobs")
     source: str = Field("garmin", description="Service spec of side A")
     target: str = Field("divelogs", description="Service spec of side B")
-    directionality: str = Field("bidirectional", description="bidirectional, to_<service id>, to_source, to_target")
+    directionality: str = Field(DEFAULT_PAIR_RUN_DIRECTION,
+                                description="Which side a run of this pair writes: to_<service id>, to_source or to_target (rework.md G0)")
     enabled: bool = True
     grace_window_minutes: Optional[int] = Field(None, description="Per-pair override of the matching window")
-    field_links: Optional[List[FieldLink]] = Field(None, description="Per-pair board; None = the defaults for this pair")
+    rules: Optional[Dict[str, List[SyncRule]]] = Field(
+        None, description="The board (rework.md G1): what each service accepts, keyed by receiving service id, e.g. "
+                          "{'divelogs': [...], 'garmin': [...]}. None = the shipped defaults for this pair")
+    match_keys: List[List[str]] = Field(
+        default_factory=list,
+        description="Ordered [source-side key, target-side key] pairs tried as match keys before start time")
     propagate_deletes: Optional[bool] = Field(None, description="Per-pair override of whether a dive deleted on one side is deleted on the other (rework.md C13); None = the global default")
     create_on_garmin: Optional[bool] = Field(None, description="Per-pair override of whether a new dive found only on the other side is created on Garmin (rework.md C16); None = the global default. Matched-dive updates are never affected")
+    create_device_dives_on_submersion: Optional[bool] = Field(None, description="Per-pair override of whether a dive a dive computer recorded is created on Submersion (rework.md F17); None = the global default. Hand-logged dives are created either way")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_input(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        _migrate_direction(data, DEFAULT_PAIR_RUN_DIRECTION, f"sync_pairs[{data.get('id', '?')}].directionality")
+        # rework.md G1: a per-pair link board (v1) becomes this pair's rules.
+        # When both are given the links win: they are the editable view the
+        # boards still post back, the rules the stored truth they replace.
+        if "field_links" in data:
+            links = data.pop("field_links")
+            if links is not None:
+                links = [l if isinstance(l, FieldLink) else FieldLink.model_validate(l) for l in links]
+                rules, keys = links_to_rules(links, service_id_of_spec(data.get("source", "garmin")),
+                                             service_id_of_spec(data.get("target", "divelogs")))
+                data["rules"], data["match_keys"] = rules, keys
+            elif "rules" not in data:
+                data["rules"] = None
+        return data
+
+    @property
+    def source_service(self) -> str:
+        return service_id_of_spec(self.source)
+
+    @property
+    def target_service(self) -> str:
+        return service_id_of_spec(self.target)
+
+    @property
+    def field_links(self) -> Optional[List[FieldLink]]:
+        """Link view of ``rules`` (None = the defaults for this pair); see fields.rules_to_links."""
+        if self.rules is None:
+            return None
+        return rules_to_links(self.rules, self.match_keys, self.source_service, self.target_service)
+
+    @field_links.setter
+    def field_links(self, links: Optional[List[FieldLink]]) -> None:
+        if links is None:
+            self.rules, self.match_keys = None, []
+            return
+        self.rules, self.match_keys = links_to_rules(list(links), self.source_service, self.target_service)
+
+    def effective_field_links(self) -> List[FieldLink]:
+        """The board this pair runs with: its own, or the shipped defaults."""
+        if self.rules is not None:
+            return self.field_links or []
+        from src.core.pairs import default_links_for
+        return default_links_for(self.source_service, self.target_service)
+
+
+def default_pair_model(links: Optional[List[FieldLink]] = None, directionality: Optional[str] = None) -> "SyncPairModel":
+    """The Garmin <-> Divelogs pair every settings file carries (rework.md G1)."""
+    pair = SyncPairModel(id=DEFAULT_PAIR_ID, source="garmin", target="divelogs",
+                         directionality=directionality or DEFAULT_RUN_DIRECTION)
+    pair.field_links = links if links is not None else default_field_links()
+    return pair
+
 
 class SettingsModel(BaseModel):
-    directionality: str = Field("bidirectional", description="bidirectional, to_divelogs, to_garmin")
+    settings_version: int = Field(SETTINGS_VERSION, description="File format version; 2 = receiver rules on pairs (rework.md G1)")
     sync_filters: SyncFilters = Field(default_factory=SyncFilters)
     grace_window_minutes: int = Field(15, description="Matching grace window in minutes")
-    api_cooldown_seconds: float = Field(1.0, description="Cool-down delay in seconds between API requests")
+    api_cooldown_seconds: float = Field(
+        0.5,
+        description="Cool-down delay in seconds between API requests. Halved from 1.0 on 2026-09-23 (rework.md E16): "
+                    "a Garmin refresh spends most of its time here, and the owner has never hit a Garmin 429 in daily use. "
+                    "Raise it again if a service starts rate-limiting",
+    )
     schedule: List[SyncScheduleSlot] = Field(default_factory=list, description="Cron-like multi-slot schedule")
     cron_jobs: List[CronJobModel] = Field(default_factory=list, description="List of configured cron jobs")
-    field_links: List[FieldLink] = Field(
-        default_factory=default_field_links,
-        description="The mapping board: which field feeds which, in what direction, with what conflict policy",
-    )
     garmin_timezone: Optional[str] = Field(
         None,
         description="IANA zone to stamp on dives uploaded to Garmin Connect; empty = detect from the account's newest dive",
     )
     sync_pairs: List[SyncPairModel] = Field(
-        default_factory=list,
-        description="Named source/target pairs beyond the implicit Garmin -> Divelogs one",
+        default_factory=lambda: [default_pair_model()],
+        description="Every sync pair, each with its own rules and direction; sync_pairs[0] is always the "
+                    "'garmin_divelogs' pair (rework.md G1)",
     )
     notify_url: Optional[str] = Field(
         None,
@@ -94,6 +265,69 @@ class SettingsModel(BaseModel):
         False,
         description="Default for the implicit Garmin<->Divelogs pair, and the fallback for any pair without its own override: a new dive found only on the other side is uploaded to create a matching Garmin dive (rework.md C16). Off by default - Garmin dive creation from another source is opt-in. Matched-dive field updates are never affected by this switch",
     )
+    create_device_dives_on_submersion: bool = Field(
+        False,
+        description="Whether a dive only the other side has is created on Submersion when a dive computer recorded it (rework.md F17). Off by default: the diver imports each device dive's .fit in the Submersion app, which derives the profile, cylinders, tank pressures and gas switches from the file, and dive_sync then syncs the soft fields onto the dive that import created - creating it here first would only produce a second, emptier copy. A hand-logged dive (nothing to import) is created regardless of this switch, and matched-dive field updates are never affected by it",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_default_pair(cls, data: Any) -> Any:
+        """rework.md G1: the top-level ``directionality`` / ``field_links`` (v1)
+        describe the once-implicit Garmin <-> Divelogs pair; fold them into
+        the explicit ``garmin_divelogs`` entry, creating it when missing. Given
+        for the pair *and* at top level, the top level wins (it is what the
+        status page's default form and both boards' "default" entry post)."""
+        if not isinstance(data, dict):
+            return data
+        _migrate_direction(data, DEFAULT_RUN_DIRECTION, "directionality")
+        legacy_links = data.pop("field_links", None)
+        legacy_direction = data.pop("directionality", None)
+        pairs = list(data.get("sync_pairs") or [])
+        index = next((i for i, p in enumerate(pairs)
+                      if (p.get("id") if isinstance(p, dict) else getattr(p, "id", None)) == DEFAULT_PAIR_ID), None)
+        if index is None:
+            pairs.insert(0, {"id": DEFAULT_PAIR_ID, "source": "garmin", "target": "divelogs",
+                             "directionality": legacy_direction or DEFAULT_RUN_DIRECTION,
+                             "field_links": legacy_links if legacy_links is not None
+                             else [l.model_dump() for l in default_field_links()]})
+        elif legacy_links is not None or legacy_direction:
+            entry = pairs[index]
+            entry = entry.model_dump() if isinstance(entry, SyncPairModel) else dict(entry)
+            if legacy_links is not None:
+                entry.pop("rules", None)
+                entry.pop("match_keys", None)
+                entry["field_links"] = legacy_links
+            if legacy_direction:
+                entry["directionality"] = legacy_direction
+            pairs[index] = entry
+        data["sync_pairs"] = pairs
+        return data
+
+    def default_pair(self) -> SyncPairModel:
+        return next(p for p in self.sync_pairs if p.id == DEFAULT_PAIR_ID)
+
+    def pair_for(self, source_id: str, target_id: str) -> Optional[SyncPairModel]:
+        """The first pair whose service ids are exactly (source, target)."""
+        return next((p for p in self.sync_pairs
+                     if (p.source_service, p.target_service) == (source_id, target_id)), None)
+
+    # Compatibility views over the garmin_divelogs pair (rework.md G1/G4)
+    @property
+    def directionality(self) -> str:
+        return self.default_pair().directionality
+
+    @directionality.setter
+    def directionality(self, value: str) -> None:
+        self.default_pair().directionality = value
+
+    @property
+    def field_links(self) -> List[FieldLink]:
+        return self.default_pair().effective_field_links()
+
+    @field_links.setter
+    def field_links(self, links: List[FieldLink]) -> None:
+        self.default_pair().field_links = list(links)
 
 class GarminCredentials(BaseModel):
     username: str = ""
@@ -115,13 +349,63 @@ class SubsurfaceCredentials(BaseModel):
     def configured(self) -> bool:
         return bool(self.email and self.password)
 
+def normalize_endpoint_url(url: str) -> str:
+    """An endpoint the way the user typed it in Submersion's own settings, made
+    into something boto3 accepts: a bare host gets ``https://``, and a trailing
+    slash goes away. Never downgraded to plain http on its own - a store that
+    really is unencrypted (a self-hosted MinIO on the LAN) has to say so with
+    an explicit ``http://``, so credentials are never sent in the clear by an
+    accident of typing."""
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if "://" not in url:
+        url = "https://" + url
+    return url
+
+
+# Hosts whose region is right there in the endpoint, which is why Submersion
+# never asks for it separately.
+_ENDPOINT_REGION_RES = (
+    re.compile(r"^s3[.-](?P<region>[a-z0-9-]+)\.backblazeb2\.com$"),
+    re.compile(r"^s3[.-](?P<region>[a-z0-9-]+)\.amazonaws\.com$"),
+    re.compile(r"^.+\.s3[.-](?P<region>[a-z0-9-]+)\.amazonaws\.com$"),
+    re.compile(r"^s3\.(?P<region>[a-z0-9-]+)\.wasabisys\.com$"),
+    re.compile(r"^(?P<region>[a-z0-9-]+)\.digitaloceanspaces\.com$"),
+    re.compile(r"^s3\.(?P<region>[a-z0-9-]+)\.scw\.cloud$"),
+)
+
+
+def region_from_endpoint(url: str) -> str:
+    """The region an endpoint already names, or "" when the host is not one we
+    recognise (self-hosted Garage/MinIO and the like - those need the Advanced
+    field filled in by hand)."""
+    host = urlparse(normalize_endpoint_url(url)).hostname or ""
+    if not host:
+        return ""
+    if host.endswith(".r2.cloudflarestorage.com"):
+        return "auto"
+    if host == "s3.amazonaws.com":
+        return "us-east-1"
+    for pattern in _ENDPOINT_REGION_RES:
+        m = pattern.match(host)
+        if m:
+            return m.group("region")
+    return ""
+
+
 class SubmersionCredentials(BaseModel):
     """Submersion sync store. Only S3-compatible stores (Backblaze B2, Cloudflare
     R2, Garage, ...) are supported for unattended sync; a local folder store
-    (Dropbox / iCloud folder) is a later, desktop-only option."""
+    (Dropbox / iCloud folder) is a later, desktop-only option.
+
+    The fields mirror Submersion's own sync settings screen: endpoint, bucket
+    and the two key halves are what a user is asked for, while region, prefix
+    and path_style sit behind an Advanced section in both of our UIs and are
+    filled in from the endpoint / their defaults when left blank."""
     store_type: str = Field("s3", description="'s3' or 'folder'")
-    endpoint_url: str = Field("", description="S3 endpoint, e.g. https://s3.eu-central-003.backblazeb2.com")
-    region: str = Field("", description="S3 region, e.g. eu-central-003 for Backblaze B2")
+    endpoint_url: str = Field("", description="S3 endpoint, e.g. s3.eu-central-003.backblazeb2.com; https:// is assumed when no scheme is given")
+    region: str = Field("", description="S3 region override; blank means 'whatever the endpoint says' (see effective_region)")
     bucket: str = ""
     prefix: str = Field("submersion-sync/", description="Key prefix Submersion writes its ssv1.* files under")
     access_key_id: str = Field("", description="B2: the application key id")
@@ -130,6 +414,30 @@ class SubmersionCredentials(BaseModel):
     folder_path: str = Field("", description="store_type 'folder': the synced folder on this machine")
     passphrase: str = Field("", description="End-to-end encryption passphrase (rework.md E11), only needed when "
                              "the Submersion library has E2E encryption turned on. Left blank for a plaintext store")
+
+    @model_validator(mode="after")
+    def _normalize_endpoint(self) -> "SubmersionCredentials":
+        """Runs wherever these credentials are built - loaded from disk, posted
+        to the web API, saved from the desktop app - so no caller has to
+        normalize on its own."""
+        normalized = normalize_endpoint_url(self.endpoint_url)
+        if normalized != self.endpoint_url:
+            self.endpoint_url = normalized
+        # A region that only repeats what the endpoint already says is not an
+        # override, so don't keep it as one: an older config that spelled out
+        # 'eu-central-003' next to a B2 endpoint would otherwise read as a
+        # departure from the defaults and pop the Advanced section open.
+        if self.region and self.region == region_from_endpoint(normalized):
+            self.region = ""
+        return self
+
+    @property
+    def effective_region(self) -> str:
+        """What the store actually signs with: the Advanced override when the
+        user set one, otherwise the region the endpoint already names. Derived
+        on use rather than saved, so re-pointing the endpoint at another
+        provider does not leave a stale region behind."""
+        return self.region or region_from_endpoint(self.endpoint_url)
 
     @property
     def configured(self) -> bool:
@@ -152,7 +460,7 @@ class CredentialsModel(BaseModel):
             out.append("divelogs")
         if self.subsurface.configured:
             out.append("subsurface")
-        if self.submersion.configured:
+        if SUBMERSION_ENABLED and self.submersion.configured:
             out.append("submersion")
         return out
 
@@ -180,7 +488,10 @@ class ConfigManager:
         with open(path, "r") as f:
             try:
                 data = json.load(f)
-                if "field_links" not in data:
+                version = data.get("settings_version") if isinstance(data, dict) else None
+                has_default_pair = any(isinstance(p, dict) and p.get("id") == DEFAULT_PAIR_ID
+                                       for p in (data.get("sync_pairs") or []))
+                if version is None and "field_links" not in data and not has_default_pair:
                     # rework.md C12: a settings.json old enough to predate
                     # field_links entirely gets the board it would have had
                     # back then, not today's default - which now differs
@@ -188,7 +499,31 @@ class ConfigManager:
                     # silently change what happens on the next sync.
                     from src.core.fields import pre_c12_default_field_links
                     data["field_links"] = [link.model_dump() for link in pre_c12_default_field_links()]
-                return SettingsModel.model_validate(data)
+                # rework.md G0: 'bidirectional' is no longer a run mode. Rewrite
+                # it here, say so once, and save the file back so the next load
+                # is silent.
+                migrated = migrate_run_directions(data)
+                # rework.md G1: link boards become receiver rules on the explicit
+                # garmin_divelogs pair; rewritten once, then saved as version 2.
+                legacy_board = ("field_links" in data or "directionality" in data
+                                or any(isinstance(p, dict) and "field_links" in p for p in (data.get("sync_pairs") or []))
+                                or (version or 1) < SETTINGS_VERSION)
+                settings = SettingsModel.model_validate(data)
+                if migrated:
+                    logger.warning(
+                        "Settings file %s used the retired 'bidirectional' run direction; a run now writes one side "
+                        "only and a two-way sync is two directed runs (rework.md G0). Rewritten and saved: %s",
+                        path, "; ".join(migrated),
+                    )
+                if legacy_board:
+                    logger.info(
+                        "Settings file %s upgraded to version %d: the mapping board is now stored as receiver rules on "
+                        "sync_pairs[].rules, and the Garmin <-> Divelogs pair is the explicit '%s' entry (rework.md G1).",
+                        path, SETTINGS_VERSION, DEFAULT_PAIR_ID,
+                    )
+                if migrated or legacy_board:
+                    ConfigManager.save_settings(settings, path)
+                return settings
             except Exception as e:
                 logger.warning("Settings file %s could not be read (%s); using defaults for this run.", path, e)
                 return SettingsModel()
@@ -222,16 +557,18 @@ class ConfigManager:
 # Portable sync profile (rework.md Track C, step C9)
 # ---------------------------------------------------------------------------
 
-PROFILE_VERSION = 1
+PROFILE_VERSION = 2
 PROFILE_KEY = "dive_sync_profile"
 # Sections a profile may carry, in the order they are written. Credentials
 # live in CredentialsModel and can never end up here by construction.
+# Version 2 (rework.md G1): the board and direction of the Garmin <-> Divelogs
+# pair live in sync_pairs like every other pair's; a version-1 profile's
+# top-level ``directionality`` / ``field_links`` are still imported and folded
+# into that pair (LEGACY_PROFILE_SECTIONS).
 PROFILE_SECTIONS = (
-    "directionality",
     "sync_filters",
     "grace_window_minutes",
     "api_cooldown_seconds",
-    "field_links",
     "garmin_timezone",
     "sync_pairs",
     "schedule",
@@ -240,7 +577,9 @@ PROFILE_SECTIONS = (
     "propagate_deletes",
     "backup_retention_count",
     "create_on_garmin",
+    "create_device_dives_on_submersion",
 )
+LEGACY_PROFILE_SECTIONS = ("directionality", "field_links")
 
 
 class ProfileError(ValueError):
@@ -273,14 +612,21 @@ def export_profile(settings: SettingsModel) -> Dict[str, Any]:
     return profile
 
 
-def _describe_links(old: List[FieldLink], new: List[FieldLink]) -> Optional[str]:
-    old_by, new_by = {l.id: l for l in old}, {l.id: l for l in new}
+def _describe_rules(pair_id: str, old: Optional[Dict[str, List[SyncRule]]],
+                    new: Optional[Dict[str, List[SyncRule]]]) -> Optional[str]:
+    """One line per pair whose rules differ: '<pair>: N -> M rules; added ...'.
+    Rule ids are qualified by receiver ('divelogs.buddy' reads 'buddy on divelogs')."""
+    def flat(rules):
+        return {f"{receiver}:{r.id}": r for receiver, items in (rules or {}).items() for r in items}
+    old_by, new_by = flat(old), flat(new)
     added = [i for i in new_by if i not in old_by]
     removed = [i for i in old_by if i not in new_by]
     changed = [i for i in new_by if i in old_by and new_by[i] != old_by[i]]
-    if not (added or removed or changed):
+    if not (added or removed or changed) and (old is None) == (new is None):
         return None
-    parts = [f"field_links: {len(old)} -> {len(new)} links"]
+    what = "defaults" if new is None else f"{len(new_by)} rules"
+    was = "defaults" if old is None else f"{len(old_by)} rules"
+    parts = [f"rules[{pair_id}]: {was} -> {what}"]
     if added:
         parts.append(f"added {', '.join(added)}")
     if removed:
@@ -288,6 +634,47 @@ def _describe_links(old: List[FieldLink], new: List[FieldLink]) -> Optional[str]
     if changed:
         parts.append(f"changed {', '.join(changed)}")
     return "; ".join(parts)
+
+
+def _describe_pairs(old: List[SyncPairModel], new: List[SyncPairModel]) -> List[str]:
+    old_by, new_by = {p.id: p for p in old}, {p.id: p for p in new}
+    lines: List[str] = []
+    added = [i for i in new_by if i not in old_by]
+    removed = [i for i in old_by if i not in new_by]
+    if added or removed:
+        lines.append("sync_pairs: " + "; ".join(
+            part for part in (f"added {', '.join(added)}" if added else "", f"removed {', '.join(removed)}" if removed else "") if part))
+    for pair_id, pair in new_by.items():
+        before = old_by.get(pair_id)
+        if before is None:
+            continue
+        rules_line = _describe_rules(pair_id, before.rules, pair.rules)
+        if rules_line:
+            lines.append(rules_line)
+        if before.match_keys != pair.match_keys:
+            lines.append(f"match_keys[{pair_id}]: {before.match_keys} -> {pair.match_keys}")
+        for attr in ("source", "target", "directionality", "enabled", "grace_window_minutes",
+                     "propagate_deletes", "create_on_garmin", "create_device_dives_on_submersion"):
+            if getattr(before, attr) != getattr(pair, attr):
+                lines.append(f"sync_pairs[{pair_id}].{attr}: {getattr(before, attr)!r} -> {getattr(pair, attr)!r}")
+    return lines
+
+
+def _filter_unknown_fields(rules: Optional[Dict[str, Any]], catalog: Dict[str, Any], skipped: List[str]) -> Optional[Dict[str, Any]]:
+    """Drop rules that reference fields not in ``catalog``; list their ids."""
+    if not isinstance(rules, dict):
+        return rules
+    kept: Dict[str, Any] = {}
+    for receiver, items in rules.items():
+        out = []
+        for item in items or []:
+            keys = (list(item.get("source", [])) + [item.get("target")]) if isinstance(item, dict) else []
+            if any(k not in catalog for k in keys):
+                skipped.append(str(item.get("id", "?")) if isinstance(item, dict) else "?")
+            else:
+                out.append(item)
+        kept[receiver] = out
+    return kept
 
 
 def import_profile(data: Dict[str, Any], current: SettingsModel,
@@ -310,14 +697,16 @@ def import_profile(data: Dict[str, Any], current: SettingsModel,
     summary = ProfileImportSummary(version=version)
     merged = current.model_dump(mode="json")
     for key in data:
-        if key != PROFILE_KEY and key not in PROFILE_SECTIONS:
+        if key != PROFILE_KEY and key not in PROFILE_SECTIONS and key not in LEGACY_PROFILE_SECTIONS:
             summary.ignored_keys.append(key)
 
-    for section in PROFILE_SECTIONS:
+    garmin_divelogs_ids = {"garmin", "divelogs"}
+    for section in PROFILE_SECTIONS + LEGACY_PROFILE_SECTIONS:
         if section not in data:
             continue
         value = data[section]
         if section == "field_links" and catalog is not None and isinstance(value, list):
+            # v1: the Garmin <-> Divelogs board as links
             kept = []
             for item in value:
                 keys = list(item.get("source", [])) + [item.get("target")] if isinstance(item, dict) else []
@@ -326,6 +715,21 @@ def import_profile(data: Dict[str, Any], current: SettingsModel,
                 else:
                     kept.append(item)
             value = kept
+        elif section == "sync_pairs" and catalog is not None and isinstance(value, list):
+            # v2: rules of the Garmin <-> Divelogs pair (the catalogue given is that pair's)
+            value = [dict(p) if isinstance(p, dict) else p for p in value]
+            for pair in value:
+                if isinstance(pair, dict) and {service_id_of_spec(pair.get("source", "")),
+                                               service_id_of_spec(pair.get("target", ""))} == garmin_divelogs_ids:
+                    if "rules" in pair:
+                        pair["rules"] = _filter_unknown_fields(pair["rules"], catalog, summary.skipped_links)
+        if section in LEGACY_PROFILE_SECTIONS:
+            # Folded into the garmin_divelogs pair by SettingsModel; a v1 profile
+            # without a sync_pairs section keeps the current other pairs.
+            merged[section] = value
+            if "sync_pairs" not in summary.sections:
+                summary.sections.append("sync_pairs")
+            continue
         merged[section] = value
         summary.sections.append(section)
 
@@ -337,11 +741,9 @@ def import_profile(data: Dict[str, Any], current: SettingsModel,
     for section in summary.sections:
         old_val = getattr(current, section)
         new_val = getattr(new_settings, section)
-        if section == "field_links":
-            line = _describe_links(old_val, new_val)
-            if line:
-                summary.changes.append(line)
-        elif section in ("cron_jobs", "schedule", "sync_pairs"):
+        if section == "sync_pairs":
+            summary.changes.extend(_describe_pairs(old_val, new_val))
+        elif section in ("cron_jobs", "schedule"):
             if old_val != new_val:
                 summary.changes.append(f"{section}: {len(old_val)} -> {len(new_val)} entries")
         elif section == "sync_filters":

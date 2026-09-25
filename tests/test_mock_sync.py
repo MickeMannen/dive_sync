@@ -86,15 +86,15 @@ def test_mock_sync_offline_mode(tmp_path):
     with open(os.path.join(divelogs_dir, "3.json"), "w") as f:
         json.dump(d_dive3, f)
 
-    # Write localized settings
+    # Write localized settings. A run writes one side (rework.md G0), so the
+    # two-way sync this test verifies is two directed runs.
     settings_data = {
-        "directionality": "bidirectional",
+        "directionality": "to_divelogs",
         "sync_filters": {
             "date_from": None,
             "date_to": None,
             "only_new": False,
             "sync_gases": True,
-            "sync_fit": False
         },
         "grace_window_minutes": 15,
         "api_cooldown_seconds": 0.0,
@@ -108,29 +108,39 @@ def test_mock_sync_offline_mode(tmp_path):
     # Initialize SyncEngine in mock mode
     engine = SyncEngine(settings_path=settings_path, mock_data_dir=mock_data_dir)
 
-    # Run sync
+    # Run 1: towards Divelogs
     results = engine.run_sync(dry_run=False)
 
     # Verify sync results
     assert results["matched_count"] == 1
-    
+    assert results["directionality"] == "to_divelogs"
+
     # Garmin Dive 2 (unique Garmin) should be uploaded to Divelogs
     assert len(results["uploaded_to_divelogs"]) == 1
     assert results["uploaded_to_divelogs"][0]["garmin_id"] == "10002"
-
-    # Divelogs Dive 3 (unique Divelogs) should be uploaded to Garmin
-    assert len(results["uploaded_to_garmin"]) == 1
-    assert results["uploaded_to_garmin"][0]["divelogs_id"] == "50003"
-
+    # Divelogs Dive 3 (unique Divelogs) is not touched by a run towards Divelogs
+    assert results["uploaded_to_garmin"] == []
     # Garmin Dive 1 and Divelogs Dive 1 are matched; neither service can store
     # the other's id, so the pair is remembered in the sync state instead of
-    # being "linked" through an update (nothing else differs on the fill-only board)
-    # Garmin gets the Divelogs notes filled in (the only blank/filled difference); Divelogs needs nothing
-    assert [u["id"] for u in results["updated_on_garmin"]] == ["10001"]
+    # being "linked" through an update. Nothing differs that Divelogs could
+    # take (the notes fill goes the other way), so no update either.
+    assert results["updated_on_garmin"] == [] and results["updated_on_divelogs"] == []
+    state = json.load(open(os.path.join(mock_data_dir, "sync_state.json")))
+    assert state["links"]["10001"] == "50001"
+    assert state["links"]["10002"] == "2"      # Garmin 2 -> new Divelogs 2
+
+    # Run 2: towards Garmin
+    results = engine.run_sync(dry_run=False, direction_override="to_garmin")
+    assert results["matched_count"] == 2       # Garmin 2 <-> Divelogs 2 now matched by the remembered link
+    assert results["uploaded_to_divelogs"] == []
+    assert len(results["uploaded_to_garmin"]) == 1
+    assert results["uploaded_to_garmin"][0]["divelogs_id"] == "50003"
+    # Garmin 1 gets the Divelogs notes filled in; Garmin 2's location name is
+    # filled from the dive site its own upload gave the Divelogs copy in run 1
+    assert [u["id"] for u in results["updated_on_garmin"]] == ["10001", "10002"]
     assert results["updated_on_divelogs"] == []
     state = json.load(open(os.path.join(mock_data_dir, "sync_state.json")))
     assert state["links"]["10001"] == "50001"
-    # ... and the uploads are remembered too (Garmin 2 -> new Divelogs 2, Divelogs 3 -> new Garmin 3)
     assert state["links"]["10002"] == "2" and state["links"]["3"] == "50003"
 
     # Verify files created/updated in the directories
@@ -157,7 +167,6 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
             "date_to": None,
             "only_new": False,
             "sync_gases": True,
-            "sync_fit": False
         },
         "grace_window_minutes": 15,
         "api_cooldown_seconds": 0.0,
@@ -254,7 +263,7 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
     assert not os.path.exists(garmin_leftover)
     
     # Verify Garmin raw file
-    garmin_file = os.path.join(mock_data_dir, "garmin", "test_user@garmin", "10.json")
+    garmin_file = os.path.join(mock_data_dir, "garmin", "test_user@garmin", "10_2026-06-22_100000_999001.json")
     assert os.path.exists(garmin_file)
     with open(garmin_file, "r") as f:
         data = json.load(f)
@@ -395,7 +404,7 @@ class TestSync:
         return str(tmp_path)
 
     @staticmethod
-    def _write_settings(tmp_path, directionality="bidirectional", only_new=False):
+    def _write_settings(tmp_path, directionality="to_divelogs", only_new=False):
         settings_data = {
             "directionality": directionality,
             "sync_filters": {
@@ -403,7 +412,6 @@ class TestSync:
                 "date_to": None,
                 "only_new": only_new,
                 "sync_gases": True,
-                "sync_fit": False
             },
             "grace_window_minutes": 15,
             "api_cooldown_seconds": 0.0,
@@ -448,14 +456,14 @@ class TestSync:
         with open(d488_path, "w") as f:
             json.dump(d488_data, f, indent=2)
 
-        # Run Sync bidirectional
-        settings_path = self._write_settings(tmp_path, directionality="bidirectional", only_new=False)
+        # Two-way sync = two directed runs (rework.md G0)
+        settings_path = self._write_settings(tmp_path, directionality="to_divelogs", only_new=False)
         engine = SyncEngine(settings_path=settings_path, mock_data_dir=mock_dir)
 
         results = engine.run_sync(dry_run=False)
-
-        # Assert uploads
         assert len(results["uploaded_to_divelogs"]) == 1
+        assert results["uploaded_to_garmin"] == []
+        results = engine.run_sync(dry_run=False, direction_override="to_garmin")
         assert len(results["uploaded_to_garmin"]) == 1
 
         # Check created Divelogs 502 JSON contains the modified location & notes

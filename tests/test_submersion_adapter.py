@@ -65,9 +65,13 @@ def test_write_round_trip_through_a_scratch_store(tmp_path):
     assert len(dives) == 1
     got = dives[0]
     assert got.external_ids["submersion"] == new_id and got.external_ids["garmin"] == "555"
-    # a dive_sync-created Garmin dive gets a Garmin data source (so Submersion shows provenance)
-    sources = b.library.children("diveDataSources", new_id)
-    assert len(sources) == 1 and sources[0]["sourceUuid"] == "garmin-connect-555" and sources[0]["isPrimary"] is True
+    # No diveDataSources row: that table belongs to the .fit import the diver
+    # runs in the Submersion app, and every profile / tank-pressure / gas-switch
+    # row hangs off it (rework.md F17). dive_sync's own link back to the Garmin
+    # activity is importSource/importId on the dive row.
+    assert b.library.children("diveDataSources", new_id) == []
+    assert (b.library.tables["dives"][new_id]["importSource"],
+            b.library.tables["dives"][new_id]["importId"]) == ("garmin", "555")
     assert got.date_time == dive.date_time and got.duration == 2500 and got.max_depth == 21.5
     assert got.location == "Zenobia" and (round(got.lat, 3), round(got.lng, 3)) == (34.887, 33.657)
     assert got.dive_number == 14 and got.weight == 6.0 and got.visibility == 25.0
@@ -274,23 +278,199 @@ def test_tank_role_and_name_are_not_confused(tmp_path):
     assert [t["tankRole"] for t in tanks] == ["backGas", "deco", "sidemountRight"]
 
 
-def test_update_keeps_role_and_name_when_source_side_has_none(tmp_path):
-    """A field link from a service with no role concept (Garmin, Divelogs)
-    must not blank out a role/name Submersion already recorded."""
+def test_update_leaves_the_cylinders_and_profile_alone(tmp_path):
+    """rework.md F17: a dive that already exists in Submersion gets its
+    metadata only. Its cylinders, depth profile, tank-pressure series and gas
+    switches were derived by the app's own .fit import from one file and
+    reference one another; replacing the tank rows from a sender's gas data
+    broke that (and could not carry a role or name at all, since neither
+    Garmin nor Divelogs has one). Soft fields still apply."""
+    store_dir = tmp_path / "store"
+    os.makedirs(store_dir)
+    a = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state"), device_id="a")
+    a.login()
+    dive_id = a.add_dive(UnifiedDive(
+        date_time=datetime(2026, 9, 1, 10), duration=1000, max_depth=15.0,
+        gas_mixtures=[GasMixture(oxygen=32.0, start_pressure=220.0, end_pressure=70.0,
+                                 tank_name="D12", tank_role="backGas")],
+        samples=[UnifiedSample(depth=1.0, time=0), UnifiedSample(depth=15.0, time=300)]))
+    a.finish()
+    before_tanks = a.library.children("diveTanks", dive_id)
+    before_profile = a.library.children("diveProfileSeries", dive_id)
+
+    # an update carrying different gas and a shorter profile, as a Garmin-side
+    # read would (no role, no name, its own pressures), plus a soft field
+    incoming = UnifiedDive(date_time=datetime(2026, 9, 1, 10), duration=1000, max_depth=15.0, buddy="Anna",
+                           gas_mixtures=[GasMixture(oxygen=21.0, start_pressure=200.0, end_pressure=60.0)],
+                           samples=[UnifiedSample(depth=2.0, time=0)])
+    a.update_dive(dive_id, incoming)
+    a.finish()
+    # not a single tank or profile row touched: same ids, same values
+    assert a.library.children("diveTanks", dive_id) == before_tanks
+    assert a.library.children("diveProfileSeries", dive_id) == before_profile
+
+    c = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state_c"))
+    c.login()
+    got = c.fetch_dives()[0]
+    assert got.buddy == "Anna"                            # the soft field did apply
+    gas = got.gas_mixtures[0]
+    assert (gas.tank_name, gas.tank_role) == ("D12", "backGas")
+    assert (gas.oxygen, gas.start_pressure, gas.end_pressure) == (32.0, 220.0, 70.0)
+    assert [s.depth for s in got.samples] == [1.0, 15.0]
+
+
+def test_an_update_without_a_site_keeps_the_one_the_dive_has(tmp_path):
+    """rework.md F17: a sender that names no site and carries no GPS can only
+    ever blank the dive's site, never correct it, so the stored siteId stays."""
     store_dir = tmp_path / "store"
     os.makedirs(store_dir)
     a = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state"), device_id="a")
     a.login()
     dive_id = a.add_dive(UnifiedDive(date_time=datetime(2026, 9, 1, 10), duration=1000, max_depth=15.0,
-                                     gas_mixtures=[GasMixture(oxygen=32.0, tank_name="D12", tank_role="backGas")]))
+                                     location="Batu Tokong Daik", lat=5.8, lng=103.1))
     a.finish()
-    # an "update" carrying gas data with no role/name at all (as Garmin's read-only gases would)
-    incoming = UnifiedDive(date_time=datetime(2026, 9, 1, 10), duration=1000, max_depth=15.0, buddy="Anna",
-                           gas_mixtures=[GasMixture(oxygen=32.0, start_pressure=200.0, end_pressure=60.0)])
-    a.update_dive(dive_id, incoming)
+    site_id = a.library.tables["dives"][dive_id]["siteId"]
+    assert site_id and a.library._alive("diveSites")[site_id]["name"] == "Batu Tokong Daik"
+
+    a.update_dive(dive_id, UnifiedDive(date_time=datetime(2026, 9, 1, 10), duration=1000, max_depth=15.0,
+                                       notes="No site on this side"))
+    assert a.library.tables["dives"][dive_id]["siteId"] == site_id
     a.finish()
     c = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state_c"))
     c.login()
     got = c.fetch_dives()[0]
-    assert got.gas_mixtures[0].tank_name == "D12" and got.gas_mixtures[0].tank_role == "backGas"
-    assert got.gas_mixtures[0].start_pressure == 200.0   # the new data still applied
+    assert got.location == "Batu Tokong Daik" and got.notes == "No site on this side"
+
+
+def test_buddy_accepts_a_list_and_is_declared_as_text(tmp_path):
+    """A real Garmin -> Submersion run died with "'list' object has no
+    attribute 'split'": submersion.buddy was declared a list, so the link
+    engine converted Garmin's text buddy into ["Guy"] before handing it over.
+    The value this adapter reads and writes is the comma-joined string
+    UnifiedDive.buddy holds, so the field is text - and a list is tolerated
+    either way rather than crashing the whole sync run."""
+    from src.core.fields import convert_value
+    from src.core.services.submersion.adapter import _buddy_names
+
+    spec = next(f for f in SubmersionAdapter.field_catalog() if f.key == "submersion.buddy")
+    assert spec.type == "text"
+    # Same type on both sides now, so no conversion happens in either
+    # direction - the character-by-character join is gone too.
+    assert convert_value("Guy", "text", "text") == "Guy"
+
+    assert _buddy_names("Guy") == ["Guy"]
+    assert _buddy_names("Ann, Bo") == ["Ann", "Bo"]
+    assert _buddy_names(["Ann", "Bo"]) == ["Ann", "Bo"]          # what the engine used to hand over
+    assert _buddy_names(None) == [] and _buddy_names("") == [] and _buddy_names([]) == []
+    assert _buddy_names(" Ann ,, Bo ") == ["Ann", "Bo"]
+
+    store_dir = tmp_path / "store"
+    os.makedirs(store_dir)
+    a = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state"), device_id="dev-a")
+    assert a.login()
+    dive = UnifiedDive(date_time=datetime(2026, 9, 1, 10, 30, 0), duration=2500, max_depth=21.5,
+                       external_ids={"garmin": "555"}, buddy="Guy")
+    dive_id = a.add_dive(dive)
+    # The crash was on update of an already-matched dive, with a list arriving
+    # from the board. It must survive that and store one row per buddy.
+    dive.buddy = ["Ann", "Bo"]
+    assert a.update_dive(dive_id, dive) is True
+    names = sorted(a.library.tables["buddies"][link["buddyId"]]["name"]
+                   for link in a.library.children("diveBuddies", dive_id))
+    assert names == ["Ann", "Bo"]
+
+
+def test_start_time_is_writable_for_hand_entered_dives(tmp_path):
+    """rework.md G9: a historical dive no computer ever recorded has to get
+    its start time from somewhere, so submersion.date_time is writable (as it
+    already was on Garmin and Divelogs). Subsurface keeps its own read-only,
+    since a dive's directory name there encodes the time."""
+    from src.core.services.submersion.adapter import SubmersionAdapter as A
+    spec = next(f for f in A.field_catalog() if f.key == "submersion.date_time")
+    assert spec.writable is True
+
+    store_dir = tmp_path / "store"
+    os.makedirs(store_dir)
+    a = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state"), device_id="dev-a")
+    assert a.login()
+    old_dive = UnifiedDive(date_time=datetime(1998, 7, 14, 9, 15), duration=2700, max_depth=18.0,
+                           location="Blue Hole", dive_number=1)
+    dive_id = a.add_dive(old_dive)
+    a.finish()
+
+    b = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state_b"), device_id="dev-b")
+    b.login()
+    assert b.fetch_dives()[0].date_time == datetime(1998, 7, 14, 9, 15)
+
+    # and a correction on an already-matched dive lands too
+    corrected = b.fetch_dives()[0].model_copy(update={"date_time": datetime(1998, 7, 14, 10, 0)})
+    b.update_dive(dive_id, corrected)
+    b.finish()
+    c = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state_c"), device_id="dev-c")
+    c.login()
+    assert c.fetch_dives()[0].date_time == datetime(1998, 7, 14, 10, 0)
+
+
+def test_extra_dive_and_site_fields_round_trip(tmp_path):
+    """rework.md G9: the fields the owner marked RW in
+    docs/submersion_field_inventory.md. They have no UnifiedDive attribute, so
+    they travel in service_fields; the site_* ones live on the shared
+    diveSites row, which is what finally gives Divelogs' own location field a
+    Submersion counterpart."""
+    from src.core.services.submersion.library import EXTRA_FIELDS
+    store_dir = tmp_path / "store"
+    os.makedirs(store_dir)
+    a = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state"), device_id="dev-a")
+    assert a.login()
+
+    extras = {
+        "dive_name": "Racha Yai morning", "bottomTime": 4080,
+        "entryTime": datetime(2026, 8, 29, 12, 52), "exitTime": datetime(2026, 8, 29, 14, 4),
+        "diveType": "technical", "diveMode": "ccr", "waterType": "salt",
+        "altitude": 0.0, "airTemp": 31.5, "entryMethod": "boat",
+        "exitLatitude": 7.61, "exitLongitude": 98.38,
+        "boatName": "Sea Bees II", "diveOperator": "All4Diving",
+        "site_region": "Phuket", "site_country": "Thailand", "site_island": "Racha Yai",
+        "site_city": "Phuket", "site_notes": "Sandy bottom, mooring at the north end",
+        "site_waterType": "salt", "site_entryMethod": "giant stride", "site_exitMethod": "ladder",
+    }
+    assert set(extras) == {name for name, *_ in EXTRA_FIELDS}, "test and declaration out of step"
+
+    dive = UnifiedDive(date_time=datetime(2026, 8, 29, 12, 52), duration=4320, max_depth=13.8,
+                       location="Home Run", lat=7.6093, lng=98.3789, dive_number=36,
+                       service_fields=dict(extras))
+    new_id = a.add_dive(dive)
+    a.finish()
+
+    b = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state_b"), device_id="dev-b")
+    b.login()
+    got = b.fetch_dives()[0]
+    for name, value in extras.items():
+        assert got.service_fields[name] == value, f"{name}: {got.service_fields[name]!r} != {value!r}"
+
+    # the site fields really landed on the shared diveSites row, not the dive
+    site = b.library._alive("diveSites")[b.library._alive("dives")[new_id]["siteId"]]
+    assert site["region"] == "Phuket" and site["country"] == "Thailand" and site["island"] == "Racha Yai"
+    assert site["name"] == "Home Run"          # still the unified location
+
+    # a sender that knows nothing of these must not blank them (same rule as tanks)
+    plain = UnifiedDive(date_time=datetime(2026, 8, 29, 12, 52), duration=4320, max_depth=13.8,
+                        location="Home Run", lat=7.6093, lng=98.3789, dive_number=36,
+                        external_ids={"submersion": new_id})
+    b.update_dive(new_id, plain)
+    b.finish()
+    c = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state_c"), device_id="dev-c")
+    c.login()
+    kept = c.fetch_dives()[0]
+    assert kept.service_fields["boatName"] == "Sea Bees II"
+    assert kept.service_fields["site_country"] == "Thailand"
+
+    # ... but an explicit None clears one on purpose
+    cleared = plain.model_copy(update={"service_fields": {"boatName": None, "site_country": None}})
+    c.update_dive(new_id, cleared)
+    c.finish()
+    d = SubmersionAdapter(_folder_config(store_dir), device_state_dir=str(tmp_path / "state_d"), device_id="dev-d")
+    d.login()
+    after = d.fetch_dives()[0]
+    assert after.service_fields["boatName"] is None and after.service_fields["site_country"] is None
+    assert after.service_fields["site_island"] == "Racha Yai"      # untouched

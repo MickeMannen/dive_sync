@@ -63,8 +63,9 @@ def test_engine_for_specs_and_pairs(tmp_path):
         engine = engine_for_pair(find_pair(ConfigManager.load_settings(spath), "to-file"), settings_path=spath,
                                  credentials_path=str(tmp_path / "c.json"), mock_data_dir=str(tmp_path))
         assert (engine.source_id, engine.target_id) == ("garmin", "uddf")
-        assert engine.run_overrides["direction_override"] == "to_uddf" and engine.run_overrides["grace_window_override"] == 5
-        assert [l.id for l in engine.run_overrides["field_links_override"]] == [l.id for l in default_links_for("garmin", "uddf")]
+        # rework.md G1: the engine reads direction, board and options from its pair
+        assert engine.pair_id == "to-file" and engine.direction == "to_uddf" and engine.settings.grace_window_minutes == 5
+        assert [l.id for l in engine.field_links] == [l.id for l in default_links_for("garmin", "uddf")]
         res = engine.run_sync(dry_run=True, **engine.run_overrides)
         assert res["source"] == "garmin" and res["directionality"] == "to_uddf"
         with pytest.raises(ValueError, match="No sync pair"):
@@ -93,10 +94,17 @@ def test_cron_job_names_a_pair(tmp_path, monkeypatch):
     monkeypatch.setattr("src.core.pairs.engine_for_pair", lambda pair, **kw: FakeEngine())
     monkeypatch.setattr(ConfigManager, "load_settings", lambda path=None: SettingsModel(
         sync_pairs=[SyncPairModel(id="p1", source="garmin", target="uddf:x.uddf")]))
-    scheduler.run_sync_thread(False, CronJobModel(id="j", pair="p1", directionality="to_garmin", only_new=False).model_dump())
+    scheduler.run_sync_thread(False, CronJobModel(id="j", pair="p1", only_new=False).model_dump())
     assert scheduler.last_sync_results["j"] == {"ok": True}
-    assert captured["direction_override"] == "to_uddf"      # the pair's direction wins over the job's default
+    assert captured["direction_override"] == "to_uddf"      # no direction on the job -> the pair's saved one
     assert captured["only_new_override"] is False and captured["dry_run"] is False
+    # rework.md G0: a job that names a direction is that directed run (a
+    # two-way schedule is two such jobs on the same pair)
+    captured.clear()
+    scheduler.run_sync_thread(False, CronJobModel(id="j", pair="p1", directionality="to_garmin").model_dump())
+    assert captured["direction_override"] == "to_garmin"
+    # and a job written when 'bidirectional' still existed follows the pair
+    assert CronJobModel(id="old", pair="p1", directionality="bidirectional").directionality is None
 
 
 @pytest.mark.skipif(not os.path.isdir(FIXTURE), reason="subsurface fixture missing")
@@ -132,7 +140,8 @@ def test_cli_source_target_offline(tmp_path):
     assert os.path.isdir(repo / "2026" / "06" / "22-Mon-10=00=00")
     assert "garmin notes" in open(repo / "2026" / "06" / "22-Mon-10=00=00" / "Dive-1").read()
     state = json.load(open(data_dir / "sync_state_garmin_subsurface.json"))
-    assert state["links"]["10001"].endswith("/Dive-1")
+    # the link keeps the dive's directory: it survives a renumbering (Dive-N changes)
+    assert state["links"]["10001"] == "2026/06/22-Mon-10=00=00"
 
     res = run("--source", "garmin", "--target", "uddf:out.uddf", "--full-sync")
     assert res.returncode == 0, res.stdout + res.stderr
@@ -141,7 +150,12 @@ def test_cli_source_target_offline(tmp_path):
     assert "Uploaded to UDDF file: 0" in res.stdout   # remembered pair, no duplicate
 
 
-def test_submersion_spec_builds_adapter(tmp_path, monkeypatch):
+def test_submersion_spec_is_refused_while_disabled():
+    with pytest.raises(ValueError, match="disabled"):
+        parse_service_spec("submersion")
+
+
+def test_submersion_spec_builds_adapter(tmp_path, monkeypatch, submersion_enabled):
     import json
     from src.core.config import SettingsModel
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -154,3 +168,27 @@ def test_submersion_spec_builds_adapter(tmp_path, monkeypatch):
     empty.write_text("{}")
     with pytest.raises(ValueError, match="not configured"):
         build_adapter("submersion", SettingsModel(), credentials_path=str(empty))
+
+
+def test_every_shipped_default_board_is_valid():
+    """No default link may name a field its service lacks (Subsurface has no
+    visibility, UDDF no weight): the mapping board would refuse to save it."""
+    from itertools import combinations
+    from src.core.fields import build_catalog
+    from src.core.pairs import field_catalog_of
+    from src.core.templates import validate_links
+    for a, b in combinations(["garmin", "divelogs", "subsurface", "uddf", "submersion"], 2):
+        catalog = build_catalog(field_catalog_of(a), field_catalog_of(b))
+        assert validate_links(default_links_for(a, b), catalog) == [], (a, b)
+
+
+def test_board_pairs_offer_configured_combinations_not_saved_yet():
+    from src.core.pairs import board_pairs
+    settings = SettingsModel()
+    settings.sync_pairs.append(SyncPairModel(id="g2s", source="garmin", target="subsurface-cloud"))
+    boards = board_pairs(settings, ["garmin", "divelogs", "subsurface"])
+    assert [(b["id"], b["source"], b["target"], b["saved"]) for b in boards] == [
+        ("garmin_divelogs", "garmin", "divelogs", True),
+        ("g2s", "garmin", "subsurface-cloud", True),                    # already saved: not offered twice
+        ("divelogs_subsurface", "divelogs", "subsurface-cloud", False),
+    ]

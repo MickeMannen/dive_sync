@@ -88,6 +88,32 @@ def test_seconds_to_minutes_display_rounds():
     assert dive_cache._seconds_to_minutes_display(None) is None
 
 
+def test_format_sac_sums_every_cylinder():
+    """SAC = litres breathed / (minutes x atmospheres at the average depth).
+    A real twinset dive: 2 x 11.1L, 162.57->78.04 and 160.69->106.38 bar over
+    4129s at 8.196m average, which is 1541L in 68.8min at 1.82 ata."""
+    tanks = [{"volume": 11.1, "start_pressure": 162.57, "end_pressure": 78.04},
+             {"volume": 11.1, "start_pressure": 160.69, "end_pressure": 106.38}]
+    assert dive_cache._format_sac(tanks, 8.196, 4129.51) == "12.3"
+    # One cylinder of the same dive on its own is the smaller half of that.
+    assert dive_cache._format_sac(tanks[:1], 8.196, 4129.51) == "7.5"
+
+
+def test_format_sac_needs_a_volume_a_drop_a_depth_and_a_time():
+    # 150 bar x 12L = 1800L, over 60min at 20m (3 ata) = 10.0 L/min.
+    full = [{"volume": 12.0, "start_pressure": 200.0, "end_pressure": 50.0}]
+    assert dive_cache._format_sac(full, 20.0, 3600) == "10.0"
+    # Divelogs stores 0 for a cylinder whose size was never filled in: that is
+    # missing data, not a zero-litre tank, so there is no rate to show.
+    assert dive_cache._format_sac([{**full[0], "volume": 0}], 20.0, 3600) == ""
+    assert dive_cache._format_sac([{**full[0], "end_pressure": 200.0}], 20.0, 3600) == ""   # no drop
+    assert dive_cache._format_sac([], 20.0, 3600) == ""
+    assert dive_cache._format_sac(full, 0, 3600) == ""          # no average depth
+    assert dive_cache._format_sac(full, 20.0, 0) == ""          # no duration
+    assert dive_cache._format_sac(full, None, None) == ""
+    assert dive_cache._format_sac([{"volume": "x", "start_pressure": "y", "end_pressure": "z"}], 20.0, 3600) == ""
+
+
 def test_normalize_date_time_swaps_iso_t_separator():
     assert dive_cache._normalize_date_time("2026-06-22T10:15:30") == "2026-06-22 10:15:30"
 
@@ -214,6 +240,23 @@ def test_update_dive_fields_garmin(cache_dirs):
     assert data["details"]["diveInfo"]["weight"] == 15.0
     assert data["details"]["diveInfo"]["visibility"] == 8.0
 
+
+
+def test_update_dive_fields_garmin_activity_and_location_name_apart(cache_dirs):
+    """The Garmin editor's two fields: "Gozo, Blue Hole" as the title and
+    "Blue Hole" as the location name, each written only where it belongs."""
+    filepath = dive_cache.update_dive_fields("garmin", "1.json", base_dir=cache_dirs,
+                                             activity_name="Gozo, Blue Hole", location_name="Blue Hole")
+    with open(filepath) as f:
+        data = json.load(f)
+    for part in ("summary", "details"):
+        assert data[part]["activityName"] == "Gozo, Blue Hole" and data[part]["locationName"] == "Blue Hole"
+    row = next(r for r in dive_cache.list_garmin_dives(base_dir=cache_dirs) if r["filename"] == "1.json")
+    assert (row["activity_name"], row["location_name"], row["location"]) == ("Gozo, Blue Hole", "Blue Hole", "Gozo, Blue Hole")
+    # clearing the location name leaves the title alone
+    dive_cache.update_dive_fields("garmin", "1.json", base_dir=cache_dirs, activity_name="Gozo, Blue Hole", location_name="")
+    row = next(r for r in dive_cache.list_garmin_dives(base_dir=cache_dirs) if r["filename"] == "1.json")
+    assert (row["activity_name"], row["location_name"]) == ("Gozo, Blue Hole", "")
 
 def test_update_dive_fields_divelogs(cache_dirs):
     filepath = dive_cache.update_dive_fields(
@@ -355,3 +398,203 @@ def test_push_remote_delete_divelogs(cache_dirs, monkeypatch):
 
     assert result is True
     assert calls == ["50001"]
+
+
+# ------------------------------------------------- UnifiedDive-cached services
+
+def _unified_dive(**overrides):
+    from datetime import datetime
+    from src.core.models import GasMixture, UnifiedDive, UnifiedSample
+    base = dict(
+        date_time=datetime(2026, 8, 29, 10, 15, 0),
+        duration=4129, max_depth=18.3, avg_depth=8.196,
+        temp_min=27.0, temp_max=29.0, temp_avg=28.0,
+        external_ids={"submersion": "1E5A-9"},
+        gas_mixtures=[
+            GasMixture(oxygen=21, helium=0, start_pressure=162.57, end_pressure=78.04, tank_volume=11.1, tank_name="Left"),
+            GasMixture(oxygen=21, helium=0, start_pressure=160.69, end_pressure=106.38, tank_volume=11.1, tank_name="Right"),
+        ],
+        location="Racha Yai Bay 2", notes="drift", dive_number=42,
+        weight=6.0, weight_unit="kilogram", visibility=20.0, visibility_unit="meter",
+        buddy="Ann", lat=7.6, lng=98.37,
+        samples=[UnifiedSample(depth=0, temp=28, time=0), UnifiedSample(depth=18.3, temp=27, time=600)],
+    )
+    base.update(overrides)
+    return UnifiedDive(**base)
+
+
+def test_unified_cache_rows_match_the_other_services(tmp_path):
+    """Submersion and Subsurface cache the UnifiedDive itself, and the dive
+    table must not be able to tell: same row keys, same formatting."""
+    dive_cache.save_unified_dives("submersion", [_unified_dive()], base_dir=str(tmp_path))
+    rows = dive_cache.list_dives("submersion", base_dir=str(tmp_path))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["filename"] == "1E5A-9.json" and row["id"] == "1E5A-9"
+    assert row["date"] == "2026-08-29" and row["time"] == "10:15:00"
+    assert row["duration"] == 69 and row["max_depth"] == "18.30" and row["avg_depth"] == "8.20"   # two decimals, as Garmin
+    assert row["sac"] == "12.3"                      # both cylinders counted
+    assert row["water_temp"] == "27-29°C (avg 28°C)" and row["water_temp_value"] == 28.0
+    assert row["weight"] == "6 kg" and row["visibility"] == "20 m"
+    assert row["location"] == "Racha Yai Bay 2" and row["buddy"] == "Ann" and row["dive_number"] == 42
+    assert row["tanks"].startswith("Left: 21% O2, 11.1L, 162.57->78.04 bar")
+    assert row["tanks_editable"] is True and len(row["tanks_detail"]) == 2
+    # Every key a Garmin row has, so one dive table serves all four services.
+    garmin_keys = {"id", "dive_number", "date_time", "date", "time", "duration", "max_depth", "avg_depth",
+                   "sac", "water_temp", "water_temp_value", "tanks", "tanks_detail", "tanks_editable",
+                   "lat", "lng", "location", "notes", "weight", "visibility", "buddy", "filename"}
+    assert garmin_keys <= set(row)
+
+
+def test_unified_cache_samples_and_edits_round_trip(tmp_path):
+    from src.core.models import UnifiedDive
+    dive_cache.save_unified_dives("subsurface", [_unified_dive(external_ids={"subsurface": "2026-08-29-10:15"})],
+                                  base_dir=str(tmp_path))
+    row = dive_cache.list_dives("subsurface", base_dir=str(tmp_path))[0]
+    assert row["filename"] == "2026-08-29-10_15.json"      # ':' is not a filename
+    assert dive_cache.get_samples("subsurface", row["filename"], base_dir=str(tmp_path)) == [
+        {"depth": 0.0, "temp": 28.0, "time": 0}, {"depth": 18.3, "temp": 27.0, "time": 600}]
+
+    path = dive_cache.update_dive_fields(
+        "subsurface", row["filename"], base_dir=str(tmp_path), location="Edited site", buddy="Bo",
+        duration=70, water_temp=26.5, visibility="15 m", weight="7 kg", dive_number="43",
+        tanks=[{"oxygen": 32, "helium": 0, "volume": 12, "start_pressure": 200, "end_pressure": 60,
+                "tank_name": "Single"}])
+    after = dive_cache.list_dives("subsurface", base_dir=str(tmp_path))[0]
+    assert after["location"] == "Edited site" and after["buddy"] == "Bo" and after["dive_number"] == 43
+    assert after["duration"] == 70 and after["weight"] == "7 kg" and after["visibility"] == "15 m"
+    assert after["water_temp"] == "26.5-26.5°C (avg 26.5°C)"
+    assert after["tanks"] == "Single: 32% O2, 12L, 200->60 bar"
+    # The file stays a valid UnifiedDive - it is what gets pushed back, so a
+    # broken one would only surface at the remote update.
+    saved = UnifiedDive(**json.load(open(path)))
+    assert saved.duration == 4200 and saved.dive_number == 43 and len(saved.gas_mixtures) == 1
+
+    _, external_id = dive_cache.delete_dive_local("subsurface", row["filename"], base_dir=str(tmp_path))
+    assert external_id == "2026-08-29-10:15"
+    assert dive_cache.list_dives("subsurface", base_dir=str(tmp_path)) == []
+
+
+def test_unified_push_remote_update_sends_the_cached_dive(tmp_path, monkeypatch):
+    from src.core.models import UnifiedDive
+    dive_cache.save_unified_dives("submersion", [_unified_dive()], base_dir=str(tmp_path))
+    row = dive_cache.list_dives("submersion", base_dir=str(tmp_path))[0]
+    path = os.path.join(dive_cache.unified_cache_dir("submersion", base_dir=str(tmp_path)), row["filename"])
+
+    sent = {}
+
+    class FakeAdapter:
+        def login(self):
+            return True
+
+        def update_dive(self, external_id, dive):
+            sent["id"], sent["dive"] = external_id, dive
+            return True
+
+        def finish(self):
+            sent["finished"] = True
+
+    monkeypatch.setattr(dive_cache, "_unified_adapter", lambda service: FakeAdapter())
+    assert dive_cache.push_remote_update("submersion", path) is True
+    assert sent["id"] == "1E5A-9" and sent["finished"] is True
+    assert isinstance(sent["dive"], UnifiedDive) and sent["dive"].location == "Racha Yai Bay 2"
+
+
+def test_unified_download_uses_the_adapter(tmp_path, monkeypatch):
+    class FakeAdapter:
+        def login(self):
+            return True
+
+        def fetch_dives(self, date_from=None, date_to=None):
+            return [_unified_dive()]
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(dive_cache, "_unified_adapter", lambda service: FakeAdapter())
+    assert dive_cache.download_service_dives("submersion", base_dir=str(tmp_path)) == 1
+    assert len(dive_cache.list_dives("submersion", base_dir=str(tmp_path))) == 1
+    with pytest.raises(ValueError):
+        dive_cache.download_service_dives("garmin", base_dir=str(tmp_path))
+
+
+def test_unified_cache_never_touches_the_adapters_device_state(tmp_path):
+    """SubmersionAdapter keeps device.json and hlc_<id>.json in
+    DATA_DIR/submersion - the device identity the Submersion sync mesh knows
+    this installation by. The dive cache must not share that directory: an
+    overwrite download clears the cache directory, and losing the identity
+    would make dive_sync republish as a brand-new device."""
+    from src.core.services.submersion.adapter import SubmersionAdapter
+    from src.core.config import SubmersionCredentials
+
+    state_dir = os.path.join(str(tmp_path), "submersion")
+    os.makedirs(state_dir)
+    adapter = SubmersionAdapter(SubmersionCredentials(store_type="folder", folder_path=str(tmp_path / "store")),
+                                device_state_dir=state_dir)
+    device_file = os.path.join(state_dir, "device.json")
+    assert os.path.exists(device_file)
+    device_id = json.load(open(device_file))["device_id"]
+    assert adapter.device_id == device_id
+    adapter.clock.tick()        # the HLC file appears on the first write
+    assert any(n.startswith("hlc_") for n in os.listdir(state_dir))
+
+    cache_dir = dive_cache.unified_cache_dir("submersion", base_dir=str(tmp_path))
+    assert cache_dir == os.path.join(state_dir, "dives")
+
+    dive_cache.save_unified_dives("submersion", [_unified_dive()], base_dir=str(tmp_path))
+    # An overwrite download clears the cache and nothing else.
+    dive_cache.save_unified_dives("submersion", [_unified_dive()], base_dir=str(tmp_path), overwrite=True)
+    assert os.path.exists(device_file) and json.load(open(device_file))["device_id"] == device_id
+    assert any(n.startswith("hlc_") for n in os.listdir(state_dir))
+
+    # ...and the listing reads only the cache, never the state files beside it.
+    rows = dive_cache.list_dives("submersion", base_dir=str(tmp_path))
+    assert len(rows) == 1 and rows[0]["id"] == "1E5A-9"
+    # The editing path still finds a dive in the subdirectory.
+    assert dive_cache.get_samples("submersion", rows[0]["filename"], base_dir=str(tmp_path))
+
+
+def test_prune_cache_dir_removes_only_unaccounted_files(tmp_path):
+    """rework.md E18: a refresh used only to write, so a dive deleted on the
+    service kept its cached file for ever and a renumbered one left its old
+    file behind as a duplicate."""
+    import os
+    from src.core import dive_cache
+    d = tmp_path / "cache"
+    d.mkdir()
+    for name in ("1.json", "2.json", "3.json", "notes.txt"):
+        (d / name).write_text("{}")
+
+    removed = dive_cache.prune_cache_dir(str(d), {"1.json", "3.json"}, "Garmin")
+    assert removed == ["2.json"]
+    assert sorted(os.listdir(d)) == ["1.json", "3.json", "notes.txt"]   # non-JSON left alone
+
+    # nothing to do is not an error
+    assert dive_cache.prune_cache_dir(str(d), {"1.json", "3.json"}) == []
+
+    # an empty keep-set looks like a failed listing, so it never empties a cache
+    assert dive_cache.prune_cache_dir(str(d), set()) == []
+    assert sorted(os.listdir(d)) == ["1.json", "3.json", "notes.txt"]
+
+    # a missing directory is fine
+    assert dive_cache.prune_cache_dir(str(tmp_path / "nope"), {"x.json"}) == []
+
+
+def test_unified_download_prunes_but_a_plain_save_does_not(tmp_path):
+    """`prune` is opt-in: `download_service_dives` passes every dive the
+    service has, a bare save_unified_dives call may be saving a subset."""
+    import os
+    from src.core import dive_cache
+    a = _unified_dive()
+    b = _unified_dive(external_ids={"submersion": "second"})
+    dive_cache.save_unified_dives("submersion", [a, b], base_dir=str(tmp_path))
+    directory = dive_cache.unified_cache_dir("submersion", None, str(tmp_path))
+    assert len(os.listdir(directory)) == 2
+
+    # saving only one of them leaves the other alone by default
+    dive_cache.save_unified_dives("submersion", [a], base_dir=str(tmp_path))
+    assert len(os.listdir(directory)) == 2
+
+    # ... but a download says "this is all of them"
+    dive_cache.save_unified_dives("submersion", [a], base_dir=str(tmp_path), prune=True)
+    assert len(os.listdir(directory)) == 1

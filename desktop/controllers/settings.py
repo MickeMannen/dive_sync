@@ -38,21 +38,52 @@ class SettingsController(QObject):
     def message(self) -> str:
         return self._message
 
+    # Every card's status line is always on screen, so testing or saving
+    # rewrites a line that is already there instead of adding one and pushing
+    # the rest of the page down. With no test result to show, each one says
+    # what is stored for that service.
+
+    def _accounts_status(self, service: str) -> str:
+        accounts = (self._model.get_garmin_accounts() if service == "garmin"
+                    else self._model.get_divelogs_accounts())
+        accounts = [a for a in accounts if a.username]
+        if not accounts:
+            return "No account saved yet."
+        missing = [a.username for a in accounts if not a.password]
+        if missing:
+            return f"No password stored for {', '.join(missing)} - enter it and save."
+        if len(accounts) == 1:
+            return f"Saved: {accounts[0].username}. Press Test to check the login."
+        return f"{len(accounts)} accounts saved. Press Test to check a login."
+
     @Property(str, notify=garminStatusChanged)
     def garminStatus(self) -> str:
-        return self._garmin_status
+        return self._garmin_status or self._accounts_status("garmin")
 
     @Property(str, notify=divelogsStatusChanged)
     def divelogsStatus(self) -> str:
-        return self._divelogs_status
+        return self._divelogs_status or self._accounts_status("divelogs")
 
     @Property(str, notify=subsurfaceStatusChanged)
     def subsurfaceStatus(self) -> str:
-        return self._subsurface_status
+        if self._subsurface_status:
+            return self._subsurface_status
+        if not self._model.subsurface.email:
+            return "No account saved yet."
+        if not self._model.subsurface.password:
+            return f"No password stored for {self._model.subsurface.email} - enter it and save."
+        return f"Saved: {self._model.subsurface.email}. Press Test to check the login."
 
     @Property(str, notify=submersionStatusChanged)
     def submersionStatus(self) -> str:
-        return self._submersion_status
+        if self._submersion_status:
+            return self._submersion_status
+        store = self._model.submersion
+        if not store.configured:
+            return "Not configured yet."
+        if store.store_type == "folder":
+            return f"Saved: folder {store.folder_path}. Press Test to check it."
+        return f"Saved: bucket '{store.bucket}' at {store.endpoint_url}. Press Test to check it."
 
     @Property(str, notify=profileSummaryChanged)
     def profileSummary(self) -> str:
@@ -65,15 +96,20 @@ class SettingsController(QObject):
     @Property("QVariantList", notify=credentialsChanged)
     def garminAccounts(self):
         """Usernames and token dirs only - never the password, same as the
-        status page's account rows (rework.md E7)."""
-        return [{"username": a.username, "token_dir": a.token_dir} for a in self._model.get_garmin_accounts()]
+        status page's account rows (rework.md E7). has_password says whether
+        one is stored at all, so a half-saved account is visible here rather
+        than only when a sync fails to log in."""
+        return [{"username": a.username, "token_dir": a.token_dir, "has_password": bool(a.password)}
+                for a in self._model.get_garmin_accounts()]
 
     @Property("QVariantList", notify=credentialsChanged)
     def divelogsAccounts(self):
-        return [{"username": a.username} for a in self._model.get_divelogs_accounts()]
+        return [{"username": a.username, "has_password": bool(a.password)}
+                for a in self._model.get_divelogs_accounts()]
 
     @Slot("QVariantList")
     def saveGarminAccounts(self, rows) -> None:
+        # A blank password keeps the stored one - _save_accounts() merges it.
         from src.core.config import GarminCredentials
         accounts = [
             GarminCredentials(username=str(r.get("username", "")).strip(), password=str(r.get("password", "")),
@@ -81,9 +117,10 @@ class SettingsController(QObject):
             for r in rows if str(r.get("username", "")).strip()
         ]
         creds_store._save_accounts("garmin", accounts)
-        self._model = creds_store.load_credentials_model()
-        self.credentialsChanged.emit()
-        self._set("_message", "Saved to keychain.", self.messageChanged)
+        self._saved()
+        # Drop the old test result: the status line falls back to describing
+        # what is now stored, which is what the user just changed.
+        self._set("_garmin_status", "", self.garminStatusChanged)
 
     @Slot("QVariantList")
     def saveDivelogsAccounts(self, rows) -> None:
@@ -93,9 +130,8 @@ class SettingsController(QObject):
             for r in rows if str(r.get("username", "")).strip()
         ]
         creds_store._save_accounts("divelogs", accounts)
-        self._model = creds_store.load_credentials_model()
-        self.credentialsChanged.emit()
-        self._set("_message", "Saved to keychain.", self.messageChanged)
+        self._saved()
+        self._set("_divelogs_status", "", self.divelogsStatusChanged)
 
     @Property(str, notify=credentialsChanged)
     def subsurfaceEmail(self) -> str:
@@ -112,6 +148,12 @@ class SettingsController(QObject):
     @Property(str, notify=credentialsChanged)
     def submersionRegion(self) -> str:
         return self._model.submersion.region
+
+    @Property(bool, notify=credentialsChanged)
+    def submersionRegionIsAuto(self) -> bool:
+        """No override saved - the region comes from the endpoint, so the
+        settings page can keep its Advanced section folded away."""
+        return not self._model.submersion.region
 
     @Property(str, notify=credentialsChanged)
     def submersionBucket(self) -> str:
@@ -232,39 +274,58 @@ class SettingsController(QObject):
 
     # -- save -------------------------------------------------------------
 
+    def _saved(self) -> None:
+        self._model = creds_store.load_credentials_model()
+        self.credentialsChanged.emit()
+        self._set("_message", "Saved to keychain.", self.messageChanged)
+
+    @Slot(str, str)
+    def saveSubsurface(self, email: str, password: str) -> None:
+        from src.core.config import SubsurfaceCredentials
+        creds_store.save_subsurface_credentials(SubsurfaceCredentials(
+            email=email,
+            password=password or self._model.subsurface.password,
+            base_url=self._model.subsurface.base_url,
+        ) if email else None)
+        self._saved()
+        self._set("_subsurface_status", "", self.subsurfaceStatusChanged)
+
+    @Slot(str, str, str, str, str, str, str, bool, str, str)
+    def saveSubmersion(self, store_type: str, endpoint_url: str, region: str, bucket: str, prefix: str,
+                       access_key_id: str, secret_access_key: str, path_style: bool, folder_path: str,
+                       passphrase: str = "") -> None:
+        from src.core.config import SubmersionCredentials
+        creds_store.save_submersion_credentials(SubmersionCredentials(
+            store_type=store_type or "s3",
+            endpoint_url=endpoint_url,
+            region=region,
+            bucket=bucket,
+            prefix=prefix or SubmersionCredentials().prefix,
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key or self._model.submersion.secret_access_key,
+            path_style=path_style,
+            folder_path=folder_path,
+            passphrase=passphrase or self._model.submersion.passphrase,
+        ))
+        self._saved()
+        self._set("_submersion_status", "", self.submersionStatusChanged)
+
     @Slot(str, str, str, str, str, str, str, str, str, bool, str, str)
     def save(self, subsurface_email: str, subsurface_pw: str,
              submersion_store_type: str, submersion_endpoint_url: str, submersion_region: str,
              submersion_bucket: str, submersion_prefix: str, submersion_access_key_id: str,
              submersion_secret_access_key: str, submersion_path_style: bool, submersion_folder_path: str,
              submersion_passphrase: str = "") -> None:
-        """Subsurface Cloud + Submersion only - Garmin/Divelogs accounts save
-        independently via saveGarminAccounts()/saveDivelogsAccounts() (E7),
-        since this writes those two sections directly rather than going
-        through save_credentials_model(), which would otherwise replace the
-        whole account list with whatever (nothing) this slot was given."""
-        from src.core.config import SubsurfaceCredentials, SubmersionCredentials
-        creds_store.save_subsurface_credentials(SubsurfaceCredentials(
-            email=subsurface_email,
-            password=subsurface_pw or self._model.subsurface.password,
-            base_url=self._model.subsurface.base_url,
-        ) if subsurface_email else None)
-        creds_store.save_submersion_credentials(SubmersionCredentials(
-            store_type=submersion_store_type or "s3",
-            endpoint_url=submersion_endpoint_url,
-            region=submersion_region,
-            bucket=submersion_bucket,
-            prefix=submersion_prefix or SubmersionCredentials().prefix,
-            access_key_id=submersion_access_key_id,
-            secret_access_key=submersion_secret_access_key or self._model.submersion.secret_access_key,
-            path_style=submersion_path_style,
-            folder_path=submersion_folder_path,
-            passphrase=submersion_passphrase or self._model.submersion.passphrase,
-        ))
-
-        self._model = creds_store.load_credentials_model()
-        self.credentialsChanged.emit()
-        self._set("_message", "Saved to keychain.", self.messageChanged)
+        """Kept for callers that still save both at once. Each card in the
+        settings page now has its own Save button, the way the Garmin and
+        Divelogs account lists always have (rework.md E7) - none of these
+        slots may go through save_credentials_model(), which would replace
+        the whole account list with whatever (nothing) it was given."""
+        self.saveSubsurface(subsurface_email, subsurface_pw)
+        self.saveSubmersion(submersion_store_type, submersion_endpoint_url, submersion_region,
+                            submersion_bucket, submersion_prefix, submersion_access_key_id,
+                            submersion_secret_access_key, submersion_path_style, submersion_folder_path,
+                            submersion_passphrase)
 
     # -- profiles ---------------------------------------------------------
 

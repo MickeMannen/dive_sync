@@ -2,6 +2,19 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+
+def recorded_water_temp(value: Any) -> Optional[float]:
+    """A water temperature as recorded, or None when there is none. 0 °C
+    counts as none: Garmin stores 0 on a hand-logged dive whose temperature
+    was never entered, and a real 0 °C dive is rare enough not to guess it."""
+    if value in (None, ""):
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if value == 0.0 else value
+
 class GasMixture(BaseModel):
     oxygen: float = Field(21.0, description="Oxygen percentage (0-100)")
     helium: float = Field(0.0, description="Helium percentage (0-100)")
@@ -36,7 +49,6 @@ class UnifiedDive(BaseModel):
     temp_avg: Optional[float] = Field(None, description="Average temperature in Celsius")
     external_ids: Dict[str, str] = Field(default_factory=dict, description="Service-specific primary keys, e.g., {'garmin': '12345', 'divelogs': '67890'}")
     gas_mixtures: List[GasMixture] = Field(default_factory=list, description="Gas mixtures used per dive")
-    fit_file: Optional[str] = Field(None, description="Raw binary/base64 encoded .fit file payload (optional)")
     location: Optional[str] = Field(None, description="Location/Dive site name")
     notes: Optional[str] = Field(None, description="Notes/Description of the dive")
     dive_number: Optional[int] = Field(None, description="Dive number sequence")
@@ -48,6 +60,15 @@ class UnifiedDive(BaseModel):
     lat: Optional[float] = Field(None, description="Latitude coordinate")
     lng: Optional[float] = Field(None, description="Longitude coordinate")
     samples: List[UnifiedSample] = Field(default_factory=list, description="Time-series dive profile samples")
+    device_logged: Optional[bool] = Field(
+        None,
+        description=(
+            "True when a dive computer recorded this dive, False when it was entered by hand, None when the "
+            "service does not say. Provenance rather than dive data: it decides whether a receiver that gets its "
+            "computer data elsewhere (Submersion, whose profile comes from the diver's own .fit import) should "
+            "have the dive created for it at all (rework.md F17)"
+        ),
+    )
     service_fields: Dict[str, Any] = Field(
         default_factory=dict,
         description=(

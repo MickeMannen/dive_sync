@@ -6,13 +6,11 @@ import QtQuick.Dialogs
 ColumnLayout {
     spacing: 12
 
-    Card {
-        title: "Settings"
-        Text {
+    Text {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             color: Theme.muted
-            font.pixelSize: 11
+            font.pixelSize: 12
             text: settingsController.hasCredentials
                   ? "Credentials are stored in your OS keychain, not in a plain file."
                   : "Welcome! Enter your Garmin Connect and/or Divelogs.org credentials below to get started - they're stored in your OS keychain, not in a plain file."
@@ -25,29 +23,50 @@ ColumnLayout {
                 garminAccountsModel.clear()
                 var accounts = settingsController.garminAccounts
                 for (var i = 0; i < accounts.length; i++)
-                    garminAccountsModel.append({username: accounts[i].username, password: ""})
-                if (accounts.length === 0) garminAccountsModel.append({username: "", password: ""})
+                    garminAccountsModel.append({username: accounts[i].username, password: "",
+                                                hasPassword: accounts[i].has_password})
+                if (accounts.length === 0) garminAccountsModel.append({username: "", password: "", hasPassword: false})
             }
             Component.onCompleted: reload()
             Connections { target: settingsController; function onCredentialsChanged() { garminCard.reload() } }
             Repeater {
                 model: garminAccountsModel
-                delegate: ColumnLayout {
+                delegate: RowLayout {
                     required property int index
                     required property string username
                     required property string password
-                    RowLayout {
-                        LabeledField { fieldWidth: 220; label: "Username"; text: username; onEditingFinished: garminAccountsModel.setProperty(index, "username", text) }
-                        LabeledField { fieldWidth: 220; label: "Password (leave blank to keep the saved one)"; secret: true; text: password; onEditingFinished: garminAccountsModel.setProperty(index, "password", text) }
-                        Button { text: "Test"; onClicked: settingsController.testGarmin(username, password) }
-                        Button { text: "Remove"; flat: true; onClicked: garminAccountsModel.remove(index) }
+                    required property bool hasPassword
+                    // Commit on every keystroke, not on blur: "Save Garmin
+                    // accounts" below reads the model, and a password still
+                    // sitting uncommitted in a focused field would be saved
+                    // blank (the Test buttons dodge this by reading .text).
+                    LabeledField { id: uName; fieldWidth: 220; label: "Username"; text: username; onTextChanged: garminAccountsModel.setProperty(index, "username", text) }
+                    LabeledField { id: uPass; fieldWidth: 220; label: "Password"; placeholder: hasPassword ? "saved - leave blank to keep it" : ""; secret: true; text: password; onTextChanged: garminAccountsModel.setProperty(index, "password", text) }
+                    // Read the fields' live text directly rather than the
+                    // committed model value (only updated on blur/Enter -
+                    // clicking Test right after typing would otherwise
+                    // race ahead of that commit and test blank/stale values).
+                    Button { text: "Test"; onClicked: settingsController.testGarmin(uName.text, uPass.text) }
+                    Button { text: "Remove"; flat: true; onClicked: garminAccountsModel.remove(index) }
+                    // Marks which row is the half-saved one when several are
+                    // listed; inline, so showing it never reflows the page.
+                    // Tied to what is stored, not to the live field, so typing
+                    // a fix doesn't make it flicker.
+                    Text {
+                        visible: username !== "" && !hasPassword
+                        text: "⚠ no password stored"
+                        color: Theme.danger
+                        font.pixelSize: 11
                     }
                 }
             }
+            // Always on screen (never `visible: text !== ""`): a status line
+            // that appears only once you press Test would shift everything
+            // below it down at exactly the moment you are reading it.
+            Text { text: settingsController.garminStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             RowLayout {
-                Button { text: "Add Garmin account"; flat: true; onClicked: garminAccountsModel.append({username: "", password: ""}) }
                 Button {
-                    text: "Save Garmin accounts"
+                    text: "Save"
                     onClicked: {
                         // ListModel.get(i) returns a model-data object that PySide6
                         // marshals as a QObject, not a dict (rows[i].get(...) then
@@ -60,7 +79,7 @@ ColumnLayout {
                         settingsController.saveGarminAccounts(rows)
                     }
                 }
-                Text { text: settingsController.garminStatus; color: Theme.muted }
+                Button { text: "Add another account"; flat: true; onClicked: garminAccountsModel.append({username: "", password: "", hasPassword: false}) }
             }
         }
         Card {
@@ -71,8 +90,9 @@ ColumnLayout {
                 divelogsAccountsModel.clear()
                 var accounts = settingsController.divelogsAccounts
                 for (var i = 0; i < accounts.length; i++)
-                    divelogsAccountsModel.append({username: accounts[i].username, password: ""})
-                if (accounts.length === 0) divelogsAccountsModel.append({username: "", password: ""})
+                    divelogsAccountsModel.append({username: accounts[i].username, password: "",
+                                                  hasPassword: accounts[i].has_password})
+                if (accounts.length === 0) divelogsAccountsModel.append({username: "", password: "", hasPassword: false})
             }
             Component.onCompleted: reload()
             Connections { target: settingsController; function onCredentialsChanged() { divelogsCard.reload() } }
@@ -82,16 +102,28 @@ ColumnLayout {
                     required property int index
                     required property string username
                     required property string password
-                    LabeledField { fieldWidth: 220; label: "Username"; text: username; onEditingFinished: divelogsAccountsModel.setProperty(index, "username", text) }
-                    LabeledField { fieldWidth: 220; label: "Password (leave blank to keep the saved one)"; secret: true; text: password; onEditingFinished: divelogsAccountsModel.setProperty(index, "password", text) }
-                    Button { text: "Test"; onClicked: settingsController.testDivelogs(username, password) }
+                    required property bool hasPassword
+                    // See the Garmin rows above: commit on keystroke so Save
+                    // never reads a stale blank password out of the model.
+                    LabeledField { id: dName; fieldWidth: 220; label: "Username"; text: username; onTextChanged: divelogsAccountsModel.setProperty(index, "username", text) }
+                    LabeledField { id: dPass; fieldWidth: 220; label: "Password"; placeholder: hasPassword ? "saved - leave blank to keep it" : ""; secret: true; text: password; onTextChanged: divelogsAccountsModel.setProperty(index, "password", text) }
+                    // See the Garmin Test button above: read live text, not
+                    // the committed (blur/Enter-only) model value.
+                    Button { text: "Test"; onClicked: settingsController.testDivelogs(dName.text, dPass.text) }
                     Button { text: "Remove"; flat: true; onClicked: divelogsAccountsModel.remove(index) }
+                    Text {
+                        visible: username !== "" && !hasPassword
+                        text: "⚠ no password stored"
+                        color: Theme.danger
+                        font.pixelSize: 11
+                    }
                 }
             }
+            // See the Garmin card: this line is permanent, only its text changes.
+            Text { text: settingsController.divelogsStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             RowLayout {
-                Button { text: "Add Divelogs account"; flat: true; onClicked: divelogsAccountsModel.append({username: "", password: ""}) }
                 Button {
-                    text: "Save Divelogs accounts"
+                    text: "Save"
                     onClicked: {
                         // See the Garmin save button above: get(i) is not a dict.
                         var rows = []
@@ -102,69 +134,26 @@ ColumnLayout {
                         settingsController.saveDivelogsAccounts(rows)
                     }
                 }
-                Text { text: settingsController.divelogsStatus; color: Theme.muted }
+                Button { text: "Add another account"; flat: true; onClicked: divelogsAccountsModel.append({username: "", password: "", hasPassword: false}) }
             }
         }
         Card {
             title: "Subsurface Cloud"
-            LabeledField { id: sEmail; label: "Email"; fieldWidth: 320; text: settingsController.subsurfaceEmail }
-            LabeledField { id: sPass; label: "Password (leave blank to keep the saved one)"; fieldWidth: 320; secret: true }
             RowLayout {
+                LabeledField { id: sEmail; label: "Email"; fieldWidth: 220; text: settingsController.subsurfaceEmail }
+                LabeledField { id: sPass; label: "Password"; fieldWidth: 220; secret: true
+                               placeholder: settingsController.subsurfaceEmail !== "" ? "saved - leave blank to keep it" : "" }
                 Button { text: "Test"; onClicked: settingsController.testSubsurface(sEmail.text, sPass.text) }
-                Text { text: settingsController.subsurfaceStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             }
-        }
-        Card {
-            title: "Submersion sync store"
-            RowLayout {
-                spacing: 6
-                Text { text: "Store type"; color: Theme.muted; font.pixelSize: 11 }
-                ComboBox {
-                    id: subStoreType
-                    model: ["s3", "folder"]
-                    currentIndex: settingsController.submersionStoreType === "folder" ? 1 : 0
-                }
-            }
-            ColumnLayout {
-                visible: subStoreType.currentText === "s3"
-                spacing: 8
-                LabeledField { id: subEndpoint; label: "Endpoint URL"; fieldWidth: 420; text: settingsController.submersionEndpointUrl }
-                LabeledField { id: subRegion; label: "Region"; fieldWidth: 220; text: settingsController.submersionRegion }
-                LabeledField { id: subBucket; label: "Bucket"; fieldWidth: 320; text: settingsController.submersionBucket }
-                LabeledField { id: subPrefix; label: "Prefix"; fieldWidth: 320; text: settingsController.submersionPrefix }
-                LabeledField { id: subAccessKey; label: "Access key ID"; fieldWidth: 320; text: settingsController.submersionAccessKeyId }
-                LabeledField { id: subSecretKey; label: "Secret access key (leave blank to keep the saved one)"; fieldWidth: 320; secret: true }
-                CheckBox { id: subPathStyle; text: "Path-style addressing"; checked: settingsController.submersionPathStyle }
-            }
-            ColumnLayout {
-                visible: subStoreType.currentText === "folder"
-                spacing: 8
-                LabeledField { id: subFolderPath; label: "Folder path"; fieldWidth: 420; text: settingsController.submersionFolderPath }
-            }
-            LabeledField { id: subPassphrase; label: "End-to-end encryption passphrase (leave blank if this library isn't E2E encrypted, or to keep the saved one)"; fieldWidth: 420; secret: true }
+            Text { text: settingsController.subsurfaceStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             RowLayout {
                 Button {
-                    text: "Test"
-                    onClicked: settingsController.testSubmersion(subStoreType.currentText, subEndpoint.text, subRegion.text,
-                        subBucket.text, subPrefix.text, subAccessKey.text, subSecretKey.text, subPathStyle.checked, subFolderPath.text,
-                        subPassphrase.text)
-                }
-                Text { text: settingsController.submersionStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
-            }
-        }
-        RowLayout {
-            Button {
-                text: "Save credentials"
-                onClicked: {
-                    settingsController.save(sEmail.text, sPass.text,
-                        subStoreType.currentText, subEndpoint.text, subRegion.text, subBucket.text, subPrefix.text,
-                        subAccessKey.text, subSecretKey.text, subPathStyle.checked, subFolderPath.text, subPassphrase.text)
-                    sPass.text = ""; subSecretKey.text = ""; subPassphrase.text = ""
+                    text: "Save"
+                    onClicked: { settingsController.saveSubsurface(sEmail.text, sPass.text); sPass.text = "" }
                 }
             }
-            Text { text: settingsController.message; color: Theme.muted }
         }
-    }
+        Text { visible: text !== ""; text: settingsController.message; color: Theme.muted }
 
     Card {
         title: "Sync profile"

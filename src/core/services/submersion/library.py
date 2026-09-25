@@ -109,6 +109,71 @@ def garmin_id_of(dive: Dict[str, Any], data_sources: Iterable[Dict[str, Any]]) -
     return None
 
 
+
+# ---------------------------------------------------------------------------
+# Extra fields (2026-09-23, from the owner's pass over
+# docs/submersion_field_inventory.md)
+# ---------------------------------------------------------------------------
+# Submersion stores far more per dive and per site than UnifiedDive models.
+# Everything here has no UnifiedDive attribute, so it travels in
+# ``service_fields`` under the name in the first column, exactly as Garmin's
+# activityName and Divelogs' divesite do. Declared once and consumed three
+# times: the field catalogue, the read in dive_to_unified, and the write in
+# SubmersionAdapter._write_dive_rows.
+#
+#   (service_fields name, row key, board label, type, unit)
+#
+# ``site_*`` entries live on the dive's diveSites row, not the dive row. The
+# site's own name and coordinates are not here: they already travel as the
+# unified ``location`` and ``gps`` fields.
+DIVE_EXTRA_FIELDS = [
+    ("dive_name", "name", "Dive name", "text", None),
+    ("bottomTime", "bottomTime", "Bottom time", "number", "s"),
+    ("entryTime", "entryTime", "Entry time", "datetime", None),
+    ("exitTime", "exitTime", "Exit time", "datetime", None),
+    ("diveType", "diveType", "Dive type", "text", None),
+    ("diveMode", "diveMode", "Dive mode", "text", None),
+    ("waterType", "waterType", "Water type", "text", None),
+    ("altitude", "altitude", "Altitude", "number", "m"),
+    ("airTemp", "airTemp", "Air temperature", "number", "°C"),
+    ("entryMethod", "entryMethod", "Entry method", "text", None),
+    ("exitLatitude", "exitLatitude", "Exit latitude", "number", None),
+    ("exitLongitude", "exitLongitude", "Exit longitude", "number", None),
+    ("boatName", "boatName", "Boat name", "text", None),
+    ("diveOperator", "diveOperator", "Dive operator", "text", None),
+]
+SITE_EXTRA_FIELDS = [
+    ("site_region", "region", "Site region", "text", None),
+    ("site_country", "country", "Site country", "text", None),
+    ("site_island", "island", "Site island", "text", None),
+    ("site_city", "city", "Site city", "text", None),
+    ("site_notes", "notes", "Site notes", "text", None),
+    ("site_waterType", "waterType", "Site water type", "text", None),
+    ("site_entryMethod", "entryMethod", "Site entry method", "text", None),
+    ("site_exitMethod", "exitMethod", "Site exit method", "text", None),
+]
+EXTRA_FIELDS = DIVE_EXTRA_FIELDS + SITE_EXTRA_FIELDS
+
+
+def _extra_value(row: Dict[str, Any], row_key: str, field_type: str) -> Any:
+    value = row.get(row_key)
+    if field_type == "datetime":
+        return _ms_to_dt(value)
+    if field_type == "text":
+        return value or None
+    return value
+
+
+def read_extra_fields(dive: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The ``service_fields`` a dive contributes beyond the unified ones."""
+    out: Dict[str, Any] = {}
+    for name, row_key, _label, field_type, _unit in DIVE_EXTRA_FIELDS:
+        out[name] = _extra_value(dive, row_key, field_type)
+    for name, row_key, _label, field_type, _unit in SITE_EXTRA_FIELDS:
+        out[name] = _extra_value(site or {}, row_key, field_type)
+    return out
+
+
 def dive_to_unified(library: Library, dive: Dict[str, Any], data_sources_by_dive: Dict[str, List[Dict[str, Any]]]) -> UnifiedDive:
     dive_id = dive["id"]
     site = library._alive("diveSites").get(dive.get("siteId") or "")
@@ -165,5 +230,5 @@ def dive_to_unified(library: Library, dive: Dict[str, Any], data_sources_by_dive
         lat=(site.get("latitude") if site else None) if site and site.get("latitude") is not None else dive.get("entryLatitude"),
         lng=(site.get("longitude") if site else None) if site and site.get("longitude") is not None else dive.get("entryLongitude"),
         samples=samples,
-        service_fields={"diveType": dive.get("diveType"), "waterType": dive.get("waterType")},
+        service_fields=read_extra_fields(dive, site),
     )

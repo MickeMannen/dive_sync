@@ -45,11 +45,13 @@ def test_export_validate_import_profile(tmp_path):
     res = _run(tmp_path, "--export-profile", str(out))
     assert res.returncode == 0 and out.exists()
     data = json.loads(out.read_text())
-    assert data["dive_sync_profile"] == 1 and "password" not in out.read_text()
+    assert data["dive_sync_profile"] == 2 and "password" not in out.read_text()
+    assert data["sync_pairs"][0]["id"] == "garmin_divelogs" and "field_links" not in data
 
+    # a version-1 style edit (top-level field_links) still imports onto the garmin_divelogs pair
     data["grace_window_minutes"] = 45
-    data["field_links"] = [l for l in data["field_links"] if l["id"] == "buddy"] + [
-        {"id": "future", "source": ["garmin.rating"], "target": "divelogs.rating"}]
+    data["field_links"] = [{"id": "buddy", "source": ["garmin.buddy"], "target": "divelogs.buddy", "conflict": "manual"},
+                           {"id": "future", "source": ["garmin.rating"], "target": "divelogs.rating"}]
     out.write_text(json.dumps(data))
     res = _run(tmp_path, "--validate-profile", str(out))
     assert res.returncode == 0, res.stdout + res.stderr
@@ -61,13 +63,15 @@ def test_export_validate_import_profile(tmp_path):
     res = _run(tmp_path, "--import-profile", str(out), "--yes")
     assert res.returncode == 0, res.stdout + res.stderr
     saved = json.loads((tmp_path / "settings.json").read_text())
-    assert saved["grace_window_minutes"] == 45 and [l["id"] for l in saved["field_links"]] == ["buddy"]
+    rules = saved["sync_pairs"][0]["rules"]
+    assert saved["grace_window_minutes"] == 45
+    assert [r["id"] for r in rules["divelogs"]] == ["buddy"] and [r["id"] for r in rules["garmin"]] == ["buddy"]
 
     data["dive_sync_profile"] = 99
     out.write_text(json.dumps(data))
     res = _run(tmp_path, "--validate-profile", str(out))
     assert res.returncode == 1 and "newer Dive Sync" in res.stdout
-    data["dive_sync_profile"] = 1
+    data["dive_sync_profile"] = 2
     data["field_links"] = [{"id": "bad", "source": ["garmin.buddy"], "target": "divelogs.max_depth"}]
     out.write_text(json.dumps(data))
     res = _run(tmp_path, "--import-profile", str(out), "--yes")

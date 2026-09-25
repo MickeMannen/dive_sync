@@ -29,7 +29,7 @@ from src.core.fields import FieldSpec
 from src.core.models import UnifiedDive
 from src.core.services.submersion import codec, crypto, store as st
 from src.core.services.submersion.hlc import HlcClock, hlc_key
-from src.core.services.submersion.library import SERVICE_ID, Library, dive_to_unified
+from src.core.services.submersion.library import EXTRA_FIELDS, DIVE_EXTRA_FIELDS, SITE_EXTRA_FIELDS, SERVICE_ID, Library, dive_to_unified
 
 logger = logging.getLogger("dive_sync.submersion")
 
@@ -38,6 +38,19 @@ DEVICE_NAME = "dive_sync"
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _buddy_names(value: Any) -> List[str]:
+    """The buddy names to write as diveBuddies rows.
+
+    UnifiedDive.buddy is the comma-joined string every service uses, but a
+    mapping board can hand over a real list (a list-typed source field, or a
+    board saved while this adapter still declared its own buddy field as a
+    list), so both are accepted rather than crashing on whichever arrives."""
+    if value is None:
+        return []
+    parts = value if isinstance(value, (list, tuple)) else str(value).split(",")
+    return [str(part).strip() for part in parts if str(part).strip()]
 
 
 class SubmersionAdapter(BaseDiveAdapter):
@@ -50,7 +63,12 @@ class SubmersionAdapter(BaseDiveAdapter):
     @classmethod
     def field_catalog(cls) -> List[FieldSpec]:
         return [
-            FieldSpec(key="submersion.date_time", label="Start time", type="datetime", unified="date_time", writable=False),
+            # Writable since 2026-09-23 (rework.md G9): the owner needs to enter
+            # historical dives that no computer ever recorded, and a start time
+            # is the one thing such a dive cannot be without. _write_dive_rows
+            # has always set diveDateTime on creation; this only lets a rule
+            # correct it on a dive that is already matched.
+            FieldSpec(key="submersion.date_time", label="Start time", type="datetime", unified="date_time"),
             FieldSpec(key="submersion.duration", label="Duration", type="number", unified="duration", unit="s"),
             FieldSpec(key="submersion.max_depth", label="Max depth", type="number", unified="max_depth", unit="m"),
             FieldSpec(key="submersion.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m"),
@@ -58,12 +76,36 @@ class SubmersionAdapter(BaseDiveAdapter):
             FieldSpec(key="submersion.dive_number", label="Dive number", type="number", unified="dive_number"),
             FieldSpec(key="submersion.location", label="Dive site", type="text", unified="location"),
             FieldSpec(key="submersion.notes", label="Notes", type="text", unified="notes"),
-            FieldSpec(key="submersion.buddy", label="Buddy", type="list", unified="buddy"),
+            # Submersion stores one diveBuddies row per buddy, but the value
+            # this adapter reads and writes is the comma-joined string
+            # UnifiedDive.buddy holds (dive_to_unified joins the names,
+            # _write_dive_rows splits them again). Declaring it a list made
+            # the link engine convert across the two types, which broke both
+            # directions: a text source arrived as ["Guy"] and crashed the
+            # split, and reading it back joined the string character by
+            # character ("Guy" -> "G, u, y").
+            FieldSpec(key="submersion.buddy", label="Buddy", type="text", unified="buddy"),
             FieldSpec(key="submersion.weight", label="Weight", type="number", unified="weight"),
             FieldSpec(key="submersion.visibility", label="Visibility", type="number", unified="visibility"),
             FieldSpec(key="submersion.gps", label="Site position", type="gps", unified="gps"),
-            FieldSpec(key="submersion.tanks", label="Cylinders", type="tanks", unified="tanks"),
-            FieldSpec(key="submersion.samples", label="Dive profile", type="samples", unified="samples"),
+            # Read-only since 2026-09-24 (rework.md F17): both are derived by
+            # Submersion's own FIT import from the file the diver hands it, and
+            # a rule that overwrote them destroyed coordinated rows (the tank
+            # pressure series and gas switches hanging off the same data
+            # source) and re-encoded the app's profile through a codec that
+            # knows 3 of its 24 columns. dive_sync still *reads* both, so a
+            # Submersion dive can feed a profile or gas to another service.
+            FieldSpec(key="submersion.tanks", label="Cylinders", type="tanks", unified="tanks", writable=False),
+            FieldSpec(key="submersion.samples", label="Dive profile", type="samples", unified="samples", writable=False),
+        ] + [
+            # Everything Submersion stores that UnifiedDive has no attribute
+            # for, declared once in library.EXTRA_FIELDS and carried in
+            # service_fields (2026-09-23, rework.md G9). The site_* ones live
+            # on the dive's diveSites row: 'site_region' and friends are what
+            # finally give Divelogs' own location field something to sync
+            # with, which the site name alone never could.
+            FieldSpec(key=f"submersion.{name}", label=label, type=field_type, unit=unit)
+            for name, _row_key, label, field_type, unit in EXTRA_FIELDS
         ]
 
     def __init__(self, config: SubmersionCredentials, device_state_dir: Optional[str] = None,
@@ -219,6 +261,36 @@ class SubmersionAdapter(BaseDiveAdapter):
         })
         return site_id
 
+    @staticmethod
+    def _apply_extras(row: Dict[str, Any], unified: UnifiedDive, fields) -> bool:
+        """Copy service_fields values onto a stored row. Returns True when
+        anything changed. A key the dive does not carry at all is left alone;
+        an explicit None does clear the stored value, so a rule can empty a
+        field on purpose."""
+        changed = False
+        for name, row_key, _label, field_type, _unit in fields:
+            if name not in unified.service_fields:
+                continue
+            value = unified.service_fields[name]
+            if field_type == "datetime" and isinstance(value, datetime):
+                value = int(value.replace(tzinfo=timezone.utc).timestamp() * 1000)
+            if row.get(row_key) != value:
+                row[row_key] = value
+                changed = True
+        return changed
+
+    def _write_site_extras(self, site_id: Optional[str], unified: UnifiedDive) -> None:
+        """Site-level rules (site_region, site_country, ...) write to the
+        dive's diveSites row, which is shared by every dive at that site."""
+        if not site_id:
+            return
+        site = self.library._alive("diveSites").get(site_id)
+        if site is None:
+            return
+        row = dict(site)
+        if self._apply_extras(row, unified, SITE_EXTRA_FIELDS):
+            self._put_row("diveSites", row)
+
     def _put_row(self, table: str, row: Dict[str, Any]) -> Dict[str, Any]:
         now = _now_ms()
         row.setdefault("createdAt", now)
@@ -229,6 +301,21 @@ class SubmersionAdapter(BaseDiveAdapter):
         return row
 
     def _write_dive_rows(self, unified: UnifiedDive, dive_id: str, existing: Optional[Dict[str, Any]]) -> None:
+        """Write one dive.
+
+        **A dive that already exists here gets its metadata only** (rework.md
+        F17, decided 2026-09-24): the diver imports each device-logged dive's
+        ``.fit`` in the Submersion app itself, and that import - not dive_sync
+        - owns the depth profile, the tank rows, the tank-pressure series, the
+        gas switches and the ``diveDataSources`` row they all hang off. Writing
+        those from Garmin's API replaced coordinated rows the app had derived
+        from the file, and re-encoded its profile through a codec that only
+        knows 3 of the series' 24 columns, so it lost data every run. A dive
+        *created* here is a different case - a hand-logged dive no FIT import
+        will ever arrive for - and still gets the tanks and profile it came
+        with, once, at creation.
+        """
+        creating = existing is None
         site_id = self._site_for(unified)
         diver_id = (existing or {}).get("diverId") or self.library.default_diver_id()
         row = dict(existing or {})
@@ -243,10 +330,17 @@ class SubmersionAdapter(BaseDiveAdapter):
             "avgDepth": unified.avg_depth,
             "waterTemp": unified.temp_min,
             "notes": unified.notes or "",
-            "siteId": site_id,
+            # A dive whose incoming copy carries neither a site name nor GPS
+            # keeps the site it already has: no sender can name one, so this
+            # would only ever be a blanking, never a correction.
+            "siteId": site_id or row.get("siteId"),
             "diveType": row.get("diveType") or "recreational",
             "diveMode": row.get("diveMode") or "oc",
         })
+        # The extras a rule may have written into service_fields. Only keys
+        # the incoming dive actually carries are applied, so a sender with no
+        # concept of (say) a boat name never blanks one Submersion already has.
+        self._apply_extras(row, unified, DIVE_EXTRA_FIELDS)
         if unified.weight is not None:
             kg = unified.weight / 2.20462 if (unified.weight_unit or "").lower().startswith("p") else unified.weight
             row["weightAmount"] = round(kg, 3)
@@ -257,48 +351,32 @@ class SubmersionAdapter(BaseDiveAdapter):
             row["importSource"] = "garmin"
             row["importId"] = str(garmin_id)
         self._put_row("dives", row)
-
-        # Submersion shows a dive's provenance from a diveDataSources row, not
-        # from importSource/importId. Give a dive_sync-created Garmin dive one
-        # (prefix "garmin-" is what marks the provider) so it presents as a
-        # Garmin dive; never add a second one to a dive that already has a
-        # Garmin source (the matched dives keep their original FIT source).
-        if garmin_id and not self._has_garmin_source(dive_id):
-            self._put_row("diveDataSources", {
-                "id": str(uuid.uuid4()), "diveId": dive_id,
-                "sourceUuid": f"garmin-connect-{garmin_id}",
-                "sourceFormat": "garmin_connect",
-                "isPrimary": not self._has_any_source(dive_id),
-            })
-
-        # Replace tanks, but keep an existing tank's role/name when the
-        # incoming UnifiedDive doesn't carry one for that slot (a source
-        # service with no role concept, e.g. Divelogs or Garmin, must not
-        # blank out a role Submersion (or a peer) already recorded).
-        existing_tanks = self.library.children("diveTanks", dive_id)
-        for tank in existing_tanks:
-            self._delete_row("diveTanks", tank["id"])
-        for order, gas in enumerate(unified.gas_mixtures):
-            previous = existing_tanks[order] if order < len(existing_tanks) else {}
-            role = gas.tank_role or previous.get("tankRole") or ("backGas" if order == 0 else None)
-            name = gas.tank_name if gas.tank_name is not None else previous.get("tankName")
-            self._put_row("diveTanks", {
-                "id": str(uuid.uuid4()), "diveId": dive_id, "tankOrder": order,
-                "volume": gas.tank_volume, "startPressure": gas.start_pressure, "endPressure": gas.end_pressure,
-                "o2Percent": gas.oxygen, "hePercent": gas.helium or 0.0,
-                "tankRole": role, "tankName": name,
-            })
+        self._write_site_extras(site_id, unified)
 
         # replace buddies
         for link in self.library.children("diveBuddies", dive_id):
             self._delete_row("diveBuddies", link["id"])
-        for name in [b.strip() for b in (unified.buddy or "").split(",") if b.strip()]:
+        for name in _buddy_names(unified.buddy):
             buddy_id = self._buddy_id(name)
             self._put_row("diveBuddies", {"id": str(uuid.uuid4()), "diveId": dive_id, "buddyId": buddy_id, "role": "buddy"})
 
-        # replace the primary profile series
-        for series in self.library.children("diveProfileSeries", dive_id):
-            self._delete_row("diveProfileSeries", series["id"])
+        if not creating:
+            # Everything below belongs to the app's own FIT import; see the
+            # docstring. A matched dive is metadata only.
+            return
+
+        # The tanks the new dive came with. Nothing to preserve here (the dive
+        # is new), and no role to inherit - a sender without a role concept
+        # (Garmin, Divelogs) leaves the first cylinder as back gas.
+        for order, gas in enumerate(unified.gas_mixtures):
+            self._put_row("diveTanks", {
+                "id": str(uuid.uuid4()), "diveId": dive_id, "tankOrder": order,
+                "volume": gas.tank_volume, "startPressure": gas.start_pressure, "endPressure": gas.end_pressure,
+                "o2Percent": gas.oxygen, "hePercent": gas.helium or 0.0,
+                "tankRole": gas.tank_role or ("backGas" if order == 0 else None), "tankName": gas.tank_name,
+            })
+
+        # the new dive's profile, when the sender has one
         if unified.samples:
             import base64
             samples = [(int(s.time or 0), s.depth, s.temp) for s in unified.samples]
@@ -306,13 +384,6 @@ class SubmersionAdapter(BaseDiveAdapter):
             summary = codec.profile_summary(samples)
             self._put_row("diveProfileSeries", dict(summary, id=str(uuid.uuid4()), diveId=dive_id, isPrimary=True,
                                                     samples=blob))
-
-    def _has_garmin_source(self, dive_id: str) -> bool:
-        return any((r.get("sourceUuid") or "").startswith("garmin-")
-                   for r in self.library.children("diveDataSources", dive_id))
-
-    def _has_any_source(self, dive_id: str) -> bool:
-        return bool(self.library.children("diveDataSources", dive_id))
 
     def _buddy_id(self, name: str) -> str:
         for rid, row in self.library._alive("buddies").items():

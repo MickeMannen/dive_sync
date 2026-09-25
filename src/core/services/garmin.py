@@ -1,7 +1,6 @@
 import os
 import re
 import json
-import base64
 import logging
 import time
 from datetime import datetime
@@ -16,7 +15,8 @@ from garminconnect import (
 
 from src.core.adapter import BaseDiveAdapter
 from src.core.fields import FieldSpec
-from src.core.models import UnifiedDive, GasMixture, UnifiedSample
+from src.core import garmin_files, progress
+from src.core.models import UnifiedDive, GasMixture, UnifiedSample, recorded_water_temp
 
 logger = logging.getLogger("dive_sync.garmin")
 
@@ -42,15 +42,23 @@ class GarminAdapter(BaseDiveAdapter):
     def field_catalog(cls) -> List[FieldSpec]:
         """What _map_to_unified reads and what update_dive can push. Garmin's
         update endpoint accepts name, description, dive number, buddy, weight,
-        visibility, coordinates and water temperature (min/max/avg, all set
-        together - see update_dive); profile samples and gases are read-only
-        here (gas writes are Track E, step E4)."""
+        visibility, coordinates, water temperature (min/max/avg), and - since
+        the 2026-09-23 probe (rework.md G8, docs/garmin_diving_api.md section
+        5) - start time, duration, max depth and average depth. Those four had
+        been marked read-only on the assumption that Garmin derives them from
+        the recorded dive; they are in fact writable through the same minimal
+        ``summaryDTO`` PUT as GPS, on device-logged and hand-entered dives
+        alike. ``date_time_utc`` stays read-only on purpose: Garmin recomputes
+        ``startTimeGMT`` itself from the local time and the activity's zone,
+        so writing it separately would only be a way to get the two out of
+        step. Profile samples and gases are read-only here (gas writes were
+        investigated and ruled out in Track E, step E4)."""
         return [
-            FieldSpec(key="garmin.date_time", label="Start time", type="datetime", unified="date_time", writable=False),
+            FieldSpec(key="garmin.date_time", label="Start time", type="datetime", unified="date_time"),
             FieldSpec(key="garmin.date_time_utc", label="Start time (UTC)", type="datetime", unified="date_time_utc", writable=False),
-            FieldSpec(key="garmin.duration", label="Duration", type="number", unified="duration", unit="s", writable=False),
-            FieldSpec(key="garmin.max_depth", label="Max depth", type="number", unified="max_depth", unit="m", writable=False),
-            FieldSpec(key="garmin.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m", writable=False),
+            FieldSpec(key="garmin.duration", label="Duration", type="number", unified="duration", unit="s"),
+            FieldSpec(key="garmin.max_depth", label="Max depth", type="number", unified="max_depth", unit="m"),
+            FieldSpec(key="garmin.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m"),
             FieldSpec(key="garmin.temp_min", label="Min temperature", type="number", unified="temp_min", unit="°C"),
             FieldSpec(key="garmin.temp_max", label="Max temperature", type="number", unified="temp_max", unit="°C"),
             FieldSpec(key="garmin.temp_avg", label="Average temperature", type="number", unified="temp_avg", unit="°C"),
@@ -66,7 +74,7 @@ class GarminAdapter(BaseDiveAdapter):
             FieldSpec(key="garmin.samples", label="Dive profile", type="samples", unified="samples", writable=False),
         ]
 
-    def __init__(self, username: str, password: str, token_dir: str = "tokens/garmin", cooldown_seconds: float = 1.0):
+    def __init__(self, username: str, password: str, token_dir: str = "tokens/garmin", cooldown_seconds: float = 0.5):
         self.username = username
         self.password = password
         self.token_dir = token_dir
@@ -83,6 +91,11 @@ class GarminAdapter(BaseDiveAdapter):
         # or detected from the newest dive's timeZoneUnitDTO on first use.
         self.upload_timezone: Optional[str] = None
         self._detected_timezone: Optional[str] = None
+        # The account's refresh cache (garmin_files.cache_dir). When set,
+        # fetch_dives reads a dive whose listing entry is unchanged from
+        # there instead of spending three API calls on it, and writes what it
+        # does fetch back. None = always fetch (SyncFilters.use_garmin_cache).
+        self.cache_dir: Optional[str] = None
 
     def login(self) -> bool:
         logger.info("Attempting Garmin Connect login for user '%s' via python-garminconnect...", self.username)
@@ -175,20 +188,46 @@ class GarminAdapter(BaseDiveAdapter):
 
     def _fetch_activity_details(self, target_activities: List[Any]) -> List[UnifiedDive]:
         """Fetch details, telemetry and tank sensors for each (activity, start_time)
-        and map them to UnifiedDive. Three API calls per dive."""
+        and map them to UnifiedDive. Three API calls per dive, except for a
+        dive ``cache_dir`` already holds complete and unchanged."""
         total_targets = len(target_activities)
         unified_dives: List[UnifiedDive] = []
+        cached = garmin_files.cached_listings(self.cache_dir) if self.cache_dir else {}
+        reused = 0
         for index, (activity, start_time) in enumerate(target_activities, 1):
             activity_id = activity.get("activityId")
             if not activity_id:
                 continue
 
+            known = cached.get(str(activity_id))
+            if known is not None and garmin_files.listing_fingerprint(known["summary"]) == garmin_files.listing_fingerprint(activity):
+                try:
+                    payload = garmin_files.read_cached(self.cache_dir, known["file"])
+                    mapped_dive = self._map_to_unified(activity, payload.get("details") or {},
+                                                       payload.get("activityDetails"), payload.get("tanksensor"))
+                    if mapped_dive.timezone and self._detected_timezone is None:
+                        self._detected_timezone = mapped_dive.timezone
+                    unified_dives.append(mapped_dive)
+                    reused += 1
+                    progress.report(index, total_targets, f"Garmin dive {start_time} (cached)", "garmin")
+                    logger.debug(" [%d/%d] Garmin activity %s unchanged; using the cached copy.",
+                                 index, total_targets, activity_id)
+                    continue
+                except Exception as e:
+                    logger.warning("Cached copy of Garmin activity %s unusable (%s); fetching it.", activity_id, e)
+
             logger.info(" [%d/%d] Fetching Garmin Dive Activity ID: %s (%s)...",
                         index, total_targets, activity_id, start_time)
+            # Three calls and three cool-downs per dive, so a refresh of a few
+            # dozen runs for minutes: tell the UI where it has got to.
+            progress.report(index, total_targets, f"Fetching Garmin dive {start_time}", "garmin")
             try:
                 # Fetch full detailed JSON using the wrapped client.connectapi
                 time.sleep(self.cooldown_seconds)
                 details = self.client.connectapi(f"/activity-service/activity/{activity_id}")
+                # Parts that failed, so the cache entry is marked for a retry
+                # rather than trusted for ever (see garmin_files.cached_listings).
+                incomplete = []
 
                 # Fetch detailed activity metrics containing chart/profile data
                 activity_details = None
@@ -197,6 +236,7 @@ class GarminAdapter(BaseDiveAdapter):
                     activity_details = self.client.get_activity_details(activity_id)
                 except Exception as detail_err:
                     logger.warning("Failed to fetch activity details (telemetry) for %s: %s", activity_id, detail_err)
+                    incomplete.append("activityDetails")
 
                 # Fetch the tank sensor telemetry detail
                 tanksensor = None
@@ -212,6 +252,7 @@ class GarminAdapter(BaseDiveAdapter):
                         logger.info("No tank sensor details found for Garmin activity %s (404).", activity_id)
                     else:
                         logger.warning("Failed to fetch tank sensor details for %s: %s", activity_id, tank_err)
+                        incomplete.append("tanksensor")
 
                 mapped_dive = self._map_to_unified(activity, details, activity_details, tanksensor)
                 if mapped_dive.timezone and self._detected_timezone is None:
@@ -221,6 +262,19 @@ class GarminAdapter(BaseDiveAdapter):
                 logger.error("Failed to fetch details for activity %s: %s", activity_id, e)
                 raise RuntimeError(f"Failed to fetch details for Garmin activity {activity_id}: {e}") from e
 
+            if self.cache_dir:
+                payload = {"summary": activity, "details": details,
+                           "activityDetails": activity_details, "tanksensor": tanksensor}
+                if incomplete:
+                    payload["incomplete"] = incomplete
+                try:
+                    garmin_files.write_cached(self.cache_dir, payload, replaces=known["file"] if known else None)
+                except OSError as e:
+                    logger.warning("Could not cache Garmin activity %s: %s", activity_id, e)
+
+        if self.cache_dir:
+            logger.info("Garmin: %d dive(s) read from the local cache, %d fetched (about %d API call(s) saved).",
+                        reused, total_targets - reused, reused * 3)
         return unified_dives
 
     def fetch_dives(self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None) -> List[UnifiedDive]:
@@ -262,19 +316,6 @@ class GarminAdapter(BaseDiveAdapter):
         dated.sort(key=lambda item: item[1], reverse=True)
         return self._fetch_activity_details(dated[:limit])
 
-    def fetch_fit_file(self, activity_id: str) -> Optional[str]:
-        if not self.logged_in and not self.login():
-            return None
-        try:
-            logger.info("Downloading .fit file for activity %s...", activity_id)
-            url = f"/download-service/files/activity/{activity_id}"
-            fit_bytes = self.client.download(url)
-            if fit_bytes:
-                return base64.b64encode(fit_bytes).decode("utf-8")
-        except Exception as e:
-            logger.error("Failed to download FIT file for activity %s: %s", activity_id, e)
-        return None
-
     def resolve_upload_timezone(self) -> str:
         """Zone for new manual activities: the explicit override, else the zone
         of the newest dive already on the account (one listing + one details
@@ -301,6 +342,22 @@ class GarminAdapter(BaseDiveAdapter):
             return self._detected_timezone
         logger.warning("No Garmin time zone known; stamping uploads as UTC (set settings.garmin_timezone to fix).")
         return "UTC"
+
+    def download_fit(self, activity_id: str) -> Optional[bytes]:
+        """The activity's original upload as Garmin returns it (a zip holding
+        the .fit; garmin_files.extract_fit unpacks it), or None on failure.
+        For a hand-logged dive Connect answers with a FIT it generates from
+        the summary fields alone, which is why dive_cache never asks for one."""
+        if not self.logged_in and not self.login():
+            return None
+        logger.info("Downloading original FIT for Garmin activity %s...", activity_id)
+        try:
+            return self.client.download_activity(str(activity_id), dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL) or None
+        except Exception as e:
+            logger.error("Failed to download FIT for Garmin activity %s: %s", activity_id, e)
+            return None
+        finally:
+            time.sleep(self.cooldown_seconds)
 
     def add_dive(self, dive: UnifiedDive) -> Optional[str]:
         if not self.logged_in and not self.login():
@@ -440,6 +497,20 @@ class GarminAdapter(BaseDiveAdapter):
                     summary_dto["startLatitude"] = new_lat
                     summary_dto["startLongitude"] = new_lng
 
+            # Start time, duration and the depths (G8, 2026-09-23). Only
+            # startTimeLocal is sent: Garmin recomputes startTimeGMT from it
+            # and the activity's zone, and a GMT we calculated ourselves could
+            # only disagree with that. Verified live on a device dive and a
+            # hand-entered one.
+            if dive.date_time is not None and dive.date_time != current_dive.date_time:
+                summary_dto["startTimeLocal"] = dive.date_time.strftime("%Y-%m-%dT%H:%M:%S.%f")
+            if dive.duration and dive.duration != current_dive.duration:
+                summary_dto["duration"] = dive.duration
+            if dive.max_depth and dive.max_depth != current_dive.max_depth:
+                summary_dto["maxDepth"] = dive.max_depth
+            if dive.avg_depth is not None and dive.avg_depth != current_dive.avg_depth:
+                summary_dto["averageDepth"] = dive.avg_depth
+
             if dive.temp_min != current_dive.temp_min and dive.temp_min is not None:
                 summary_dto["minTemperature"] = dive.temp_min
             if dive.temp_max != current_dive.temp_max and dive.temp_max is not None:
@@ -516,17 +587,10 @@ class GarminAdapter(BaseDiveAdapter):
         if avg_depth is not None:
             avg_depth = float(avg_depth)
         
-        temp_min = sum_dto.get("minTemperature")
-        if temp_min is not None:
-            temp_min = float(temp_min)
-            
-        temp_max = sum_dto.get("maxTemperature")
-        if temp_max is not None:
-            temp_max = float(temp_max)
-
-        temp_avg = sum_dto.get("averageTemperature")
-        if temp_avg is not None:
-            temp_avg = float(temp_avg)
+        # 0 = never entered (hand-logged dives), not a 0 °C dive
+        temp_min = recorded_water_temp(sum_dto.get("minTemperature"))
+        temp_max = recorded_water_temp(sum_dto.get("maxTemperature"))
+        temp_avg = recorded_water_temp(sum_dto.get("averageTemperature"))
 
         activity_id = str(details.get("activityId") or summary.get("activityId") or "")
         external_ids = {}
@@ -703,6 +767,12 @@ class GarminAdapter(BaseDiveAdapter):
                                 time=time_sec
                             ))
 
+        # Hand-entered or recorded by a watch (rework.md F17). Garmin says so
+        # itself in metadataDTO.manualActivity; a dive with a profile is a
+        # device dive either way, which covers a payload that lacks the flag.
+        manual = metadata.get("manualActivity")
+        device_logged = (not manual) if isinstance(manual, bool) else (True if samples else None)
+
         dive = UnifiedDive(
             date_time=start_time,
             date_time_utc=start_time_utc,
@@ -726,6 +796,7 @@ class GarminAdapter(BaseDiveAdapter):
             lat=lat,
             lng=lng,
             samples=samples,
+            device_logged=device_logged,
             service_fields={"activityName": activity_name, "locationName": location_name},
         )
 

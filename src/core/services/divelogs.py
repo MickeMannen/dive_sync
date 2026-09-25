@@ -43,7 +43,7 @@ class DivelogsAdapter(BaseDiveAdapter):
             FieldSpec(key="divelogs.samples", label="Dive profile", type="samples", unified="samples"),
         ]
 
-    def __init__(self, username: str, password: str, cooldown_seconds: float = 1.0):
+    def __init__(self, username: str, password: str, cooldown_seconds: float = 0.5):
         self.username = username
         self.password = password
         self.cooldown_seconds = cooldown_seconds
@@ -53,8 +53,15 @@ class DivelogsAdapter(BaseDiveAdapter):
 
     def login(self) -> bool:
         logger.info("Attempting Divelogs.org login for user '%s'...", self.username)
-        if not self.username or not self.password:
-            logger.error("No Divelogs credentials provided.")
+        if not self.username:
+            logger.error("No Divelogs username configured.")
+            return False
+        if not self.password:
+            # A configured username with no password is a half-saved account,
+            # not a missing one - say which, so the fix (retype the password in
+            # Settings) is obvious from the log alone.
+            logger.error("No password stored for Divelogs account '%s'. Re-enter it in Settings and save.",
+                         self.username)
             return False
 
         try:

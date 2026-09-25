@@ -13,6 +13,7 @@ from src.core.fields import (
     build_catalog,
     convert_value,
     copy_value,
+    keep_tank_names,
     default_field_links,
     get_field,
     legacy_field_links,
@@ -167,12 +168,15 @@ def test_get_set_field_shapes():
 def test_value_helpers():
     assert values_equal("text", None, "None") and values_equal("text", " a ", "a")
     assert not values_equal("text", "a", "b")
-    assert values_equal("tanks", [GasMixture(oxygen=21, tank_name="x")], [GasMixture(oxygen=21, tank_name="y")])
+    # the sender's tank name counts when it has one; an unnamed sender never blanks a name
+    assert not values_equal("tanks", [GasMixture(oxygen=21, tank_name="x")], [GasMixture(oxygen=21, tank_name="y")])
+    assert not values_equal("tanks", [GasMixture(oxygen=21, tank_name="Micke01")], [GasMixture(oxygen=21)])
+    assert values_equal("tanks", [GasMixture(oxygen=21)], [GasMixture(oxygen=21, tank_name="Main")])
     assert not values_equal("tanks", [GasMixture(oxygen=21)], [GasMixture(oxygen=32)])
     assert is_empty("text", "None") and is_empty("gps", (None, 3.0)) and is_empty("number", (None, None))
     assert not is_empty("number", 0) and not is_empty("gps", (1.0, 2.0)) and is_empty("tanks", [])
     copied = copy_value("tanks", [GasMixture(oxygen=32, helium=10, start_pressure=200, tank_name="left")])
-    assert copied[0].oxygen == 32 and copied[0].tank_name is None  # names dropped, as the old loop did
+    assert copied[0].oxygen == 32 and copied[0].tank_name == "left"
     samples = [UnifiedSample(depth=1.0)]
     assert copy_value("samples", samples) == samples and copy_value("samples", samples) is not samples
     assert convert_value(["a", "b"], "list", "text") == "a, b"
@@ -196,7 +200,10 @@ def test_settings_default_field_links_and_round_trip(tmp_path):
     loaded = ConfigManager.load_settings(path)
     assert loaded == settings
     raw = json.load(open(path))
-    assert raw["field_links"][0]["id"] == "buddy"
+    # rework.md G1: stored as receiver rules on the garmin_divelogs pair, version 2
+    assert raw["settings_version"] == 2 and "field_links" not in raw and "directionality" not in raw
+    assert raw["sync_pairs"][0]["id"] == "garmin_divelogs"
+    assert raw["sync_pairs"][0]["rules"]["divelogs"][0]["id"] == "buddy"
 
 
 def test_old_settings_file_loads_unchanged_with_default_links(tmp_path):
@@ -205,13 +212,13 @@ def test_old_settings_file_loads_unchanged_with_default_links(tmp_path):
     (not today's default, which now differs - C12 migration)."""
     old = {
         "directionality": "to_divelogs",
-        "sync_filters": {"date_from": "2026-01-01", "date_to": None, "only_new": False, "sync_gases": False, "sync_fit": True},
+        "sync_filters": {"date_from": "2026-01-01", "date_to": None, "only_new": False, "sync_gases": False},
         "grace_window_minutes": 20,
         "api_cooldown_seconds": 2.5,
         "schedule": [{"hour": 3, "minute": 15}],
         "cron_jobs": [{
             "id": "nightly", "directionality": "to_garmin", "frequency": "daily", "hour": 1, "minute": 2,
-            "day_of_week": 0, "interval_minutes": 60, "only_new": True, "sync_gases": True, "sync_fit": False, "enabled": True
+            "day_of_week": 0, "interval_minutes": 60, "only_new": True, "sync_gases": True, "enabled": True
         }],
     }
     path = str(tmp_path / "settings.json")
@@ -219,18 +226,23 @@ def test_old_settings_file_loads_unchanged_with_default_links(tmp_path):
         json.dump(old, f)
     loaded = ConfigManager.load_settings(path)
     assert loaded.directionality == "to_divelogs"
-    assert loaded.sync_filters.model_dump() == old["sync_filters"]
+    # every stored value kept; a field added since takes its default
+    assert loaded.sync_filters.model_dump() == dict(old["sync_filters"], use_garmin_cache=True)
     assert loaded.grace_window_minutes == 20 and loaded.api_cooldown_seconds == 2.5
     assert loaded.schedule[0].hour == 3
     assert loaded.cron_jobs[0].id == "nightly" and loaded.cron_jobs[0].field_links is None
     assert loaded.field_links == pre_c12_default_field_links()
     assert all(l.conflict == "prefer_non_empty" for l in loaded.field_links if l.id not in ("tanks",))
-    # and every old key survives a save
+    # and every old key survives a save (the direction now lives on the garmin_divelogs pair)
     ConfigManager.save_settings(loaded, path)
     saved = json.load(open(path))
     for key, value in old.items():
         if key == "cron_jobs":
             assert saved[key][0]["id"] == "nightly"
+        elif key == "directionality":
+            assert saved["sync_pairs"][0]["directionality"] == value
+        elif key == "sync_filters":
+            assert saved[key] == dict(value, use_garmin_cache=True)
         else:
             assert saved[key] == value
 
@@ -252,8 +264,8 @@ def test_settings_file_with_explicit_field_links_is_never_migrated(tmp_path):
     migration only fires when the key is absent entirely."""
     path = str(tmp_path / "settings.json")
     explicit = {
-        "directionality": "bidirectional",
-        "sync_filters": {"date_from": None, "date_to": None, "only_new": True, "sync_gases": True, "sync_fit": False},
+        "directionality": "to_divelogs",
+        "sync_filters": {"date_from": None, "date_to": None, "only_new": True, "sync_gases": True},
         "grace_window_minutes": 15,
         "api_cooldown_seconds": 1.0,
         "schedule": [],
@@ -337,12 +349,16 @@ def test_sample_comparison_resamples_both_sides():
     assert not values_equal("samples", [], stored) and values_equal("samples", [], [])
 
 
-def test_copy_value_tanks_drops_name_but_keeps_role():
+def test_copy_value_tanks_keeps_name_and_role():
     """E5: tank_role is real multi-tank information and must survive a
-    field-link copy between services; tank_name stays dropped (Garmin's
-    sensor names aren't meaningful elsewhere)."""
+    field-link copy between services; so does tank_name (a Garmin tank's is
+    its transmitter's name, which Divelogs shows as the tank name)."""
     tanks = [GasMixture(oxygen=32.0, start_pressure=200.0, end_pressure=50.0, tank_volume=11.1,
                         tank_name="Left", tank_role="backGas")]
     copied = copy_value("tanks", tanks)
-    assert copied[0].tank_role == "backGas" and copied[0].tank_name is None
+    assert copied[0].tank_role == "backGas" and copied[0].tank_name == "Left"
     assert copied[0].oxygen == 32.0 and copied[0].start_pressure == 200.0
+    # a sender without names keeps the receiver's names (position by position)
+    kept = keep_tank_names([GasMixture(oxygen=32.0), GasMixture(oxygen=50.0, tank_name="Deco")],
+                           [GasMixture(oxygen=21.0, tank_name="Main"), GasMixture(oxygen=21.0, tank_name="Old")])
+    assert [g.tank_name for g in kept] == ["Main", "Deco"]

@@ -194,7 +194,7 @@ def test_engine_pair_with_subsurface_target(repo_copy, tmp_path):
     from tests.test_link_engine import FakeGarmin, _dive
 
     links = common_default_links("garmin", "subsurface", match_on_dive_number=False)
-    settings = SettingsModel(sync_filters=SyncFilters(only_new=False), field_links=links)
+    settings = SettingsModel(directionality="to_subsurface", sync_filters=SyncFilters(only_new=False), field_links=links)
     path = str(tmp_path / "settings.json")
     ConfigManager.save_settings(settings, path)
     g = [_dive(date_time=datetime(2026, 8, 29, 12, 52, 59), external_ids={"garmin": "24438065346"}, buddy="Anna"),
@@ -254,3 +254,173 @@ def test_cylinderuse_maps_to_and_from_tank_role(repo_copy):
 def test_render_cylinder_writes_bailout_and_not_used():
     assert 'use="bailout"' in render_cylinder(Cylinder(o2=21.0, use="bailout"))
     assert 'use="not used"' in render_cylinder(Cylinder(use="not used"))
+
+
+# ---------------------------------------------------------------- hand-logged dives: duration and depths
+
+def _hand_logged_dive(repo, rel, dc_lines, dive_lines=("duration 41:00 min",)):
+    path = os.path.join(repo, rel)
+    os.makedirs(path)
+    with open(os.path.join(path, "Dive-90"), "w") as f:
+        f.write("\n".join(dive_lines) + "\n")
+    with open(os.path.join(path, "Divecomputer"), "w") as f:
+        f.write("\n".join(dc_lines) + "\n")
+    return rel + "/Dive-90"
+
+
+def _lines(repo, rel):
+    with open(os.path.join(repo, os.path.dirname(rel), "Divecomputer")) as f:
+        return [line.rstrip("\n") for line in f]
+
+
+def test_hand_logged_dive_takes_new_duration_and_depths(repo_copy):
+    """A dive dive_sync uploaded from a hand-logged Garmin dive (no profile,
+    just duration and max depth on dive_sync's computer - the shape of the
+    owner's real ones) takes edited duration and depths."""
+    dive_id = _hand_logged_dive(repo_copy, "1993/10/10-Sun-11=30=00",
+                                ['model "dive_sync"', "duration 41:00 min", "maxdepth 13.0m",
+                                 'keyvalue "dive_sync:garmin" "24449947904"'])
+    a = SubsurfaceAdapter(repo_copy)
+    a.login()
+    dive = next(d for d in a.fetch_dives() if d.external_ids["subsurface"] == dive_id)
+    assert (dive.duration, dive.max_depth) == (41 * 60, 13.0)
+    dive.duration, dive.max_depth, dive.avg_depth = 45 * 60, 14.5, 9.2
+    assert a.update_dive(dive_id, dive)
+    lines = _lines(repo_copy, dive_id)
+    assert "duration 45:00 min" in lines and "maxdepth 14.5m" in lines and "meandepth 9.2m" in lines
+    assert not any(line[:1] == " " or line[:1].isdigit() for line in lines)   # still no profile: Subsurface draws one
+    assert 'keyvalue "dive_sync:garmin" "24449947904"' in lines
+    again = next(d for d in SubsurfaceAdapter(repo_copy).fetch_dives() if d.external_ids["subsurface"] == dive_id) \
+        if SubsurfaceAdapter(repo_copy).login() else None
+    assert (again.duration, again.max_depth, again.avg_depth) == (45 * 60, 14.5, 9.2)
+
+
+def test_subsurface_manual_dive_gets_its_drawn_profile_redrawn(repo_copy):
+    dive_id = _hand_logged_dive(repo_copy, "1996/07/13-Sat-14=00=00",
+                                ['model "manually added dive"', "duration 38:00 min", "maxdepth 15.0m",
+                                 "salinity 1030g/l", "0:00 0.0m", "2:00 15.0m", "36:00 15.0m", "38:00 0.0m"])
+    a = SubsurfaceAdapter(repo_copy)
+    a.login()
+    dive = next(d for d in a.fetch_dives() if d.external_ids["subsurface"] == dive_id)
+    dive.duration, dive.max_depth, dive.avg_depth = 40 * 60, 12.0, 9.0
+    assert a.update_dive(dive_id, dive)
+    lines = _lines(repo_copy, dive_id)
+    assert lines[:4] == ['model "manually added dive"', "duration 40:00 min", "maxdepth 12.0m", "meandepth 9.0m"]
+    assert "salinity 1030g/l" in lines                               # other lines kept
+    samples = [parse_sample_line(line) for line in lines if line[:1] == " " or line[:1].isdigit()]
+    assert len(samples) == 4                                         # the old drawn profile is gone
+    assert [s.time_s for s in samples] == [0, 600, 1800, 2400] and max(s.depth_m for s in samples) == 12.0
+
+
+def test_recorded_profile_keeps_its_depths(repo_copy):
+    a = SubsurfaceAdapter(repo_copy)
+    a.login()
+    dive = a.fetch_dives()[0]
+    dive_id = dive.external_ids["subsurface"]
+    before = [line for line in _lines(repo_copy, dive_id) if line.startswith(("maxdepth", "meandepth"))]
+    dive.max_depth, dive.avg_depth = dive.max_depth + 5, 1.0
+    assert a.update_dive(dive_id, dive)
+    assert [line for line in _lines(repo_copy, dive_id) if line.startswith(("maxdepth", "meandepth"))] == before
+
+
+def test_simple_profile_matches_duration_max_and_mean():
+    from src.core.services.subsurface import simple_profile
+    samples = simple_profile(2400, 12.0, 9.0)
+    assert [(s.time_s, s.depth_m) for s in samples] == [(0, 0.0), (600, 12.0), (1800, 12.0), (2400, 0.0)]
+    area = sum((b.time_s - a.time_s) * (a.depth_m + b.depth_m) / 2 for a, b in zip(samples, samples[1:]))
+    assert abs(area / 2400 - 9.0) < 0.01                             # its mean depth is the one given
+    assert simple_profile(0, 12.0) == [] and len(simple_profile(60, 30.0)) == 3   # slope clamps to half the dive
+
+
+def test_zero_water_temperature_counts_as_not_recorded(repo_copy):
+    """Garmin stores 0 °C on a hand-logged dive whose temperature was never
+    entered, and earlier versions copied it into Subsurface: read as none,
+    and cleared from the dive when dive_sync next writes it."""
+    from src.core.models import recorded_water_temp
+    assert recorded_water_temp(0) is None and recorded_water_temp("") is None and recorded_water_temp(28.5) == 28.5
+    dive_id = _hand_logged_dive(repo_copy, "1993/10/10-Sun-11=30=00",
+                                ['model "dive_sync"', "duration 41:00 min", "maxdepth 13.0m", "watertemp 0.0°C"],
+                                dive_lines=("duration 41:00 min", "watertemp 0.0°C"))
+    a = SubsurfaceAdapter(repo_copy)
+    a.login()
+    dive = next(d for d in a.fetch_dives() if d.external_ids["subsurface"] == dive_id)
+    assert dive.temp_min is None
+    dive.buddy = "Roger"
+    assert a.update_dive(dive_id, dive)
+    assert not any(line.startswith("watertemp") for line in _lines(repo_copy, dive_id))
+    with open(os.path.join(repo_copy, dive_id)) as f:
+        assert "watertemp" not in f.read()
+
+
+def test_garmin_zero_temperature_is_not_a_reading():
+    from src.core.services.garmin import GarminAdapter
+    garmin = GarminAdapter.__new__(GarminAdapter)
+    summary = {"activityId": 1, "startTimeLocal": "1993-10-10T11:30:00.0", "duration": 2460, "maxDepth": 13.0}
+    hand_logged = garmin._map_to_unified(summary, {"summaryDTO": {"minTemperature": 0.0}})
+    assert hand_logged.temp_min is None
+    real = garmin._map_to_unified(summary, {"summaryDTO": {"minTemperature": 5.0}})
+    assert real.temp_min == 5.0
+
+
+# ---------------------------------------------------------------- renumbered logs (2026-09-25)
+
+def _engine_to(repo, tmp_path, garmin_dives, **settings):
+    from src.core.config import ConfigManager, SettingsModel, SyncFilters
+    from src.core.sync_engine import SyncEngine
+    from tests.test_link_engine import FakeGarmin
+    path = str(tmp_path / "settings.json")
+    ConfigManager.save_settings(SettingsModel(directionality="to_subsurface", sync_filters=SyncFilters(only_new=False),
+                                              api_cooldown_seconds=0.0, **settings), path)
+    return SyncEngine(settings_path=path, credentials_path=str(tmp_path / "c.json"),
+                      source_adapter=FakeGarmin(garmin_dives), target_adapter=SubsurfaceAdapter(repo))
+
+
+def test_same_start_time_beats_a_stale_dive_number(repo_copy, tmp_path):
+    """The owner's case: Garmin renumbered its log (06-13 is now #4, 06-14 is
+    #5) and replaced the activities, so no link holds. Subsurface still has
+    06-14 as "#4". The 06-14 dive must pair with Garmin #5 by its start
+    time, not with Garmin #4 by the number - that pairing uploaded the real
+    dive again as a duplicate."""
+    from tests.test_link_engine import _dive
+    ss_0614 = _hand_logged_dive(repo_copy, "1992/06/14-Sun-10=30=00", ['model "dive_sync"', "duration 40:00 min", "maxdepth 9.0m"])
+    ss_0613 = _hand_logged_dive(repo_copy, "1992/06/13-Sat-23=50=00", ['model "dive_sync"', "duration 40:00 min", "maxdepth 9.0m"])
+    os.rename(os.path.join(repo_copy, ss_0614), os.path.join(repo_copy, os.path.dirname(ss_0614), "Dive-4"))
+    os.rename(os.path.join(repo_copy, ss_0613), os.path.join(repo_copy, os.path.dirname(ss_0613), "Dive-3"))
+    garmin = [_dive(date_time=datetime(1992, 6, 13, 23, 50), external_ids={"garmin": "new-4"}, dive_number=4),
+              _dive(date_time=datetime(1992, 6, 14, 10, 30), external_ids={"garmin": "new-5"}, dive_number=5)]
+    engine = _engine_to(repo_copy, tmp_path, garmin)
+    # the dive list order that made the old matcher take the number first
+    target = sorted(engine.target.fetch_dives(), key=lambda d: d.date_time, reverse=True)
+    pairs, only_garmin, _ = engine.match_dives(garmin, target, {})
+    by_garmin = {a.external_ids["garmin"]: b.date_time for a, b in pairs}
+    assert by_garmin == {"new-4": datetime(1992, 6, 13, 23, 50), "new-5": datetime(1992, 6, 14, 10, 30)}
+    assert only_garmin == []
+
+    # and a real run renumbers both in Subsurface, uploading nothing
+    res = engine.run_sync(dry_run=False)
+    assert res["uploaded_to_subsurface"] == []
+    assert os.path.exists(os.path.join(repo_copy, "1992/06/13-Sat-23=50=00/Dive-4"))
+    assert os.path.exists(os.path.join(repo_copy, "1992/06/14-Sun-10=30=00/Dive-5"))
+    assert not os.path.exists(os.path.join(repo_copy, "1992/06/14-Sun-10=30=00/Dive-4"))
+
+
+def test_links_survive_a_renumbered_subsurface_dive(repo_copy, tmp_path):
+    """A Subsurface id carries its Dive-N file name; renumbering changes it.
+    Links compare on the directory, so the next run still recognises the
+    pair - and a propagate-deletes run never reads the dive as gone."""
+    from tests.test_link_engine import _dive
+    garmin = [_dive(date_time=datetime(2025, 2, 8, 13, 51, 24), external_ids={"garmin": "g23"}, dive_number=23)]
+    engine = _engine_to(repo_copy, tmp_path, garmin, propagate_deletes=True)
+    engine.run_sync(dry_run=False)                                    # renumbers Dive-2 -> Dive-23
+    assert os.path.exists(os.path.join(repo_copy, "2025/02/08-Sat-13=51=24/Dive-23"))
+    assert engine.load_links() == {"g23": "2025/02/08-Sat-13=51=24"}
+
+    garmin[0].dive_number = 24                                        # renumbered again on Garmin
+    again = _engine_to(repo_copy, tmp_path, garmin, propagate_deletes=True)
+    res = again.run_sync(dry_run=False)
+    assert res["uploaded_to_subsurface"] == [] and res["deleted_on_subsurface"] == [] and res["deleted_on_garmin"] == []
+    assert os.path.exists(os.path.join(repo_copy, "2025/02/08-Sat-13=51=24/Dive-24"))
+    # a Garmin dive without a number leaves the Subsurface number alone (no update every run)
+    garmin[0].dive_number = None
+    res = _engine_to(repo_copy, tmp_path, garmin).run_sync(dry_run=False)
+    assert res["updated_on_subsurface"] == [] and os.path.exists(os.path.join(repo_copy, "2025/02/08-Sat-13=51=24/Dive-24"))

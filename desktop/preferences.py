@@ -45,6 +45,21 @@ def set_visible_columns(service: str, columns: List[str]) -> None:
     _save(prefs)
 
 
+def introduce_columns(service: str, keys: List[str]) -> List[str]:
+    """The ``keys`` this service's table has never been offered before,
+    marked as offered now. A column added in a new version is switched on
+    once, even for a table whose saved column choice predates it, and stays
+    off after the user hides it."""
+    prefs = _load()
+    section = prefs.setdefault(service, {})
+    seen = section.setdefault("introduced_columns", [])
+    new = [k for k in keys if k not in seen]
+    if new:
+        seen.extend(new)
+        _save(prefs)
+    return new
+
+
 def get_sort(service: str, default_column: str) -> Tuple[str, bool]:
     """Returns (column_key, ascending)."""
     prefs = _load()

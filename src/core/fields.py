@@ -16,6 +16,14 @@ attribute (``buddy``, ``gps``, ``tanks``); for service-specific scalars it is
 the native API name (``activityName``, ``divesite``) and the value lives in
 ``UnifiedDive.service_fields``.
 
+Since rework.md G1 the *stored* form of a board is receiver-centric: a
+``SyncRule`` says what one service accepts, from which field(s) of the other
+side, and how strongly (``sync_pairs[].rules``, keyed by the receiving
+service id). ``FieldLink`` remains the *executed* and *edited* form until G2
+(engine) and G5/G6 (boards) read rules directly; ``links_to_rules`` and
+``rules_to_links`` convert between the two without loss for every board the
+old model could express.
+
 This module has no I/O and no knowledge of any particular service beyond the
 shipped default link set for the Garmin/Divelogs pair.
 """
@@ -120,6 +128,268 @@ class FieldLink(BaseModel):
         return len(self.source) > 1
 
 
+class SyncRule(BaseModel):
+    """What one service *accepts* for one of its fields (rework.md Track G).
+
+    ``receiver field <- sender field(s) [+ template], policy``. The receiver
+    is the service the rule's ``target`` belongs to; a pair keeps its rules
+    keyed by that receiver (``rules["divelogs"]`` = what Divelogs takes from
+    the other side). There is no direction on a rule: a run writes exactly
+    one receiver (G0) and applies that receiver's rules only. ``conflict`` is
+    read from the receiver's side - ``source_wins``: take the sender's value
+    whenever we differ, even an empty one; ``prefer_source``: take it
+    whenever the sender has a value, never be blanked; ``prefer_non_empty``:
+    fill me only when I am blank; ``manual``: ask when both are non-empty
+    and different; ``target_wins``: never overwrite me (a documented no-op
+    row that states the receiver owns this field).
+
+    A composite rule (several sources + ``template``) may carry ``reverse``:
+    an edited target is then split back into its sources on a run *towards
+    the sources' side*, with ``reverse_conflict`` as that split's policy
+    (``None`` = the same policy as ``conflict``)."""
+    id: str = Field(..., description="Unique id of the rule within its receiver's list")
+    target: str = Field(..., description="Catalogue key of the receiving field, '<receiver id>.<name>'")
+    source: List[str] = Field(..., description="Sender field key(s); several = composite (needs a template)")
+    conflict: ConflictPolicy = Field("source_wins", description="Policy as seen from the receiver")
+    template: Optional[str] = Field(None, description="'{key}' template; required when len(source) > 1")
+    reverse: Optional[str] = Field(None, description="Composite only: regex with named groups that splits an edited "
+                                    "target back into the source fields on a run towards their side")
+    reverse_conflict: Optional[ConflictPolicy] = Field(None, description="Policy of the derived reverse split; None = 'conflict'")
+    separator: str = Field(", ", description="list <-> text rules: join / split token")
+    when: Optional[str] = Field(None, description="Reserved for conditional rules")
+
+    @field_validator("id")
+    @classmethod
+    def _id_not_blank(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("Rule id must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _structure(self) -> "SyncRule":
+        if not self.source:
+            raise ValueError(f"Rule '{self.id}': at least one source field is required")
+        if len(set(self.source)) != len(self.source):
+            raise ValueError(f"Rule '{self.id}': duplicate source fields")
+        if self.target in self.source:
+            raise ValueError(f"Rule '{self.id}': target {self.target!r} is also a source")
+        if "." not in self.target:
+            raise ValueError(f"Rule '{self.id}': target {self.target!r} must be '<service id>.<name>'")
+        if self.is_composite and not self.template:
+            raise ValueError(f"Rule '{self.id}': a composite rule needs a template")
+        if self.reverse and not self.template:
+            raise ValueError(f"Rule '{self.id}': 'reverse' only applies to a templated rule")
+        if self.reverse_conflict and not self.reverse:
+            raise ValueError(f"Rule '{self.id}': 'reverse_conflict' needs a 'reverse' pattern")
+        return self
+
+    @property
+    def is_composite(self) -> bool:
+        return len(self.source) > 1
+
+    @property
+    def receiver_id(self) -> str:
+        return self.target.split(".", 1)[0]
+
+    @property
+    def sender_id(self) -> str:
+        return self.source[0].split(".", 1)[0]
+
+
+Rules = Dict[str, List[SyncRule]]
+MatchKeys = List[List[str]]
+
+
+def _service_of(key: str) -> str:
+    return key.split(".", 1)[0]
+
+
+def links_to_rules(links: Iterable[FieldLink], source_id: str, target_id: str) -> Tuple[Rules, MatchKeys]:
+    """Mechanical migration of a link board to receiver rules (rework.md G1).
+
+    * ``bidirectional`` -> one rule on each receiver with the link's policy,
+      except ``target_wins``, which becomes ``target_wins`` (never overwrite
+      me) on the link's target receiver plus ``source_wins`` on its source
+      receiver - the outcome the link had when both sides were writable.
+    * ``to_target`` / ``to_source`` -> one rule on that receiver. A one-way
+      ``target_wins`` link always copied the other side over (the engine's
+      single-writable-side rule), so it becomes ``source_wins`` to keep that.
+    * A composite lives on its target's receiver; ``to_source`` composites
+      keep their split policy in ``reverse_conflict`` behind a
+      ``target_wins`` (never write the target) rule, and a ``bidirectional``
+      ``target_wins`` composite is the same thing with ``source_wins`` as the
+      split policy - under the receiver reading the two are one rule, so the
+      link view shows both as ``to_source``.
+    * ``off`` -> no rule, except an ``off`` link with ``target_wins``, which
+      is the "never overwrite me" marker and is kept as such.
+    * ``match_order`` -> an entry in the pair's ordered ``match_keys``,
+      written as ``[<source-side key>, <target-side key>]``.
+
+    Rule ids are the link ids; a ``<id>@<receiver>`` suffix that
+    ``rules_to_links`` adds to keep link ids unique is stripped again."""
+    rules: Rules = {}
+    keyed: List[Tuple[int, str, str]] = []
+
+    def add(receiver: str, rule: SyncRule) -> None:
+        rules.setdefault(receiver, []).append(rule)
+
+    def rule_id(link: FieldLink, receiver: str) -> str:
+        suffix = f"@{receiver}"
+        return link.id[: -len(suffix)] if link.id.endswith(suffix) else link.id
+
+    for link in links:
+        tgt_service = _service_of(link.target)
+        src_service = _service_of(link.source[0])
+        if link.match_order is not None:
+            a, b = ((link.source[0], link.target) if src_service == source_id or tgt_service != source_id
+                    else (link.target, link.source[0]))
+            keyed.append((link.match_order, a, b))
+        d = link.direction
+        extras = dict(separator=link.separator, when=link.when)
+        if d == "off":
+            if link.conflict == "target_wins":
+                # the "never overwrite me" marker; an off link never split
+                # anything, so a reverse pattern on it is inert and dropped
+                add(tgt_service, SyncRule(id=rule_id(link, tgt_service), target=link.target, source=list(link.source),
+                                          conflict="target_wins", template=link.template, **extras))
+            continue
+        if link.template:
+            # A composite lives on its target's receiver. Its reverse split
+            # (towards the sources' side) is the same rule read from there:
+            # to_source = never write the target, split with the link's
+            # policy; bidirectional target_wins = never write the target,
+            # the sources take the parsed title (source_wins); any other
+            # bidirectional policy applies both ways. A one-way to_target
+            # composite never split, so an inert reverse pattern is dropped.
+            if d == "to_source":
+                conflict, reverse_conflict, reverse = "target_wins", link.conflict, link.reverse
+            elif d == "bidirectional" and link.conflict == "target_wins":
+                conflict, reverse_conflict, reverse = "target_wins", "source_wins", link.reverse
+            elif d == "bidirectional":
+                conflict, reverse_conflict, reverse = link.conflict, None, link.reverse
+            else:
+                # one-way: a target_wins composite always rendered over its
+                # target (single-writable-side rule), same as a plain link
+                conflict = "source_wins" if link.conflict == "target_wins" else link.conflict
+                reverse_conflict, reverse = None, None
+            add(tgt_service, SyncRule(id=rule_id(link, tgt_service), target=link.target, source=list(link.source),
+                                      conflict=conflict, template=link.template, reverse=reverse,
+                                      reverse_conflict=reverse_conflict, **extras))
+            continue
+        if d in ("bidirectional", "to_target"):
+            conflict = "source_wins" if (d == "to_target" and link.conflict == "target_wins") else link.conflict
+            add(tgt_service, SyncRule(id=rule_id(link, tgt_service), target=link.target, source=[link.source[0]],
+                                      conflict=conflict, **extras))
+        if d in ("bidirectional", "to_source"):
+            conflict = "source_wins" if link.conflict == "target_wins" else link.conflict
+            add(src_service, SyncRule(id=rule_id(link, src_service), target=link.source[0], source=[link.target],
+                                      conflict=conflict, **extras))
+    keyed.sort(key=lambda item: item[0])
+    return rules, [[a, b] for _, a, b in keyed]
+
+
+def rules_to_links(rules: Optional[Rules], match_keys: Optional[MatchKeys],
+                   source_id: str, target_id: str) -> List[FieldLink]:
+    """The link view of a rule set - what the engine executes and the boards
+    edit until G2/G5/G6. Inverse of ``links_to_rules``: two plain rules that
+    mirror each other (same id, same field pair, compatible policies) merge
+    back into one ``bidirectional`` link; a lone ``target_wins`` rule shows
+    as an ``off`` link with that policy; a composite with a
+    ``reverse_conflict`` behind ``target_wins`` is a ``to_source`` composite;
+    a match key without a rule is an ``off`` link with ``match_order``."""
+    rules = rules or {}
+    links: List[FieldLink] = []
+    used: set = set()
+    seen_ids: set = set()
+    receivers = [r for r in (target_id, source_id) if r in rules] + [r for r in rules if r not in (source_id, target_id)]
+
+    def unique(link_id: str, receiver: str) -> str:
+        if link_id not in seen_ids:
+            return link_id
+        return f"{link_id}@{receiver}"
+
+    def partner_of(receiver: str, rule: SyncRule) -> Optional[Tuple[str, SyncRule]]:
+        if rule.template or rule.is_composite:
+            return None
+        other = _service_of(rule.source[0])
+        for cand in rules.get(other, []):
+            if (other, cand.id) in used or cand.template or cand.is_composite:
+                continue
+            if cand.id == rule.id and cand.target == rule.source[0] and cand.source == [rule.target]:
+                return other, cand
+        return None
+
+    for receiver in receivers:
+        for rule in rules[receiver]:
+            if (receiver, rule.id) in used:
+                continue
+            used.add((receiver, rule.id))
+            partner = partner_of(receiver, rule)
+            if partner:
+                other, mirror = partner
+                # Orient the link so its target is on the pair's target side
+                # when the policies allow; a target_wins / source_wins pair is
+                # a two-way target_wins link whose target is the owning side
+                if receiver == target_id or other != target_id:
+                    tgt_rule, src_rule = rule, mirror
+                else:
+                    tgt_rule, src_rule = mirror, rule
+                if {tgt_rule.conflict, src_rule.conflict} == {"target_wins", "source_wins"}:
+                    if tgt_rule.conflict != "target_wins":
+                        tgt_rule, src_rule = src_rule, tgt_rule
+                    conflict = "target_wins"
+                elif tgt_rule.conflict == src_rule.conflict:
+                    conflict = tgt_rule.conflict
+                else:
+                    conflict = None
+                if conflict is not None:
+                    used.add((other, mirror.id))
+                    link_id = unique(rule.id, receiver)
+                    seen_ids.add(link_id)
+                    links.append(FieldLink(id=link_id, source=list(tgt_rule.source), target=tgt_rule.target,
+                                           direction="bidirectional", conflict=conflict,
+                                           separator=tgt_rule.separator, when=tgt_rule.when))
+                    continue
+            if rule.template:
+                if rule.reverse and rule.conflict == "target_wins":
+                    # never write the target, only split it back: a to_source
+                    # composite in link terms (also where a bidirectional
+                    # target_wins composite lands - see links_to_rules)
+                    direction, conflict = "to_source", rule.reverse_conflict or "source_wins"
+                elif rule.reverse:
+                    direction, conflict = "bidirectional", rule.conflict
+                elif rule.conflict == "target_wins":
+                    direction, conflict = "off", "target_wins"
+                else:
+                    direction, conflict = "to_target", rule.conflict
+            elif rule.conflict == "target_wins":
+                direction, conflict = "off", "target_wins"
+            else:
+                direction, conflict = "to_target", rule.conflict
+            link_id = unique(rule.id, receiver)
+            seen_ids.add(link_id)
+            links.append(FieldLink(id=link_id, source=list(rule.source), target=rule.target, direction=direction,
+                                   conflict=conflict, template=rule.template, reverse=rule.reverse,
+                                   separator=rule.separator, when=rule.when))
+
+    for order, pair in enumerate(match_keys or [], start=1):
+        if len(pair) != 2:
+            continue
+        a, b = pair
+        hit = next((l for l in links if not l.template and {l.source[0], l.target} == {a, b}), None)
+        if hit is not None:
+            hit.match_order = order
+            continue
+        base = a.split(".", 1)[1]
+        link_id, n = base, 2
+        while link_id in seen_ids:
+            link_id = f"{base}_{n}"
+            n += 1
+        seen_ids.add(link_id)
+        links.append(FieldLink(id=link_id, source=[a], target=b, direction="off", match_order=order))
+    return links
+
+
 # ---------------------------------------------------------------------------
 # Value access on UnifiedDive
 # ---------------------------------------------------------------------------
@@ -185,13 +455,18 @@ def _close(a: Any, b: Any, tolerance: float) -> bool:
 
 
 def are_gas_mixtures_different(list1: List[GasMixture], list2: List[GasMixture]) -> bool:
-    """Tank-list comparison inherited from the old loop (tank names ignored),
-    with tolerances for the services' storage rounding so an unchanged tank
-    is not rewritten on every run."""
+    """Tank-list comparison inherited from the old loop, with tolerances for
+    the services' storage rounding so an unchanged tank is not rewritten on
+    every run. ``list1`` is the incoming (sender) side: its tank name counts
+    when it has one (e.g. a Garmin transmitter name), but a tank without a
+    name never differs from a named one - writing it would only blank a name
+    the receiver already has (``keep_tank_names``)."""
     if len(list1) != len(list2):
         return True
     for gm1, gm2 in zip(list1, list2):
         if gm1.oxygen != gm2.oxygen or gm1.helium != gm2.helium:
+            return True
+        if (gm1.tank_name or "").strip() and (gm1.tank_name or "").strip() != (gm2.tank_name or "").strip():
             return True
         if not _close(gm1.start_pressure, gm2.start_pressure, PRESSURE_TOLERANCE):
             return True
@@ -310,13 +585,23 @@ def is_empty(field_type: str, value: Any) -> bool:
     return False
 
 
+def keep_tank_names(new: Optional[List[GasMixture]], old: Optional[List[GasMixture]]) -> Optional[List[GasMixture]]:
+    """``new`` with each unnamed tank taking the name of the tank at the same
+    position in ``old``: a sender without names (a dive with no transmitter)
+    must not blank the names the receiver already has."""
+    if not new or not old:
+        return new
+    return [gm.model_copy(update={"tank_name": old[i].tank_name})
+            if not (gm.tank_name or "").strip() and i < len(old) and old[i].tank_name else gm
+            for i, gm in enumerate(new)]
+
+
 def copy_value(field_type: str, value: Any) -> Any:
-    """Value to write to the other side. Tanks lose their name on the way,
-    exactly as the old Garmin->Divelogs gas copy did (Garmin tank names are
-    sensor names, not meaningful on the other service). tank_role travels
-    through unchanged (E5): it is real multi-tank information a target
-    adapter may itself be unable to store (e.g. Divelogs has no slot for
-    it), in which case the adapter's own write path drops it, but the
+    """Value to write to the other side. Tanks keep their name (a Garmin
+    tank's is its transmitter's name, e.g. "Micke01", which Divelogs shows as
+    the tank name) and tank_role (E5): real multi-tank information a target
+    adapter may itself be unable to store (e.g. Divelogs has no slot for a
+    role), in which case the adapter's own write path drops it, but the
     engine must not discard it pre-emptively for pairs that do model it
     (Submersion <-> Subsurface)."""
     if value is None:
@@ -330,6 +615,7 @@ def copy_value(field_type: str, value: Any) -> Any:
                 end_pressure=gm.end_pressure,
                 tank_volume=gm.tank_volume,
                 tank_role=gm.tank_role,
+                tank_name=gm.tank_name,
             )
             for gm in value
         ]
@@ -466,7 +752,7 @@ def common_default_links(source_id: str, target_id: str, match_on_dive_number: b
     filled from the other for free, but a real conflict (both sides non-empty
     and different) is queued in the Conflicts view instead of being silently
     left alone - ``manual`` and ``prefer_non_empty`` behave identically
-    except for that one case (see ``SyncEngine._apply_link``). ``samples``
+    except for that one case (see ``SyncEngine._apply_rule``). ``samples``
     stays ``prefer_non_empty``: a depth/temperature profile "conflict" is
     hundreds of points, not something a person can usefully arbitrate one
     value at a time in the Conflicts UI. ``tanks`` is ``prefer_source``
@@ -476,9 +762,12 @@ def common_default_links(source_id: str, target_id: str, match_on_dive_number: b
     whenever that side has tank data, which fixes the case where a target
     already had *some* (stale) tanks and ``prefer_non_empty`` refused to
     update them. A source with no tank data at all (a manually created
-    Garmin dive) still never blanks a target that has real tank data. The
-    dive-number link is a match key only where both services let the user
-    set the number."""
+    Garmin dive) still never blanks a target that has real tank data. Where
+    both services let the user set the number, the dive number is a match
+    key and follows the source (``to_target``, ``prefer_source``, decided
+    2026-09-25): a number copied once at upload went stale when the source
+    log was renumbered, leaving two Subsurface dives with the same number. A
+    source dive without a number leaves the target's alone."""
     s, t = source_id, target_id
     ask = "manual"
     links = [
@@ -492,7 +781,34 @@ def common_default_links(source_id: str, target_id: str, match_on_dive_number: b
     ]
     if match_on_dive_number:
         links.append(FieldLink(id="dive_number", source=[f"{s}.dive_number"], target=f"{t}.dive_number",
-                               direction="off", match_order=1))
+                               direction="to_target", conflict="prefer_source", match_order=1))
+    return links
+
+
+def submersion_default_links(source_id: str, target_id: str, match_on_dive_number: bool = True) -> List[FieldLink]:
+    """The shipped board for a pair with Submersion on one side (rework.md F17,
+    decided 2026-09-24): the common links minus ``samples`` and ``tanks``.
+
+    Submersion's depth profile, cylinders, tank-pressure series and gas
+    switches come from the diver importing the dive's ``.fit`` in the app,
+    which derives them from the file; dive_sync only keeps the soft fields in
+    step. Both fields are read-only in Submersion's catalogue too, so a
+    hand-written rule for them is dropped with a warning rather than silently
+    honoured - this just keeps them off the shipped board.
+
+    With Garmin on the other side the board also names the two fields the
+    generic one cannot guess: Garmin's *location name* is the dive site (its
+    *activity* name is a title, which is what the unified ``location`` field
+    collapses to and what made dive_sync name Submersion's sites after it),
+    and its *activity name* is the dive's own name."""
+    links = [link for link in common_default_links(source_id, target_id, match_on_dive_number=match_on_dive_number)
+             if link.id not in ("samples", "tanks")]
+    if {source_id, target_id} == {"garmin", "submersion"}:
+        garmin_sends = source_id == "garmin"
+        for link_id, garmin_key, sub_key in (("site", "garmin.locationName", "submersion.location"),
+                                             ("dive_name", "garmin.activityName", "submersion.dive_name")):
+            source, target = (garmin_key, sub_key) if garmin_sends else (sub_key, garmin_key)
+            links.append(FieldLink(id=link_id, source=[source], target=target, conflict="manual"))
     return links
 
 

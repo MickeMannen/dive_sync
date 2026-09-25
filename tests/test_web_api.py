@@ -140,13 +140,12 @@ def test_cron_jobs_api(tmp_path, monkeypatch):
 
     # 2. Save settings with a cron job
     save_payload = {
-        "directionality": "bidirectional",
+        "directionality": "to_divelogs",
         "sync_filters": {
             "date_from": "2026-01-01",
             "date_to": "2026-12-31",
             "only_new": True,
             "sync_gases": True,
-            "sync_fit": False
         },
         "grace_window_minutes": 15,
         "api_cooldown_seconds": 1.0,
@@ -194,7 +193,8 @@ def test_cron_jobs_api(tmp_path, monkeypatch):
     assert res.json()["next_scheduled_run"] is not None
 
 
-def test_fields_api():
+def test_fields_api(tmp_path, monkeypatch):
+    _isolated_settings(tmp_path, monkeypatch)
     client = TestClient(app)
     res = client.get("/api/fields")
     assert res.status_code == 200
@@ -266,8 +266,8 @@ def _isolated_settings(tmp_path, monkeypatch):
 
 def _base_settings_payload():
     return {
-        "directionality": "bidirectional",
-        "sync_filters": {"date_from": None, "date_to": None, "only_new": True, "sync_gases": True, "sync_fit": False},
+        "directionality": "to_divelogs",
+        "sync_filters": {"date_from": None, "date_to": None, "only_new": True, "sync_gases": True},
         "grace_window_minutes": 15,
         "api_cooldown_seconds": 1.0,
         "schedule": [],
@@ -275,15 +275,21 @@ def _base_settings_payload():
     }
 
 
-def test_settings_api_carries_field_links(tmp_path, monkeypatch):
+def _default_rules(client):
+    return client.get("/api/settings").json()["sync_pairs"][0]["rules"]
+
+
+def test_settings_api_accepts_a_version_1_board(tmp_path, monkeypatch):
+    """A client may still post the garmin_divelogs board as ``field_links``
+    (version 1); it is stored as rules and read back as such (rework.md G7)."""
     _isolated_settings(tmp_path, monkeypatch)
     client = TestClient(app)
 
-    # Defaults come back with the shipped board
+    # Defaults come back with the shipped board, as rules
     res = client.get("/api/settings")
-    assert res.status_code == 200
-    default_ids = [l["id"] for l in res.json()["field_links"]]
-    assert "buddy" in default_ids and "site" in default_ids
+    assert res.status_code == 200 and "field_links" not in res.json()
+    rules = _default_rules(client)
+    assert {r["id"] for r in rules["divelogs"]} >= {"buddy", "site"}
 
     # Saving an edited board keeps it
     payload = _base_settings_payload()
@@ -292,14 +298,14 @@ def test_settings_api_carries_field_links(tmp_path, monkeypatch):
     ]
     res = client.post("/api/settings", json=payload)
     assert res.status_code == 200, res.text
-    links = client.get("/api/settings").json()["field_links"]
-    assert len(links) == 1 and links[0]["conflict"] == "prefer_non_empty"
+    rules = _default_rules(client)
+    assert list(rules) == ["divelogs"] and len(rules["divelogs"]) == 1 and rules["divelogs"][0]["conflict"] == "prefer_non_empty"
 
     # A settings form that omits field_links does not wipe the board
     res = client.post("/api/settings", json=_base_settings_payload())
     assert res.status_code == 200
-    links = client.get("/api/settings").json()["field_links"]
-    assert len(links) == 1 and links[0]["id"] == "buddy"
+    rules = _default_rules(client)
+    assert len(rules["divelogs"]) == 1 and rules["divelogs"][0]["id"] == "buddy"
 
     # An invalid board is refused with the reasons
     payload["field_links"] = [{"id": "bad", "source": ["garmin.buddy"], "target": "divelogs.max_depth"}]
@@ -307,7 +313,7 @@ def test_settings_api_carries_field_links(tmp_path, monkeypatch):
     assert res.status_code == 400
     assert "cannot link garmin.buddy (text) to divelogs.max_depth (number)" in res.json()["detail"]["errors"][0]
     # ... and the previous board is untouched
-    assert client.get("/api/settings").json()["field_links"][0]["id"] == "buddy"
+    assert _default_rules(client)["divelogs"][0]["id"] == "buddy"
 
     # Cron jobs may carry their own board, which is validated too
     payload = _base_settings_payload()
@@ -414,9 +420,11 @@ class _FakeEngine:
         self.full_compare = None
         self.resolved = []
 
-    def test_mapping(self, links=None, limit=10):
+    def test_mapping(self, links=None, limit=10, rules=None, match_keys=None):
+        self.seen = {"links": links, "rules": rules, "match_keys": match_keys}
+        first = (links or [None])[0].id if links else (next(iter(rules.values()))[0].id if rules else "buddy")
         return {"ok": True, "problems": [], "matched": 1, "fetched": {"garmin": limit, "divelogs": limit},
-                "rows": [{"link": (links or [None])[0].id if links else "buddy", "result": "equal"}]}
+                "rows": [{"link": first, "result": "equal"}]}
 
     def list_conflicts(self):
         from src.core.conflicts import Conflict
@@ -468,10 +476,12 @@ def test_profile_export_and_import_endpoints(tmp_path, monkeypatch):
     res = client.get("/api/settings/export")
     assert res.status_code == 200 and res.headers["content-disposition"].startswith("attachment")
     profile = res.json()
-    assert profile["dive_sync_profile"] == 1 and "field_links" in profile
+    assert profile["dive_sync_profile"] == 2 and "sync_pairs" in profile and "field_links" not in profile
 
     profile["grace_window_minutes"] = 45
-    profile["field_links"] = [l for l in profile["field_links"] if l["id"] in ("buddy", "notes")]
+    rules = profile["sync_pairs"][0]["rules"]
+    for receiver in rules:
+        rules[receiver] = [r for r in rules[receiver] if r["id"] in ("buddy", "notes")]
     upload = {"file": ("profile.json", io.BytesIO(_json.dumps(profile).encode()), "application/json")}
     res = client.post("/api/settings/import", files=upload)
     assert res.status_code == 200, res.text
@@ -483,9 +493,24 @@ def test_profile_export_and_import_endpoints(tmp_path, monkeypatch):
     res = client.post("/api/settings/import?apply=true", files=upload)
     assert res.status_code == 200 and res.json()["applied"] is True
     saved = client.get("/api/settings").json()
-    assert saved["grace_window_minutes"] == 45 and [l["id"] for l in saved["field_links"]] == ["buddy", "notes"]
+    assert saved["grace_window_minutes"] == 45
+    assert [r["id"] for r in saved["sync_pairs"][0]["rules"]["divelogs"]] == ["buddy", "notes"]
 
     bad = {"file": ("x.json", io.BytesIO(b"{not json"), "application/json")}
     assert client.post("/api/settings/import", files=bad).status_code == 400
     newer = {"file": ("x.json", io.BytesIO(_json.dumps({"dive_sync_profile": 99}).encode()), "application/json")}
     assert "newer" in client.post("/api/settings/import", files=newer).json()["detail"]
+
+
+def test_about_and_version_endpoints(monkeypatch):
+    from fastapi.testclient import TestClient
+    from src.core import version as version_mod
+    from src.web.app import app
+    monkeypatch.setattr(version_mod.requests, "get", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
+    version_mod.VERSION_CHECK_CACHE["last_checked"] = 0.0
+    c = TestClient(app)
+    about = c.get("/api/about").json()
+    assert about["license_name"] == "MIT" and "Permission is hereby granted" in about["license_text"]
+    assert about["version"] and about["version"] != "local-dev" and about["project_url"].startswith("https://")
+    v = c.get("/api/version").json()                        # the keys the sidebar label reads
+    assert v["current_version"] == about["version"] and "update_available" in v

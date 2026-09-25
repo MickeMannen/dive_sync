@@ -24,17 +24,33 @@ def _table(headers, rows):
 
 
 def print_mapping(engine):
+    """rework.md G3: the board as its two receiver lists - what each side
+    accepts from the other - plus the pair's match keys."""
     from src.core.templates import validate_links
-    links = engine.settings.field_links
+    rules = engine.rules
+    total = sum(len(items) for items in rules.values())
     print(f"Mapping board for {engine.source_id} -> {engine.target_id} "
-          f"(directionality: {engine.settings.directionality}, {len(links)} links)\n")
-    rows = []
-    for link in links:
-        arrow = {"bidirectional": "<->", "to_target": "->", "to_source": "<-", "off": "off"}[link.direction]
-        rows.append([link.id, " + ".join(link.source), arrow, link.target, link.conflict,
-                     link.match_order if link.match_order is not None else "", link.template or ""])
-    print(_table(["id", "source", "", "target", "conflict", "match", "template"], rows))
-    problems = validate_links(links, engine.catalog)
+          f"(pair {engine.pair.id}, directionality: {engine.direction}, {total} rules)\n")
+    receivers = [r for r in (engine.target_id, engine.source_id) if r in rules] + \
+                [r for r in rules if r not in (engine.source_id, engine.target_id)]
+    for receiver in receivers:
+        other = engine.source_id if receiver == engine.target_id else engine.target_id
+        active = "(this run's receiver)" if receiver == engine.receiver_id() else "(not written by this run)"
+        print(f"What {receiver} takes from {other} {active}:")
+        rows = []
+        for rule in rules[receiver]:
+            policy = rule.conflict + (" (never overwrite)" if rule.conflict == "target_wins" else "")
+            reverse = ""
+            if rule.reverse:
+                reverse = f"splits back with {rule.reverse_conflict or rule.conflict}"
+            rows.append([rule.id, rule.target, "<-", " + ".join(rule.source), policy, rule.template or "", reverse])
+        print(_table(["id", "receiver field", "", "from", "policy", "template", "reverse"], rows))
+        print()
+    if engine.match_keys:
+        print("Match keys (before start time): " + ", ".join(f"{a} = {b}" for a, b in engine.match_keys))
+    else:
+        print("Match keys: none (start time only)")
+    problems = validate_links(engine.field_links, engine.catalog)
     if problems:
         print("\nProblems:")
         for p in problems:
@@ -110,15 +126,16 @@ def print_test_mapping(out):
         for p in out.get("problems", []):
             print(f"  - {p}")
         return
-    print(f"Test mapping {out['source']} -> {out['target']} (directionality: {out['directionality']}): "
-          f"fetched {out['fetched']}, {out['matched']} matched")
+    print(f"Test mapping {out['source']} -> {out['target']} (directionality: {out['directionality']}, "
+          f"receiver: {out.get('receiver')}): fetched {out['fetched']}, {out['matched']} matched")
     for side, times in out["unmatched"].items():
         if times:
             print(f"  only on {side}: {', '.join(times)}")
-    rows = [[r["dive_time"], r["link"], r["source_key"], r["source_value"], r["target_key"], r["target_value"],
+    rows = [[r["dive_time"], r["link"] + (" (split)" if r.get("split") else ""), r.get("receiver", ""),
+             r["source_key"], r["source_value"], r["target_key"], r["target_value"],
              r["result"], "; ".join(r["warnings"])] for r in out["rows"]]
     print()
-    print(_table(["dive", "link", "source", "value", "target", "value", "result", "warnings"], rows))
+    print(_table(["dive", "rule", "receiver", "from", "value", "receiver field", "value", "result", "warnings"], rows))
     print("\nRead-only: nothing was written.")
 
 
@@ -171,17 +188,31 @@ def main():
         action="store_true",
         help="Perform a full sync instead of incremental sync (defaults to incremental)."
     )
+    parser.add_argument(
+        "--no-garmin-cache",
+        dest="no_garmin_cache",
+        action="store_true",
+        help="Fetch every Garmin dive from Garmin Connect instead of reusing unchanged ones from the local "
+             "refresh cache (needed to pick up an edit to only notes, buddy, weight or visibility)."
+    )
     
     def direction_value(value: str) -> str:
         value = value.strip().lower()
-        if value == "bidirectional" or value.startswith("to_"):
+        if value == "bidirectional":
+            raise argparse.ArgumentTypeError(
+                "'bidirectional' is no longer a run mode: a run writes one side only. "
+                "Run each direction separately (e.g. --direction to_divelogs, then --direction to_garmin)."
+            )
+        if value.startswith("to_") and len(value) > 3:
             return value
-        raise argparse.ArgumentTypeError("expected bidirectional, to_<service> (e.g. to_divelogs), to_source or to_target")
+        raise argparse.ArgumentTypeError("expected to_<service> (e.g. to_divelogs), to_source or to_target")
 
     parser.add_argument(
         "--direction",
         type=direction_value,
-        help="Override config: bidirectional, to_<service> (to_garmin, to_divelogs, to_subsurface, ...), to_source or to_target."
+        help="Override the saved direction: to_<service> (to_garmin, to_divelogs, to_subsurface, ...), to_source or "
+             "to_target. A run writes exactly one side; a two-way sync is two runs. Without this flag the pair's "
+             "saved direction is used."
     )
     
     default_data_dir = os.environ.get("DATA_DIR", "./data")
@@ -206,7 +237,8 @@ def main():
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrite/clear existing local mock data directories before downloading raw data."
+        help="With --save-raw-data: fetch every Garmin dive again instead of reusing the unchanged ones "
+             "(other services are always downloaded in full)."
     )
 
     parser.add_argument(
@@ -338,7 +370,6 @@ def main():
                 garmin_username=args.garmin,
                 divelogs_username=args.divelogs
             )
-            engine.run_overrides = {}
 
         if args.show_mapping:
             print_mapping(engine)
@@ -380,6 +411,8 @@ def main():
             run_kwargs = dict(engine.run_overrides)
             if args.direction:
                 run_kwargs["direction_override"] = args.direction
+            if args.no_garmin_cache:
+                run_kwargs["use_garmin_cache_override"] = False
             results = engine.run_sync(
                 dry_run=args.dry_run,
                 date_from_override=args.date_from,

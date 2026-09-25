@@ -16,7 +16,10 @@ restriction — ``reverse_parse`` splits an edited target back into its
 sources when the pattern fully matches it, and the direction may then also
 be ``bidirectional``/``to_source``. Only text-typed sources are supported,
 since recovering a number or datetime from free text needs a format the
-regex alone can't express reliably.
+regex alone can't express reliably. ``reverse`` may also be ``"auto"``
+(``AUTO_REVERSE``): the pattern is then derived from the template itself
+(``auto_reverse_pattern``), so ``{location}, {divesite}`` splits on its
+first ", " without the user writing a regex.
 
 ``validate_links`` is the full save-time check for a board: the structural
 checks from ``fields.validate_field_links`` plus template validation (unknown
@@ -46,6 +49,49 @@ _FORMATTER = Formatter()
 
 class TemplateError(ValueError):
     pass
+
+
+AUTO_REVERSE = "auto"
+
+
+def _literal_pattern(literal: str) -> str:
+    """A template literal as regex, tolerant of the spacing around it: an
+    edited "Gozo ,Blue Hole" still splits on the ", " of the template."""
+    parts = [re.escape(p) for p in literal.split()]
+    if not parts:
+        return r"\s+" if literal else ""
+    return r"\s*" + r"\s*".join(parts) + r"\s*"
+
+
+def auto_reverse_pattern(template: str) -> str:
+    """The reverse pattern ``"auto"`` stands for: the template with every
+    placeholder turned into a lazy named group and every literal matched
+    as-is (spacing around it optional). Raises ``TemplateError`` when two
+    placeholders are not separated by text - there is nothing to split on."""
+    out, previous_was_field = [], False
+    for literal, key, _spec, _conv in parse_template(template):
+        if literal:
+            out.append(_literal_pattern(literal))
+        if key is None:
+            continue
+        if previous_was_field and not literal:
+            raise TemplateError("an automatic split needs text between the fields, e.g. \"{a}, {b}\"")
+        name = key.split(".", 1)[-1]
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            raise TemplateError(f"field {key} cannot be split automatically")
+        out.append(f"(?P<{name}>.+?)")
+        previous_was_field = True
+    return "".join(out)
+
+
+def reverse_pattern(link) -> Optional[str]:
+    """The regex ``link.reverse`` means: itself, or the template-derived
+    pattern for ``"auto"``. ``None`` without a reverse pattern."""
+    if not link.reverse:
+        return None
+    if link.reverse.strip().lower() == AUTO_REVERSE:
+        return auto_reverse_pattern(link.template or "")
+    return link.reverse
 
 
 def parse_template(template: str) -> List[Tuple[str, Optional[str], Optional[str], Optional[str]]]:
@@ -206,7 +252,7 @@ def reverse_keys(link: FieldLink, catalog: Dict[str, FieldSpec]) -> List[Tuple[s
     if not link.reverse:
         return []
     try:
-        pattern = re.compile(link.reverse)
+        pattern = re.compile(reverse_pattern(link))
     except re.error as e:
         raise TemplateError(f"Link '{link.id}': malformed reverse pattern: {e}") from e
     return [(name, resolve_key(name, link, catalog)) for name in pattern.groupindex]
@@ -222,10 +268,10 @@ def reverse_parse(link: FieldLink, text: Any, catalog: Dict[str, FieldSpec]) -> 
     if not link.reverse or not isinstance(text, str):
         return None
     try:
-        pattern = re.compile(link.reverse)
-    except re.error:
+        pattern = re.compile(reverse_pattern(link))
+    except (re.error, TemplateError):
         return None
-    match = pattern.fullmatch(text)
+    match = pattern.fullmatch(text.strip())
     if not match:
         return None
     out: Dict[str, str] = {}
@@ -235,7 +281,7 @@ def reverse_parse(link: FieldLink, text: Any, catalog: Dict[str, FieldSpec]) -> 
         resolved = resolve_key(name, link, catalog)
         if resolved is None or resolved not in link.source:
             continue
-        out[resolved] = value
+        out[resolved] = value.strip()
     return out or None
 
 

@@ -39,7 +39,7 @@ from xml.etree import ElementTree as ET
 
 from src.core.adapter import BaseDiveAdapter
 from src.core.fields import FieldSpec
-from src.core.models import GasMixture, UnifiedDive, UnifiedSample
+from src.core.models import GasMixture, UnifiedDive, UnifiedSample, recorded_water_temp
 
 logger = logging.getLogger("dive_sync.uddf")
 
@@ -186,7 +186,7 @@ def read_uddf(path: str) -> Tuple[ET.Element, List[UnifiedDive]]:
                 duration=int(round(duration or 0)),
                 max_depth=max_depth or 0.0,
                 avg_depth=_float(after, "averagedepth"),
-                temp_min=kelvin_to_c(_float(after, "lowesttemperature")),
+                temp_min=recorded_water_temp(kelvin_to_c(_float(after, "lowesttemperature"))),
                 external_ids={SERVICE_ID: dive.get("id") or f"uddf-{when.strftime('%Y%m%dT%H%M%S')}"},
                 gas_mixtures=tanks,
                 location=location or None,

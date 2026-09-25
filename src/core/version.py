@@ -29,7 +29,8 @@ def is_newer(current: str, latest: str) -> bool:
     return parse_version(latest) > parse_version(current)
 
 def get_version_info() -> Dict[str, Any]:
-    current_version = os.environ.get("APP_VERSION", "local-dev")
+    from src.core.about import app_version
+    current_version = app_version()
     current_time = time.time()
     
     # Check cache (1 hour)

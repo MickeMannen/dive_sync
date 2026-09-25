@@ -398,7 +398,7 @@ def test_multi_account_handling(tmp_path):
     from src.core.config import CredentialsModel
     
     settings_data = {
-        "directionality": "bidirectional",
+        "directionality": "to_divelogs",
         "sync_filters": {},
         "grace_window_minutes": 15,
         "api_cooldown_seconds": 0.0,
@@ -592,8 +592,66 @@ def test_garmin_update_dive_sends_minimal_summary_dto_not_full_echo():
     assert summary_dto == {
         "startLatitude": 4.805935, "startLongitude": 103.686585,
         "minTemperature": 29.3, "maxTemperature": 30.3, "averageTemperature": 29.3,
+        # start time and duration differ from the stored dive, so they go too
+        # (rework.md G8: these are writable after all); maxDepth is unchanged
+        # at 24.0, so the changed-fields-only rule keeps it out
+        "startTimeLocal": "2026-06-27T11:24:00.000000", "duration": 2884,
     }
     assert "minElevation" not in summary_dto and "maxElevation" not in summary_dto
+    assert "maxDepth" not in summary_dto
+    # startTimeGMT is never sent: Garmin recomputes it from the local time and
+    # the activity's zone (G8), so a GMT of our own could only disagree
+    assert "startTimeGMT" not in summary_dto
+
+
+def test_garmin_update_dive_sends_depth_and_duration_changes(tmp_path):
+    """rework.md G8, probed live 2026-09-23: duration, max depth, average
+    depth and start time are writable through the minimal summaryDTO PUT, on
+    hand-entered and device-logged dives alike. They were locked before on the
+    assumption Garmin derives them from the recording."""
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    g.logged_in = True
+    g.cooldown_seconds = 0
+    current_raw = {
+        "activityId": "2",
+        "activityName": "Dive",          # matches the dives below, so only summaryDTO can differ
+        "summaryDTO": {"startTimeLocal": "2026-06-27T11:24:00.0", "duration": 2884,
+                       "maxDepth": 24.0, "averageDepth": 12.5, "minElevation": -24.0},
+        "diveInfo": {},
+    }
+    put_calls = []
+
+    class FakeApiClient:
+        @staticmethod
+        def put(_domain, _path, json=None, api=None):
+            put_calls.append(json)
+            return {}
+
+    class FakeClient:
+        client = FakeApiClient()
+
+        def connectapi(self, url, params=None):
+            return current_raw
+
+    g.client = FakeClient()
+
+    # every one of the four differs from what is stored
+    changed = UnifiedDive(date_time=datetime(2026, 6, 27, 11, 30), duration=3000,
+                          max_depth=26.5, avg_depth=13.0, location="Dive")
+    assert g.update_dive("2", changed) is True
+    assert put_calls[0]["summaryDTO"] == {
+        "startTimeLocal": "2026-06-27T11:30:00.000000", "duration": 3000,
+        "maxDepth": 26.5, "averageDepth": 13.0,
+    }
+
+    # nothing differs -> nothing to send, so no PUT at all (and in particular
+    # no summaryDTO echoing minElevation back, which would be rejected)
+    put_calls.clear()
+    same = UnifiedDive(date_time=datetime(2026, 6, 27, 11, 24), duration=2884,
+                       max_depth=24.0, avg_depth=12.5, location="Dive")
+    assert g.update_dive("2", same) is True
+    assert put_calls == [], put_calls
 
 
 def test_engine_passes_zone_override_to_garmin(tmp_path):
@@ -639,3 +697,211 @@ def test_garmin_tank_role_stays_unmapped():
                                         {"gasIndex": 1, "oxygenContent": 21, "status": 2}]}}
     dive = g._map_to_unified({}, details)
     assert len(dive.gas_mixtures) == 2 and all(t.tank_role is None for t in dive.gas_mixtures)
+
+
+def test_garmin_download_skips_dives_already_cached(tmp_path, monkeypatch):
+    """rework.md E15: a refresh used to cost three API calls and three
+    cool-downs per dive, every dive, every time. A dive already on disk whose
+    listing entry is unchanged is now left alone."""
+    import json as _json
+    from src.core.sync_engine import SyncEngine, _garmin_listing_fingerprint
+
+    diving = {"typeKey": "diving"}
+    listing = [
+        {"activityId": 1, "activityName": "One", "diveNumber": 1, "maxDepth": 18.0, "activityType": diving,
+         "startTimeLocal": "2026-06-01 10:00:00", "metadataDTO": {"diveNumber": 1}},
+        {"activityId": 2, "activityName": "Two", "diveNumber": 2, "maxDepth": 22.0, "activityType": diving,
+         "startTimeLocal": "2026-06-02 10:00:00", "metadataDTO": {"diveNumber": 2}},
+        {"activityId": 3, "activityName": "Three", "diveNumber": 3, "maxDepth": 12.0, "activityType": diving,
+         "startTimeLocal": "2026-06-03 10:00:00", "metadataDTO": {"diveNumber": 3}},
+    ]
+    detail_calls = []
+
+    class FakeGarminClient:
+        def connectapi(self, url, params=None):
+            if "tanksensor" in url:
+                return {}
+            detail_calls.append(url.rsplit("/", 1)[-1])
+            return {"activityId": url.rsplit("/", 1)[-1], "metadataDTO": {}}
+
+        def get_activities(self, start, limit, activitytype=None):
+            return listing if start == 0 else []
+
+        def get_activity_details(self, activity_id):
+            return {}
+
+    # a minimal stand-in for the Garmin adapter the download path uses
+    class FakeAdapter:
+        client = FakeGarminClient()
+        cooldown_seconds = 0
+
+        def login(self):
+            return True
+
+    engine = SyncEngine(settings_path=str(tmp_path / "settings.json"),
+                        credentials_path=str(tmp_path / "credentials.json"),
+                        mock_data_dir=str(tmp_path / "mock"))
+    adapter = FakeAdapter()
+    monkeypatch.setattr(type(engine), "garmin", property(lambda self: adapter))
+    monkeypatch.setattr(type(engine), "garmin_username", property(lambda self: "u"))
+    monkeypatch.setattr(type(engine), "garmin_dir_name", property(lambda self: "garmin"))
+
+    base = str(tmp_path / "cache")
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert sorted(detail_calls) == ["1", "2", "3"], detail_calls
+
+    # second run: nothing changed, so nothing is fetched again
+    detail_calls.clear()
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert detail_calls == [], detail_calls
+
+    # a dive edited on Garmin (its listing entry changed) is re-fetched, alone
+    listing[1] = dict(listing[1], activityName="Two, renamed")   # edited on Garmin
+    detail_calls.clear()
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert detail_calls == ["2"], detail_calls
+
+    # ... and overwrite=True rebuilds everything, for edits the listing hides
+    detail_calls.clear()
+    assert engine.download_and_save_raw_data(mock_data_dir=base, overwrite=True, include_divelogs=False) is True
+    assert sorted(detail_calls) == ["1", "2", "3"], detail_calls
+
+    # the fingerprint ignores per-session noise, or nothing would ever match
+    entry = dict(listing[0], userRoles=["a"], ownerDisplayName="me")
+    assert _garmin_listing_fingerprint(entry) == _garmin_listing_fingerprint(listing[0])
+
+
+def test_garmin_download_removes_dives_deleted_or_renumbered_on_garmin(tmp_path, monkeypatch):
+    """rework.md E18: the cache only ever grew. A dive deleted on Garmin kept
+    its file, and one given a new dive number got a second file while the old
+    one stayed behind - both showed as ghosts in the desktop dive table."""
+    import json as _json
+    import os as _os
+    from src.core.sync_engine import SyncEngine
+
+    diving = {"typeKey": "diving"}
+    listing = [
+        {"activityId": 1, "activityName": "One", "diveNumber": 1, "activityType": diving,
+         "startTimeLocal": "2026-06-01 10:00:00", "metadataDTO": {"diveNumber": 1}},
+        {"activityId": 2, "activityName": "Two", "diveNumber": 2, "activityType": diving,
+         "startTimeLocal": "2026-06-02 10:00:00", "metadataDTO": {"diveNumber": 2}},
+    ]
+
+    class FakeGarminClient:
+        def connectapi(self, url, params=None):
+            if "tanksensor" in url:
+                return {}
+            activity_id = url.rsplit("/", 1)[-1]
+            entry = next(e for e in listing if str(e["activityId"]) == activity_id)
+            return {"activityId": activity_id, "metadataDTO": entry["metadataDTO"]}
+
+        def get_activities(self, start, limit, activitytype=None):
+            return list(listing) if start == 0 else []
+
+        def get_activity_details(self, activity_id):
+            return {}
+
+    class FakeAdapter:
+        client = FakeGarminClient()
+        cooldown_seconds = 0
+
+        def login(self):
+            return True
+
+    engine = SyncEngine(settings_path=str(tmp_path / "settings.json"),
+                        credentials_path=str(tmp_path / "credentials.json"),
+                        mock_data_dir=str(tmp_path / "mock"))
+    adapter = FakeAdapter()
+    monkeypatch.setattr(type(engine), "garmin", property(lambda self: adapter))
+    monkeypatch.setattr(type(engine), "garmin_username", property(lambda self: "u"))
+    monkeypatch.setattr(type(engine), "garmin_dir_name", property(lambda self: "garmin"))
+
+    base = str(tmp_path / "cache")
+    garmin_dir = _os.path.join(base, "garmin")
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert sorted(_os.listdir(garmin_dir)) == ["1_2026-06-01_100000_1.json", "2_2026-06-02_100000_2.json"]
+
+    # dive 2 deleted on Garmin -> its cache file goes with it
+    listing.pop()
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert sorted(_os.listdir(garmin_dir)) == ["1_2026-06-01_100000_1.json"]
+
+    # dive 1 renumbered to 9 on Garmin -> written under its new number, the
+    # old name not left behind
+    listing[0] = dict(listing[0], diveNumber=9, metadataDTO={"diveNumber": 9})
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert sorted(_os.listdir(garmin_dir)) == ["9_2026-06-01_100000_1.json"]
+    assert _json.load(open(_os.path.join(garmin_dir, "9_2026-06-01_100000_1.json")))["summary"]["diveNumber"] == 9
+
+    # a listing that comes back empty is treated as a failure, not an empty
+    # account: the cache is left alone rather than wiped
+    listing.clear()
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert sorted(_os.listdir(garmin_dir)) == ["9_2026-06-01_100000_1.json"]
+
+
+def test_garmin_download_retries_a_dive_whose_telemetry_failed(tmp_path, monkeypatch):
+    """The skip is keyed on the listing entry, which does not change just
+    because a fetch failed - so a dive cached without its profile would be
+    skipped for ever. It is marked incomplete and retried instead."""
+    import json as _json
+    import os as _os
+    from src.core.sync_engine import SyncEngine
+
+    diving = {"typeKey": "diving"}
+    listing = [{"activityId": 7, "activityName": "Seven", "diveNumber": 7, "activityType": diving,
+                "startTimeLocal": "2026-06-07 10:00:00", "metadataDTO": {"diveNumber": 7}}]
+    telemetry_fails = {"yes": True}
+    detail_calls = []
+
+    class FakeGarminClient:
+        def connectapi(self, url, params=None):
+            if "tanksensor" in url:
+                raise RuntimeError("404 not found")        # normal: no tank sensor on this dive
+            detail_calls.append(url.rsplit("/", 1)[-1])
+            return {"activityId": url.rsplit("/", 1)[-1], "metadataDTO": {}}
+
+        def get_activities(self, start, limit, activitytype=None):
+            return listing if start == 0 else []
+
+        def get_activity_details(self, activity_id):
+            if telemetry_fails["yes"]:
+                raise RuntimeError("429 Too Many Requests")
+            return {"samples": "ok"}
+
+    class FakeAdapter:
+        client = FakeGarminClient()
+        cooldown_seconds = 0
+
+        def login(self):
+            return True
+
+    engine = SyncEngine(settings_path=str(tmp_path / "settings.json"),
+                        credentials_path=str(tmp_path / "credentials.json"),
+                        mock_data_dir=str(tmp_path / "mock"))
+    adapter = FakeAdapter()
+    monkeypatch.setattr(type(engine), "garmin", property(lambda self: adapter))
+    monkeypatch.setattr(type(engine), "garmin_username", property(lambda self: "u"))
+    monkeypatch.setattr(type(engine), "garmin_dir_name", property(lambda self: "garmin"))
+
+    base = str(tmp_path / "cache")
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    cached_file = _os.path.join(base, "garmin", "7_2026-06-07_100000_7.json")
+    payload = _json.load(open(cached_file))
+    # the rest of the dive is kept, but the hole is recorded - and a 404 on
+    # the tank sensor is "absent", not "failed"
+    assert payload["details"] and payload["activityDetails"] is None
+    assert payload["incomplete"] == ["activityDetails"]
+
+    # so the next refresh fetches it again rather than trusting the cache
+    detail_calls.clear()
+    telemetry_fails["yes"] = False
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert detail_calls == ["7"], detail_calls
+    payload = _json.load(open(cached_file))
+    assert payload["activityDetails"] == {"samples": "ok"} and "incomplete" not in payload
+
+    # now that it is whole, it is skipped
+    detail_calls.clear()
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert detail_calls == [], detail_calls

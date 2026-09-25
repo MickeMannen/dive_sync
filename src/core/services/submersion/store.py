@@ -353,7 +353,7 @@ class S3Store:
             self._client = boto3.client(
                 "s3",
                 endpoint_url=self.config.endpoint_url or None,
-                region_name=self.config.region or None,
+                region_name=self.config.effective_region or None,
                 aws_access_key_id=self.config.access_key_id,
                 aws_secret_access_key=self.config.secret_access_key,
                 config=Config(**extra),
@@ -409,9 +409,17 @@ class S3Store:
                 hint = " Check the key id, the application key and that the key is allowed to read this bucket."
             elif code in ("NoSuchBucket",):
                 hint = " The bucket does not exist on this endpoint."
+            elif type(e).__name__ in ("EndpointConnectionError", "ConnectTimeoutError", "SSLError"):
+                # An endpoint typed without a scheme was assumed to be https.
+                hint = (f" Could not reach {self.config.endpoint_url}."
+                        " Check the endpoint; a self-hosted store without TLS needs an explicit 'http://'.")
+            elif code is None and "NoRegionError" in type(e).__name__:
+                hint = " Set the region under Advanced; it could not be read from this endpoint."
             return False, f"S3 store check failed ({code or type(e).__name__}): {e}.{hint}"
         sync_files = [n for n in names if n.startswith(MANIFEST_PREFIX)]
-        return True, (f"S3 store OK: bucket '{self.config.bucket}' prefix '{self.config.prefix}' reachable, "
+        region = self.config.effective_region or "unset"
+        return True, (f"S3 store OK: bucket '{self.config.bucket}' prefix '{self.config.prefix}' reachable "
+                      f"at {self.config.endpoint_url} (region {region}), "
                       f"{len(sync_files)} Submersion sync file(s) present.")
 
 

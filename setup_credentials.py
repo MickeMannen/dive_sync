@@ -23,11 +23,14 @@ from src.core.config import (
     CredentialsModel,
     DivelogsCredentials,
     GarminCredentials,
+    SUBMERSION_ENABLED,
     SubmersionCredentials,
     SubsurfaceCredentials,
+    normalize_endpoint_url,
+    region_from_endpoint,
 )
 
-SERVICES = ("garmin", "divelogs", "subsurface", "submersion")
+SERVICES = ("garmin", "divelogs", "subsurface") + (("submersion",) if SUBMERSION_ENABLED else ())
 
 
 def append_to_gitignore(entry: str):
@@ -126,18 +129,19 @@ def setup_submersion(current: CredentialsModel) -> Tuple[Optional[SubmersionCred
     print("\n--- Submersion sync store (S3-compatible, e.g. Backblaze B2) ---")
     print("In Submersion, set the sync provider to S3 and point it at the same bucket.")
     print("For Backblaze B2: create a bucket, then an application key restricted to that bucket;")
-    print("the endpoint is https://s3.<region>.backblazeb2.com and the region is the part after 's3.'.")
-    endpoint = _ask("Endpoint URL", existing.endpoint_url)
-    if endpoint and not existing.region:
-        # https://s3.eu-central-003.backblazeb2.com -> eu-central-003
-        host = endpoint.split("//", 1)[-1].split("/", 1)[0]
-        if host.startswith("s3.") and host.endswith(".backblazeb2.com"):
-            existing = existing.model_copy(update={"region": host[len("s3."):-len(".backblazeb2.com")]})
-    region = _ask("Region", existing.region)
+    print("the endpoint is s3.<region>.backblazeb2.com - https:// is assumed when you leave the scheme off.")
+    endpoint = normalize_endpoint_url(_ask("Endpoint URL", existing.endpoint_url))
     bucket = _ask("Bucket", existing.bucket)
-    prefix = _ask("Key prefix", existing.prefix or "submersion-sync/")
     key_id = _ask("Access key id (B2: application key id)", existing.access_key_id)
     secret = _ask("Secret access key (B2: application key)", existing.secret_access_key, secret=True)
+    # Advanced, the way Submersion folds these away: the region is normally read
+    # straight out of the endpoint, and the prefix is the one Submersion uses.
+    derived = region_from_endpoint(endpoint)
+    print(f"Region read from the endpoint: {derived or '(none - a self-hosted store needs one set by hand)'}")
+    region = ""
+    if not derived or existing.region or _yes("Override the region?", default=False):
+        region = _ask("Region (blank = read it from the endpoint)", existing.region)
+    prefix = _ask("Key prefix", existing.prefix or "submersion-sync/")
     if not (endpoint and bucket and key_id and secret):
         print("ℹ Submersion store skipped.")
         return None, None

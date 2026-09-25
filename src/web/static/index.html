@@ -15,7 +15,9 @@
       </div>
       <button type="button" class="nav-item" data-page="sync">Sync</button>
       <button type="button" class="nav-item" data-page="mapping">Mapping</button>
+      <button type="button" class="nav-item" data-page="dives">Garmin dives</button>
       <button type="button" class="nav-item" data-page="accounts">Accounts</button>
+      <button type="button" class="nav-item" data-page="about">About</button>
     </nav>
 
     <main>
@@ -28,16 +30,21 @@
       </div>
       <div class="actions">
         <label class="inline-checkbox"><input type="checkbox" id="trigger-dry-run"> Dry run</label>
+        <label class="inline-checkbox" title="Read a Garmin dive from the local cache when Garmin's list shows it unchanged, instead of downloading it again. Edits to only notes, buddy, weight or visibility are not visible in that list: untick to pick those up."><input type="checkbox" id="trigger-garmin-cache" checked> Use cached Garmin dives</label>
         <label>Garmin account <select id="trigger-garmin-account"></select></label>
         <label>Divelogs account <select id="trigger-divelogs-account"></select></label>
         <button type="button" id="trigger-sync">Sync now</button>
         <span id="trigger-message" class="muted"></span>
       </div>
+      <div id="status-progress" class="job-progress" hidden>
+        <progress id="status-progress-bar" max="1"></progress>
+        <span id="status-progress-text" class="muted"></span>
+      </div>
       <table id="job-results-table">
         <thead><tr><th>Job</th><th>Last result</th></tr></thead>
         <tbody id="job-results-body"></tbody>
       </table>
-    </section>
+</section>
 
     <section class="card">
       <h2>Live log</h2>
@@ -49,46 +56,52 @@
     <section class="card" id="board-card">
       <h2>Mapping board <span id="board-dirty" class="dirty" title="Unsaved changes" hidden>●</span></h2>
       <div class="board-toolbar">
-        <label>Pair <select id="board-pair"></select></label>
-        <label>Direction <select id="pair-direction"></select></label>
-        <label>Grace window (min) <input type="number" id="pair-grace" min="0"></label>
-        <label class="inline-checkbox"><input type="checkbox" id="pair-propagate-deletes"> Propagate deletes</label>
-        <label class="inline-checkbox"><input type="checkbox" id="pair-create-on-garmin"> Create on Garmin</label>
-        <span class="muted" id="board-matchkeys"></span>
+        <label>Source (read from) <select id="board-source"></select></label>
+        <span class="muted">&rarr;</span>
+        <label>Target (written to) <select id="board-target"></select></label>
+        <button type="button" class="secondary" id="board-swap" title="Swap source and target: the rules for the other direction">&#8644;</button>
+        <span class="toolbar-spacer"></span>
+        <button type="button" id="board-save">Save board</button>
+        <button type="button" class="secondary" id="board-cancel">Cancel</button>
       </div>
-      <div class="board" id="board">
-        <div class="board-column">
-          <h3 id="board-source-name">Source</h3>
-          <ul class="field-list" id="fields-source" data-side="source"></ul>
-        </div>
-        <svg class="board-lines" id="board-lines" aria-hidden="true"></svg>
-        <div class="board-column">
-          <h3 id="board-target-name">Target</h3>
-          <ul class="field-list" id="fields-target" data-side="target"></ul>
-        </div>
-      </div>
-      <p class="muted">Drag a field onto a field in the other column to link them. Click a line or a row below to edit the link. Drop a further field onto an already linked target to build a composite. Fields without a link are not synced; locked fields cannot be written by their service.</p>
-      <table id="links-table">
-        <thead><tr><th>Link</th><th>Source</th><th></th><th>Target</th><th>Direction</th><th>Conflict</th><th>Match</th><th></th></tr></thead>
-        <tbody id="links-body"></tbody>
-      </table>
-      <div id="link-editor" class="editor" hidden>
-        <h3>Link <span id="editor-title"></span></h3>
+      <details class="board-options">
+        <summary>Pair options</summary>
+        <p class="muted">Used by this pair's scheduled runs and Sync now; saved with the board.</p>
         <div class="inline-form">
-          <label>Id <input type="text" id="editor-id"></label>
-          <label>Direction <select id="editor-direction"></select></label>
-          <label>Conflict
+          <label title="The direction this pair's scheduled and default runs write. Independent of the source and target on view.">Scheduled runs write to <select id="pair-direction"></select></label>
+          <label>Grace window (min) <input type="number" id="pair-grace" min="0"></label>
+          <label class="inline-checkbox"><input type="checkbox" id="pair-propagate-deletes"> Propagate deletes</label>
+          <label class="inline-checkbox" id="pair-create-on-garmin-label"><input type="checkbox" id="pair-create-on-garmin"> Create on Garmin</label>
+        </div>
+      </details>
+      <details class="board-help">
+        <summary>How to edit the board</summary>
+      <p class="muted">A sync run writes one side: the board shows what the target <em>accepts</em> from the source (&#8644; shows the other direction). To add a rule either drag a field from the left-hand list onto a field on the right, or &mdash; easier over a long list &mdash; <strong>click the left-hand field once, then click the right-hand field</strong> to take it. Do the same onto a field that already has a rule to build a composite. Drag the same text field onto a second field to split it: e.g. Activity name onto Location and then onto Dive site takes &quot;Gozo, Blue Hole&quot; apart into both. Click a rule to change its policy or template. Locked fields cannot be written by their service; fields without a rule are not synced.</p>
+      </details>
+      <div class="receivers" id="receivers"></div>
+      <div class="match-keys" id="match-keys">
+        <span class="label">Match keys</span>
+        <span id="match-keys-list" class="muted"></span>
+        <span id="match-key-a-name" class="muted"></span> <select id="match-key-a"></select> =
+        <span id="match-key-b-name" class="muted"></span> <select id="match-key-b"></select>
+        <button type="button" class="secondary" id="match-key-add">Add match key</button>
+        <span class="muted">Dives are paired by start time first; a match key pairs the ones whose clocks disagree (e.g. a time-zone shift) within 24 hours.</span>
+      </div>
+      <div id="rule-editor" class="editor" hidden>
+        <h3>Rule <span id="editor-title"></span></h3>
+        <div class="inline-form">
+          <label>When the two sides differ
             <select id="editor-conflict">
-              <option value="prefer_non_empty">Fill blanks only (prefer_non_empty)</option>
-              <option value="prefer_source">Mirror source when it has a value (prefer_source)</option>
-              <option value="source_wins">Source always wins, even if blank</option>
-              <option value="target_wins">Target always wins, even if blank</option>
-              <option value="manual">Ask me (manual)</option>
+              <option value="manual">Fill blanks, ask about real differences (manual)</option>
+              <option value="prefer_non_empty">Only fill me when blank (prefer_non_empty)</option>
+              <option value="prefer_source">Take the sender's value whenever it has one (prefer_source)</option>
+              <option value="source_wins">Always take the sender's value, even blank (source_wins)</option>
+              <option value="target_wins">Never overwrite me (target_wins)</option>
             </select>
           </label>
-          <label>Match key order <input type="number" id="editor-match" min="1" placeholder="not a match key"></label>
-          <label>Separator <input type="text" id="editor-separator" maxlength="8"></label>
+          <label id="editor-separator-label">List separator <input type="text" id="editor-separator" maxlength="8"></label>
         </div>
+        <button type="button" class="link-button" id="editor-template-toggle">&#9656; Combine or reformat with a template</button>
         <div id="editor-template-block">
           <label>Template <textarea id="editor-template" rows="2" placeholder="{field} text {other}"></textarea></label>
           <div class="actions">
@@ -99,19 +112,37 @@
           <div id="editor-problems" class="problems"></div>
         </div>
         <div id="editor-reverse-block">
-          <label>Reverse pattern (regex, named groups; makes the link bidirectional)
-            <textarea id="editor-reverse" rows="1" placeholder="(?P&lt;field&gt;.+)"></textarea>
-          </label>
+          <label class="inline-checkbox"><input type="checkbox" id="editor-split"> <span id="editor-split-label">Split it back into its fields</span></label>
+          <div id="editor-split-options">
+            <label>Policy of that split
+              <select id="editor-reverse-conflict">
+                <option value="">Same as above</option>
+                <option value="manual">Ask me when they differ (manual)</option>
+                <option value="prefer_non_empty">Only fill blank fields (prefer_non_empty)</option>
+                <option value="prefer_source">Take the split values whenever there are some (prefer_source)</option>
+                <option value="source_wins">Always take the split values, even blank (source_wins)</option>
+              </select>
+            </label>
+            <p class="muted">The value is cut at the text between the fields in the template: <code>{location}, {divesite}</code> splits "Gozo, Blue Hole" at the first comma. A value without that text is left alone.</p>
+            <details id="editor-reverse-advanced">
+              <summary>Custom split pattern (regex)</summary>
+              <label>Named groups per field; leave blank to split on the template
+                <textarea id="editor-reverse" rows="1" placeholder="(?P&lt;location&gt;.+?), (?P&lt;divesite&gt;.+)"></textarea>
+              </label>
+            </details>
+          </div>
         </div>
+        <details id="editor-advanced">
+          <summary>Advanced</summary>
+          <label>Rule id (as stored in settings) <input type="text" id="editor-id"></label>
+        </details>
         <div class="actions">
           <button type="button" id="editor-apply">Apply</button>
           <button type="button" class="secondary" id="editor-close">Close</button>
-          <button type="button" class="secondary danger" id="editor-delete">Delete link</button>
+          <button type="button" class="secondary danger" id="editor-delete">Delete rule</button>
         </div>
       </div>
       <div class="actions">
-        <button type="button" id="board-save">Save board</button>
-        <button type="button" class="secondary" id="board-cancel">Cancel</button>
         <button type="button" class="secondary" id="board-reset">Reset to defaults</button>
         <button type="button" class="secondary" id="board-test">Test mapping</button>
         <span id="board-message" class="muted"></span>
@@ -120,7 +151,7 @@
         <p id="test-summary" class="muted"></p>
         <div class="scroll-x">
           <table id="test-table">
-            <thead><tr><th>Dive</th><th>Link</th><th>Source</th><th>Value</th><th>Target</th><th>Value</th><th>Result</th></tr></thead>
+            <thead><tr><th>Dive</th><th>Rule</th><th>Receiver</th><th>From</th><th>Value</th><th>Receiver field</th><th>Value</th><th>Result</th></tr></thead>
             <tbody id="test-body"></tbody>
           </table>
         </div>
@@ -129,7 +160,7 @@
 
     <section class="card">
       <h2>Conflicts</h2>
-      <p class="muted">Links with the policy "Ask me" record here when both sides hold different values. Pick which side should win; the other side is updated on the service.</p>
+      <p class="muted">Rules with the policy "manual" record here when both sides hold different values. Pick which side should win; the other side is updated on the service.</p>
       <div class="scroll-x">
         <table id="conflicts-table">
           <thead><tr><th>Dive</th><th>Link</th><th>Source</th><th>Target</th><th>Seen</th><th></th></tr></thead>
@@ -140,6 +171,24 @@
     </section>
     </div>
 
+    <div class="page" data-page="dives" hidden>
+    <section class="card">
+      <h2>Garmin dives</h2>
+      <p class="muted">The dives the last refresh cached from Garmin Connect, and whether each one's original <code>.fit</code> has been downloaded. FIT files are saved under <code>data/garmin_fit/</code> with the same name as the dive's cached JSON: <code>&lt;dive #&gt;_&lt;date&gt;_&lt;time&gt;_&lt;activity id&gt;</code>. Dives marked <em>manual</em> were logged by hand: they have no dive-computer file (Garmin would only generate a summary-only FIT from the typed-in fields), so they are never downloaded.</p>
+      <div class="actions">
+        <button type="button" id="dives-refresh" class="secondary">Refresh from Garmin</button>
+        <button type="button" id="dives-download-missing">Download missing FITs</button>
+        <span id="dives-message" class="muted"></span>
+      </div>
+      <div class="scroll-x">
+        <table id="dives-table">
+          <thead><tr><th>Date</th><th>Time</th><th>Dive #</th><th>Location</th><th>Max depth</th><th>Duration</th><th>FIT</th></tr></thead>
+          <tbody id="dives-body"></tbody>
+        </table>
+      </div>
+    </section>
+    </div>
+
     <div class="page" data-page="accounts" hidden>
     <section class="card">
       <h2>Credentials</h2>
@@ -147,41 +196,17 @@
         <fieldset>
           <legend>Garmin Connect <span id="garmin-configured" class="badge"></span></legend>
           <div id="garmin-accounts-rows"></div>
-          <div class="actions"><button type="button" class="secondary" id="garmin-add-account">Add Garmin account</button></div>
+          <div class="actions"><button type="button" class="secondary" id="garmin-add-account">Add another account</button></div>
         </fieldset>
         <fieldset>
           <legend>Divelogs.org <span id="divelogs-configured" class="badge"></span></legend>
           <div id="divelogs-accounts-rows"></div>
-          <div class="actions"><button type="button" class="secondary" id="divelogs-add-account">Add Divelogs account</button></div>
+          <div class="actions"><button type="button" class="secondary" id="divelogs-add-account">Add another account</button></div>
         </fieldset>
         <fieldset>
           <legend>Subsurface Cloud <span id="subsurface-configured" class="badge"></span></legend>
           <label>Email <input type="text" id="subsurface-email"></label>
-          <label>Password <input type="password" id="subsurface-password"></label>
-        </fieldset>
-        <fieldset>
-          <legend>Submersion sync store <span id="submersion-configured" class="badge"></span></legend>
-          <label>Store type
-            <select id="submersion-store-type">
-              <option value="s3">S3-compatible (Backblaze B2, R2, …)</option>
-              <option value="folder">Local folder (Dropbox / iCloud)</option>
-            </select>
-          </label>
-          <div id="submersion-s3-fields">
-            <label>Endpoint URL <input type="text" id="submersion-endpoint-url" placeholder="https://s3.eu-central-003.backblazeb2.com"></label>
-            <label>Region <input type="text" id="submersion-region" placeholder="eu-central-003"></label>
-            <label>Bucket <input type="text" id="submersion-bucket"></label>
-            <label>Prefix <input type="text" id="submersion-prefix" placeholder="submersion-sync/"></label>
-            <label>Access key ID <input type="text" id="submersion-access-key-id"></label>
-            <label>Secret access key <input type="password" id="submersion-secret-access-key"></label>
-            <label class="inline-checkbox"><input type="checkbox" id="submersion-path-style"> Path-style addressing</label>
-          </div>
-          <div id="submersion-folder-fields" hidden>
-            <label>Folder path <input type="text" id="submersion-folder-path" placeholder="/Users/you/Dropbox/Submersion"></label>
-          </div>
-          <label>End-to-end encryption passphrase
-            <input type="password" id="submersion-passphrase" placeholder="Only needed if this library has E2E encryption turned on in Submersion">
-          </label>
+          <label>Password <input type="password" id="subsurface-password" placeholder="leave blank to keep the saved one"></label>
         </fieldset>
         <div class="actions">
           <button type="button" id="test-credentials">Test</button>
@@ -197,8 +222,7 @@
       <h2>Default sync settings</h2>
       <form id="defaults-form" class="inline-form">
         <label>Directionality
-          <select id="default-directionality">
-            <option value="bidirectional">Bidirectional</option>
+          <select id="default-directionality" title="A run writes one side only; to sync both ways, schedule one job per direction">
             <option value="to_divelogs">To Divelogs</option>
             <option value="to_garmin">To Garmin</option>
           </select>
@@ -207,6 +231,7 @@
         <label>API cooldown (sec) <input type="number" step="0.1" id="api-cooldown" min="0"></label>
         <label><input type="checkbox" id="default-only-new"> Only new dives</label>
         <label><input type="checkbox" id="default-sync-gases"> Sync gases</label>
+        <label title="What scheduled jobs use. Reads an unchanged Garmin dive from the local cache instead of downloading it again; edits to only notes, buddy, weight or visibility need a Full refresh or a run with this off."><input type="checkbox" id="default-use-garmin-cache"> Use cached Garmin dives</label>
         <label><input type="checkbox" id="default-propagate-deletes"> Propagate deletes</label>
         <label><input type="checkbox" id="default-create-on-garmin"> Create on Garmin</label>
       </form>
@@ -274,6 +299,35 @@
       </div>
       <pre id="profile-summary" class="summary" hidden></pre>
       <span id="profile-message" class="muted"></span>
+    </section>
+    </div>
+
+    <div class="page" data-page="about" hidden>
+    <section class="card">
+      <h2 id="about-name">DiveSync</h2>
+      <p><strong id="about-version"></strong>
+        <button type="button" class="secondary" id="about-check">Check for updates</button>
+        <span id="about-update" class="muted"></span></p>
+      <p>Syncs and edits dive logs between Garmin Connect, Divelogs.org and Subsurface. This is the Docker image, running the sync on a schedule; the desktop app does the same interactively.</p>
+      <table class="about-table">
+        <tr><th>Author</th><td id="about-author"></td></tr>
+        <tr><th>Project</th><td><a id="about-project" target="_blank" rel="noopener"></a></td></tr>
+        <tr><th>Report a problem</th><td><a id="about-issues" target="_blank" rel="noopener"></a></td></tr>
+        <tr><th>System</th><td id="about-platform"></td></tr>
+      </table>
+    </section>
+    <section class="card">
+      <h2 id="about-license-title">License</h2>
+      <p id="about-license-summary"></p>
+      <details>
+        <summary>Full license text</summary>
+        <pre id="about-license" class="summary"></pre>
+      </details>
+    </section>
+    <section class="card">
+      <h2>Built with</h2>
+      <table class="about-table" id="about-components"></table>
+      <p class="muted">Garmin Connect, Divelogs.org and Subsurface are the names of their owners' services; DiveSync is an independent project and not affiliated with them.</p>
     </section>
     </div>
     </main>

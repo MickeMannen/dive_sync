@@ -9,6 +9,7 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 from desktop import credentials
 from desktop.jobs import LogPump, Worker
 from src.core import scheduler
+from src.core import config
 
 
 class SyncController(QObject):
@@ -37,16 +38,97 @@ class SyncController(QObject):
     def status(self) -> str:
         return self._status
 
+    @Property("QVariantList", constant=True)
+    def services(self):
+        """The services that have credentials, as {id, label} - what the
+        Download button and the built-in pair list are built from."""
+        model = credentials.load_credentials_model()
+        out = []
+        if model.get_garmin_accounts():
+            out.append({"id": "garmin", "label": "Garmin Connect", "spec": "garmin"})
+        if model.get_divelogs_accounts():
+            out.append({"id": "divelogs", "label": "Divelogs.org", "spec": "divelogs"})
+        if config.SUBMERSION_ENABLED and model.submersion.configured:
+            out.append({"id": "submersion", "label": "Submersion", "spec": "submersion"})
+        if model.subsurface.configured:
+            # The cloud spec; a local checkout is a hand-written pair instead.
+            out.append({"id": "subsurface", "label": "Subsurface Cloud", "spec": "subsurface-cloud"})
+        return out
+
     @Property("QVariantList", notify=pairsChanged)
     def pairs(self):
+        """Every combination of the configured services, plus whatever pairs
+        are saved in settings. The combinations carry their specs rather than
+        a pair id, so syncing e.g. Garmin to Submersion needs no hand-written
+        entry in settings.json first (the scheduler builds the engine from
+        the two specs). Garmin ↔ Divelogs keeps the empty id it has always
+        had, so anything that stored that selection still resolves."""
         from src.core.config import ConfigManager
-        settings = ConfigManager.load_settings()
-        out = [{"id": "", "label": "Garmin ↔ Divelogs", "source": "garmin", "target": "divelogs"}]
-        for pair in settings.sync_pairs:
-            if pair.enabled:
+        configured = self.services
+        out = []
+        for i, source in enumerate(configured):
+            for target in configured[i + 1:]:
+                builtin_id = "" if (source["id"], target["id"]) == ("garmin", "divelogs") \
+                    else f"{source['id']}~{target['id']}"
+                out.append({"id": builtin_id, "label": f"{source['label']} ↔ {target['label']}",
+                            "source": source["spec"], "target": target["spec"], "builtin": True})
+        if not out:
+            out.append({"id": "", "label": "Garmin ↔ Divelogs", "source": "garmin",
+                        "target": "divelogs", "builtin": True})
+        from src.core.config import DEFAULT_PAIR_ID
+        for pair in ConfigManager.load_settings().sync_pairs:
+            if pair.enabled and pair.id != DEFAULT_PAIR_ID:   # covered by the built-in entry above
                 out.append({"id": pair.id, "label": f"{pair.id} ({pair.source} → {pair.target})",
-                            "source": pair.source, "target": pair.target})
+                            "source": pair.source, "target": pair.target, "builtin": False})
         return out
+
+    @Property("QVariantList", notify=pairsChanged)
+    def endpoints(self):
+        """What the Source and Target boxes offer: every configured service,
+        plus the other end of any saved pair (e.g. a UDDF file), as
+        {spec, id, label}. ``id`` is the service id, so a Target box can leave
+        out the service picked as Source."""
+        from src.core.pairs import service_id_of
+        out = [{"spec": s["spec"], "id": s["id"], "label": s["label"]} for s in self.services]
+        seen = {e["spec"] for e in out}
+        for pair in self.pairs:
+            for spec in (pair["source"], pair["target"]):
+                if spec not in seen:
+                    seen.add(spec)
+                    try:
+                        sid = service_id_of(spec)
+                    except ValueError:
+                        continue
+                    out.append({"spec": spec, "id": sid, "label": spec})
+        return out
+
+    @Slot(str, result="QVariantList")
+    def targetsFor(self, source_spec: str):
+        """The Target box for a Source: every endpoint but that service."""
+        source = next((e for e in self.endpoints if e["spec"] == source_spec), None)
+        return [e for e in self.endpoints if not source or e["id"] != source["id"]]
+
+    def _pair_between(self, source_spec: str, target_spec: str) -> Optional[dict]:
+        """The pair (built-in combination or saved) joining the two, in
+        either order: a pair is two services, the run picks the direction."""
+        ends = {source_spec, target_spec}
+        matches = [p for p in self.pairs if {p["source"], p["target"]} == ends]
+        # a saved pair (its own board and options) before the plain combination
+        return next((p for p in matches if not p.get("builtin")), matches[0] if matches else None)
+
+    @Slot(bool, str, str, bool, bool, str, str, bool, bool)
+    def runSyncBetween(self, dry_run: bool, source_spec: str, target_spec: str, only_new: bool, sync_gases: bool,
+                       garmin_username: str = "", divelogs_username: str = "", use_garmin_cache: bool = True,
+                       mirror: bool = False) -> None:
+        """Sync from ``source_spec`` into ``target_spec``: the run writes the
+        target only (rework.md G0)."""
+        from src.core.pairs import service_id_of
+        pair = self._pair_between(source_spec, target_spec)
+        if not pair or source_spec == target_spec:
+            self._set_status("Pick two different services to sync.")
+            return
+        self.runSync(dry_run, f"to_{service_id_of(target_spec)}", only_new, sync_gases, pair["id"],
+                     garmin_username, divelogs_username, use_garmin_cache, mirror)
 
     @Property("QVariantList", constant=True)
     def garminAccounts(self):
@@ -65,10 +147,12 @@ class SyncController(QObject):
                     s = "subsurface"
                 if t == "subsurface-cloud":
                     t = "subsurface"
-                return [{"value": "bidirectional", "label": "Bidirectional"},
-                        {"value": f"to_{t}", "label": f"To {t}"},
+                # rework.md G0: a run writes one side; run the other
+                # direction as a second run.
+                return [{"value": f"to_{t}", "label": f"To {t}"},
                         {"value": f"to_{s}", "label": f"To {s}"}]
-        return [{"value": "bidirectional", "label": "Bidirectional"}]
+        return [{"value": "to_divelogs", "label": "To divelogs"},
+                {"value": "to_garmin", "label": "To garmin"}]
 
     def _set_status(self, text: str) -> None:
         self._status = text
@@ -83,14 +167,26 @@ class SyncController(QObject):
 
     # -- actions ----------------------------------------------------------
 
-    @Slot(bool, str, bool, bool, str, str, str)
+    @Slot(bool, str, bool, bool, str, str, str, bool, bool)
     def runSync(self, dry_run: bool, direction: str, only_new: bool, sync_gases: bool, pair_id: str,
-                garmin_username: str = "", divelogs_username: str = "") -> None:
+                garmin_username: str = "", divelogs_username: str = "", use_garmin_cache: bool = True,
+                mirror: bool = False) -> None:
         if self._busy():
             self._set_status("A sync or download is already running.")
             return
-        custom = {"directionality": direction, "only_new": only_new, "sync_gases": sync_gases}
-        if pair_id:
+        # A run from this page never deletes unless it mirrors: then the
+        # target keeps only the dives the source has (SyncEngine mirror).
+        custom = {"directionality": direction, "only_new": only_new and not mirror, "sync_gases": sync_gases,
+                  "use_garmin_cache": use_garmin_cache, "propagate_deletes": False}
+        if mirror:
+            custom["mirror"] = True
+        selected = next((p for p in self.pairs if p["id"] == pair_id), None)
+        if selected and selected.get("builtin"):
+            # Built-in combinations have no entry in settings.json, so they
+            # travel as their two specs; only a saved pair goes by id.
+            if (selected["source"], selected["target"]) != ("garmin", "divelogs"):
+                custom["source"], custom["target"] = selected["source"], selected["target"]
+        elif pair_id:
             custom["pair"] = pair_id
         if garmin_username:
             custom["garmin_username"] = garmin_username
@@ -101,12 +197,18 @@ class SyncController(QObject):
 
     @Slot(bool, str)
     def download(self, overwrite: bool, service: str) -> None:
+        """``service`` is one service id, or "" for every configured one.
+        ``overwrite`` re-fetches every Garmin dive instead of reusing the
+        unchanged ones (the page's "Use cached Garmin dives" unticked); the
+        other services are always downloaded in full."""
         if self._busy():
             self._set_status("A sync or download is already running.")
             return
-        include_garmin = service in ("", "garmin")
-        include_divelogs = service in ("", "divelogs")
-        self._start("Downloading…", lambda: self._run_download(overwrite, include_garmin, include_divelogs),
+        services = [service] if service else [s["id"] for s in self.services]
+        if not services:
+            self._set_status("No service is configured yet - add credentials in Settings.")
+            return
+        self._start("Downloading…", lambda: self._run_download(overwrite, services),
                     lambda: "Download complete.")
 
     def _start(self, status: str, target, done_text) -> None:
@@ -151,10 +253,10 @@ class SyncController(QObject):
         return dict(scheduler.last_sync_results.get(custom.get("id") or "Manual", {}))
 
     @staticmethod
-    def _run_download(overwrite: bool, include_garmin: bool, include_divelogs: bool) -> dict:
+    def _run_download(overwrite: bool, services: list) -> dict:
         credentials.begin_operation()
         try:
-            scheduler.run_download_thread(overwrite, None, include_garmin, include_divelogs)
+            scheduler.run_download_thread(overwrite, None, services=services)
         finally:
             credentials.end_operation()
         return dict(scheduler.last_download_results)

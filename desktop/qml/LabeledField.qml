@@ -18,6 +18,8 @@ ColumnLayout {
         Layout.preferredWidth: field.fieldWidth
         echoMode: field.secret ? TextInput.Password : TextInput.Normal
         selectByMouse: true
+        // A read-only field looks exactly like an editable one otherwise.
+        opacity: readOnly ? 0.65 : 1.0
         onEditingFinished: field.editingFinished()
     }
 }

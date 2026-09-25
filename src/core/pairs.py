@@ -19,13 +19,14 @@ import os
 from typing import List, Optional, Tuple
 
 from src.core.adapter import BaseDiveAdapter
-from src.core.config import ConfigManager, SettingsModel, SyncPairModel
-from src.core.fields import FieldLink, common_default_links, default_field_links
+from src.core import config
+from src.core.config import SERVICE_ID_ALIASES, ConfigManager, SettingsModel, SyncPairModel
+from src.core.fields import FieldLink, common_default_links, default_field_links, submersion_default_links
 
 KNOWN_SERVICES = ("garmin", "divelogs", "uddf", "subsurface", "subsurface-cloud", "submersion")
 FILE_SERVICES = ("uddf", "subsurface")
 # spec name -> service id (the cloud adapter shares Subsurface's catalogue and ids)
-SERVICE_IDS = {"subsurface-cloud": "subsurface"}
+SERVICE_IDS = SERVICE_ID_ALIASES
 
 
 def service_id_of(spec: str) -> str:
@@ -38,6 +39,8 @@ def parse_service_spec(spec: str) -> Tuple[str, Optional[str]]:
     service = service.strip().lower()
     if service not in KNOWN_SERVICES:
         raise ValueError(f"Unknown service {service!r}; expected one of {', '.join(KNOWN_SERVICES)}")
+    if service == "submersion" and not config.SUBMERSION_ENABLED:
+        raise ValueError("Submersion sync is disabled for now (it does not work yet)")
     arg = arg.strip() or None
     if service in FILE_SERVICES and not arg:
         raise ValueError(f"Service {service!r} needs a path: {service}:<path>")
@@ -46,14 +49,52 @@ def parse_service_spec(spec: str) -> Tuple[str, Optional[str]]:
     return service, arg
 
 
+def field_catalog_of(service_id: str) -> list:
+    """A service's field catalogue, by service id."""
+    if service_id == "garmin":
+        from src.core.services.garmin import GarminAdapter as adapter
+    elif service_id == "divelogs":
+        from src.core.services.divelogs import DivelogsAdapter as adapter
+    elif service_id in ("subsurface", "subsurface-cloud"):
+        from src.core.services.subsurface import SubsurfaceAdapter as adapter
+    elif service_id == "uddf":
+        from src.core.services.uddf import UddfAdapter as adapter
+    elif service_id == "submersion":
+        from src.core.services.submersion.adapter import SubmersionAdapter as adapter
+    else:
+        raise ValueError(f"Unknown service {service_id!r}")
+    return adapter.field_catalog()
+
+
+def display_name_of(spec: str) -> str:
+    """The name a service spec is shown under ("subsurface-cloud" -> "Subsurface Cloud")."""
+    service, _ = parse_service_spec(spec)
+    if service == "subsurface-cloud":
+        from src.core.services.subsurface_cloud import SubsurfaceCloudAdapter
+        return SubsurfaceCloudAdapter.display_name
+    return {"garmin": "Garmin Connect", "divelogs": "Divelogs.org", "subsurface": "Subsurface",
+            "uddf": "UDDF file", "submersion": "Submersion"}.get(service, service)
+
+
 def default_links_for(source_id: str, target_id: str) -> List[FieldLink]:
     """The shipped board for a pair: the Garmin/Divelogs one when that is the
-    pair, otherwise the common links (dive number as a match key where both
-    services let the user set it)."""
+    pair, the metadata-only one when Submersion is a side (rework.md F17),
+    otherwise the common links (dive number as a match key where both
+    services let the user set it). A common link naming a field one of the
+    two services does not have (Subsurface keeps no visibility, UDDF no
+    weight) is left out: the board could not be saved with it."""
     if (source_id, target_id) == ("garmin", "divelogs"):
         return default_field_links()
     numbered = "divelogs" not in (source_id, target_id)
-    return common_default_links(source_id, target_id, match_on_dive_number=numbered)
+    if "submersion" in (source_id, target_id):
+        links = submersion_default_links(source_id, target_id, match_on_dive_number=numbered)
+    else:
+        links = common_default_links(source_id, target_id, match_on_dive_number=numbered)
+    try:
+        known = {f.key for sid in (source_id, target_id) for f in field_catalog_of(sid)}
+    except ValueError:
+        return links
+    return [link for link in links if link.target in known and all(k in known for k in link.source)]
 
 
 def _resolve_path(arg: str) -> str:
@@ -122,6 +163,40 @@ def _pick(accounts, username: Optional[str], label: str, flag: str):
     raise ValueError(f"No {label} account configured matching username: {username}")
 
 
+# The spec a configured service is synced through (Subsurface: its cloud).
+CONFIGURED_SPECS = {"garmin": "garmin", "divelogs": "divelogs", "subsurface": "subsurface-cloud",
+                    "submersion": "submersion"}
+
+
+def board_pairs(settings: SettingsModel, configured: List[str]) -> List[dict]:
+    """The mapping boards to offer: every saved pair, then each combination of
+    the ``configured`` services (credentials.configured_services()) that no
+    saved pair joins yet - with the shipped default board until it is saved,
+    which adds it to ``sync_pairs``. What the Sync page runs for such a
+    combination (engine_for) uses that saved pair, so both pages agree.
+    Entries: {id, source, target (specs), saved}."""
+    out = [{"id": p.id, "source": p.source, "target": p.target, "saved": True} for p in settings.sync_pairs]
+    joined = []
+    for p in settings.sync_pairs:
+        try:
+            joined.append({service_id_of(p.source), service_id_of(p.target)})
+        except ValueError:
+            continue
+    ids = {p.id for p in settings.sync_pairs}
+    specs = [CONFIGURED_SPECS[s] for s in configured if s in CONFIGURED_SPECS]
+    for i, source in enumerate(specs):
+        for target in specs[i + 1:]:
+            if {service_id_of(source), service_id_of(target)} in joined:
+                continue
+            pair_id = base = f"{service_id_of(source)}_{service_id_of(target)}"
+            n = 2
+            while pair_id in ids:
+                pair_id, n = f"{base}_{n}", n + 1
+            ids.add(pair_id)
+            out.append({"id": pair_id, "source": source, "target": target, "saved": False})
+    return out
+
+
 def find_pair(settings: SettingsModel, pair_id: str) -> SyncPairModel:
     for pair in settings.sync_pairs:
         if pair.id == pair_id:
@@ -136,9 +211,11 @@ def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] 
                pair: Optional[SyncPairModel] = None):
     """A ``SyncEngine`` for two service specs. When the specs are exactly
     ``garmin`` and ``divelogs`` the classic constructor is used so account
-    selection, state files and cache directories behave as before. The
-    returned engine carries ``run_overrides``: keyword arguments for
-    ``run_sync`` that apply the pair's own direction, grace window and board."""
+    selection, state files and cache directories behave as before. With
+    ``pair`` the engine runs that saved pair (its direction, board and
+    options come from settings on every run, rework.md G1); without one it
+    runs the saved pair with these service ids if there is one, else a
+    transient pair with the shipped defaults that writes its target."""
     from src.core.config import CREDENTIALS_FILE, SETTINGS_FILE
     from src.core.sync_engine import SyncEngine
     settings_path = settings_path or SETTINGS_FILE
@@ -157,23 +234,10 @@ def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] 
         target = build_adapter(target_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username)
         engine = SyncEngine(settings_path=settings_path, credentials_path=credentials_path,
                             source_adapter=source, target_adapter=target)
-
-    overrides = {}
     if pair is not None:
-        overrides["direction_override"] = pair.directionality
-        if pair.grace_window_minutes is not None:
-            overrides["grace_window_override"] = pair.grace_window_minutes
-        if pair.propagate_deletes is not None:
-            overrides["propagate_deletes_override"] = pair.propagate_deletes
-        if pair.create_on_garmin is not None:
-            overrides["create_on_garmin_override"] = pair.create_on_garmin
-        overrides["field_links_override"] = pair.field_links if pair.field_links is not None else default_links_for(source_id, target_id)
-    elif (source_id, target_id) != ("garmin", "divelogs"):
-        overrides["field_links_override"] = default_links_for(source_id, target_id)
-    engine.run_overrides = overrides
-    # show-mapping / test-mapping read settings.field_links; keep them in step with the run
-    if "field_links_override" in overrides:
-        engine.settings.field_links = list(overrides["field_links_override"])
+        engine.pair_id = pair.id
+        engine.refresh_pair()
+    engine.run_overrides = {}
     return engine
 
 

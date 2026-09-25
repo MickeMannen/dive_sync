@@ -35,13 +35,23 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.adapter import BaseDiveAdapter
 from src.core.fields import FieldSpec, are_gas_mixtures_different
-from src.core.models import GasMixture, UnifiedDive, UnifiedSample
+from src.core.models import GasMixture, UnifiedDive, UnifiedSample, recorded_water_temp
 from src.core.site_matcher import find_site
 
 logger = logging.getLogger("dive_sync.subsurface")
 
 SERVICE_ID = "subsurface"
 OUR_MODEL = "dive_sync"
+# The dive computer Subsurface gives a dive logged by hand (core/divecomputer:
+# is_manually_added_dc); its profile is one Subsurface drew from the typed-in
+# duration and depths, not a recording.
+MANUAL_DC_MODEL = "manually added dive"
+
+
+def canonical_dive_id(dive_id: str) -> str:
+    """A dive's id without its ``Dive-N`` file name: the directory, which is
+    the dive's start time and never changes when the dive is renumbered."""
+    return re.sub(r"/Dive(-\d+)?$", "", str(dive_id).strip())
 EXTERNAL_ID_PREFIX = "dive_sync:"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")  # datetime.weekday() order
 
@@ -541,8 +551,11 @@ class SubsurfaceRepo:
         self.dives = [d for d in self.dives if d.dir_path != dive.dir_path]
 
     def find(self, dive_id: str) -> Optional[Dive]:
+        """By id, or by its directory alone: a renumbered dive keeps its
+        directory while its Dive-N file (and so its id) changes."""
+        folder = canonical_dive_id(dive_id)
         for dive in self.dives:
-            if dive.id == dive_id or dive.dir_path == dive_id:
+            if dive.id == dive_id or dive.dir_path == folder:
                 return dive
         return None
 
@@ -722,7 +735,10 @@ def dive_to_unified(dive: Dive, sites: Dict[str, Site]) -> UnifiedDive:
             tank_role=USE_TO_TANK_ROLE.get(cyl.use),
         ))
     duration = dive.duration_s if dive.duration_s is not None else (dc.duration_s if dc and dc.duration_s else 0)
-    water = dive.watertemp_c if dive.watertemp_c is not None else (dc.watertemp_c if dc else None)
+    # a 0 °C written by earlier versions (from Garmin's "never entered") counts as none
+    water = recorded_water_temp(dive.watertemp_c)
+    if water is None and dc:
+        water = recorded_water_temp(dc.watertemp_c)
     external_ids = {SERVICE_ID: dive.id}
     external_ids.update(dive.external_ids())
     return UnifiedDive(
@@ -752,10 +768,89 @@ def dive_to_unified(dive: Dive, sites: Dict[str, Site]) -> UnifiedDive:
     )
 
 
+def hand_logged_computer(dive: Dive) -> Optional[DiveComputer]:
+    """The dive computer whose duration and depths may be edited: only on a
+    dive with no recorded profile - its computers are dive_sync's own or
+    Subsurface's "manually added dive", and none of them holds samples a dive
+    computer recorded. None for any dive with a real recording, whose depths
+    follow from its profile and are never overwritten."""
+    if not dive.computers:
+        return None
+    for dc in dive.computers:
+        recorded = any(s.depth_m is not None for s in dc.samples)
+        if recorded and dc.model != MANUAL_DC_MODEL:
+            return None
+        if dc.model not in (OUR_MODEL, MANUAL_DC_MODEL):
+            return None
+    return dive.computers[0]
+
+
+def simple_profile(duration_s: int, max_m: float, mean_m: Optional[float] = None) -> List[Sample]:
+    """A descent - bottom - ascent profile with this duration and max depth,
+    the kind Subsurface draws for a dive logged by hand. With a mean depth
+    between half the max and the max the slopes are set so the profile's
+    mean matches it (a trapezoid's mean is max * (1 - slope time / duration));
+    otherwise the slopes follow 18 m/min."""
+    if not duration_s or not max_m:
+        return []
+    if mean_m and 0 < mean_m < max_m:
+        slope = duration_s * (1 - mean_m / max_m)
+    else:
+        slope = max_m / 18.0 * 60
+    slope = int(round(min(max(slope, 1), duration_s / 2)))
+    times = [0, slope, duration_s - slope, duration_s]
+    depths = [0.0, max_m, max_m, 0.0]
+    out: List[Sample] = []
+    for t, d in zip(times, depths):
+        if out and out[-1].time_s == t:
+            continue
+        out.append(Sample(time_s=t, depth_m=d))
+    return out
+
+
+def _set_logged_depths(dc: DiveComputer, unified: UnifiedDive) -> None:
+    """Write duration and depths onto a hand-logged dive's computer (see
+    hand_logged_computer). Subsurface's own manual computer also gets its
+    drawn profile redrawn to match; dive_sync's carries no profile, and
+    Subsurface draws one from these values when it shows the dive."""
+    if unified.duration:
+        dc.duration_s = int(unified.duration)
+    if unified.max_depth:
+        dc.maxdepth_m = unified.max_depth
+    if unified.avg_depth is not None:
+        dc.meandepth_m = unified.avg_depth
+    if dc.model == MANUAL_DC_MODEL:
+        if dc.samples:
+            dc.samples = simple_profile(dc.duration_s or 0, dc.maxdepth_m or 0.0, dc.meandepth_m)
+        if dc.lines:
+            # it is written back line by line (render_dc_lines): swap in the new values
+            kept = [line for line in dc.lines
+                    if not line.startswith(("duration ", "maxdepth ", "meandepth "))
+                    and not (line[:1] == " " or re.match(r"^\d+:\d+", line))]    # samples, as parse_divecomputer_file reads them
+            head = []
+            if dc.duration_s:
+                head.append(f"duration {fmt_duration(dc.duration_s)} min")
+            if dc.maxdepth_m is not None:
+                head.append(f"maxdepth {fmt_milli(dc.maxdepth_m)}m")
+            if dc.meandepth_m is not None:
+                head.append(f"meandepth {fmt_milli(dc.meandepth_m)}m")
+            at = next((i + 1 for i, line in enumerate(kept) if line.startswith("model ")), 0)
+            dc.lines = kept[:at] + head + kept[at:] + [render_sample(x) for x in dc.samples]
+
+
 def apply_unified(dive: Dive, unified: UnifiedDive, repo: SubsurfaceRepo, write_samples: bool) -> None:
     """Copy the fields dive_sync owns from ``unified`` into ``dive``."""
     if unified.duration:
         dive.duration_s = int(unified.duration)
+    if not write_samples:
+        logged = hand_logged_computer(dive)
+        if logged is not None:
+            _set_logged_depths(logged, unified)
+        else:
+            dc = _primary_dc(dive)
+            if dc and unified.max_depth and dc.maxdepth_m is not None and abs(dc.maxdepth_m - unified.max_depth) > 0.05:
+                logger.info("Subsurface: dive %s has a recorded profile; its depths are left as recorded "
+                            "(%.1f m kept, %.1f m not written)", dive.id, dc.maxdepth_m, unified.max_depth)
     dive.number = unified.dive_number if unified.dive_number else dive.number
     dive.buddy = unified.buddy if unified.buddy is not None else dive.buddy
     dive.notes = unified.notes if unified.notes is not None else dive.notes
@@ -774,6 +869,12 @@ def apply_unified(dive: Dive, unified: UnifiedDive, repo: SubsurfaceRepo, write_
         kg = unified.weight / 2.20462 if (unified.weight_unit or "").lower().startswith("p") else unified.weight
         dive.weights_kg = [round(kg, 3)]
     dc0 = _primary_dc(dive)
+    # clear a 0 °C an earlier version wrote for "never entered" (recorded_water_temp)
+    if dive.watertemp_c == 0.0:
+        dive.watertemp_c = None
+    for dc in dive.computers:
+        if dc.model == OUR_MODEL and dc.watertemp_c == 0.0:
+            dc.watertemp_c = None
     if unified.temp_min is not None and not (dc0 and dc0.watertemp_c is not None and abs(dc0.watertemp_c - unified.temp_min) < 0.05):
         # Subsurface writes a dive-level water temperature only when it differs from the computer's
         dive.watertemp_c = unified.temp_min
@@ -828,12 +929,17 @@ class SubsurfaceAdapter(BaseDiveAdapter):
     stores_external_ids = True
 
     @classmethod
+    def canonical_id(cls, external_id) -> str:
+        return canonical_dive_id(external_id)
+
+    @classmethod
     def field_catalog(cls) -> List[FieldSpec]:
         return [
             FieldSpec(key="subsurface.date_time", label="Start time", type="datetime", unified="date_time", writable=False),
             FieldSpec(key="subsurface.duration", label="Duration", type="number", unified="duration", unit="s"),
-            FieldSpec(key="subsurface.max_depth", label="Max depth", type="number", unified="max_depth", unit="m", writable=False),
-            FieldSpec(key="subsurface.avg_depth", label="Mean depth", type="number", unified="avg_depth", unit="m", writable=False),
+            # written on hand-logged dives only (hand_logged_computer); a recorded profile keeps its depths
+            FieldSpec(key="subsurface.max_depth", label="Max depth (hand-logged dives)", type="number", unified="max_depth", unit="m"),
+            FieldSpec(key="subsurface.avg_depth", label="Mean depth (hand-logged dives)", type="number", unified="avg_depth", unit="m"),
             FieldSpec(key="subsurface.temp_min", label="Water temperature", type="number", unified="temp_min", unit="°C"),
             FieldSpec(key="subsurface.dive_number", label="Dive number", type="number", unified="dive_number"),
             FieldSpec(key="subsurface.location", label="Dive site", type="text", unified="location"),

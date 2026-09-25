@@ -5,7 +5,7 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 ---
 
 ## 🎯 Project Overview
-`dive_sync` is a bidirectional dive log synchronization tool that connects **Garmin Connect** and **Divelogs.org**. It allows users to:
+`dive_sync` is a two-way dive log synchronization tool (one direction per run) that connects **Garmin Connect** and **Divelogs.org**. It allows users to:
 1. Fetch dive logs from both platforms.
 2. Normalize logs into a unified format.
 3. Match identical dives across services.
@@ -28,12 +28,12 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 ├── src/
 │   ├── core/                  # Core domain logic
 │   │   ├── services/          # Adapters: Garmin, Divelogs, UDDF, Subsurface (git storage + cloud), Submersion (peer), mocks
-│   │   │   └── submersion/    # codec.py (profile blobs), hlc.py (clock), store.py (S3/folder), library.py (HLC merge), adapter.py
+│   │   │   └── submersion/    # codec.py (profile blobs), hlc.py (clock), store.py (S3/folder), library.py (HLC merge), adapter.py (metadata only: the app's own .fit import owns the profile, tanks, pressures, gas switches and data sources - rework.md F17)
 │   │   ├── pairs.py           # Service specs (garmin, uddf:<file>, subsurface:<dir>) -> adapters and engines; sync_pairs
 │   │   ├── site_matcher.py    # Dive-site resolution by name / nearest within 200 m
 │   │   ├── mapping/           # Declarative JSONPath mapping files
 │   │   ├── adapter.py         # BaseDiveAdapter abstract base class
-│   │   ├── config.py          # Settings and credentials management (field_links live here; sync profile export/import)
+│   │   ├── config.py          # Settings and credentials management (sync_pairs[].rules, the garmin_divelogs default pair, settings v2 migration, sync profile export/import)
 │   │   ├── fields.py          # Field catalogue (FieldSpec), field links (FieldLink), value access, defaults, validation
 │   │   ├── templates.py       # {key} templates for composite links: render, validate, loop detection, preview
 │   │   ├── conflicts.py       # conflicts.json queue for links with the 'manual' policy
@@ -70,11 +70,11 @@ All service-specific dive logs are mapped into the `UnifiedDive` model (defined 
 ### 2. Dive Matching Logic
 Dives are linked in [SyncEngine.match_dives](file:///Users/mikael/development/dive_sync/src/core/sync_engine.py) using a three-tier system:
 1. **Tier 1: Known pairs**: a dive that carries the other service's id in `external_ids` (adapters with `stores_external_ids`), or a pair remembered in `sync_state.json` (`links`) from an earlier match or upload. Garmin and Divelogs have no field for a foreign id, so for them the state file is the only link store.
-2. **Tier 2: Match keys from the mapping board**: The `field_links` flagged with `match_order` (number or datetime fields only) are tried in order. The default board flags the dive-number link, which reproduces the old "same positive dive number" rule.
+2. **Tier 2: Match keys from the mapping board**: the pair's ordered `match_keys` (number or datetime fields only; shown as `match_order` on the link view) are tried in order. The generic default board for pairs where both services let the user number dives flags the dive number, which reproduces the old "same positive dive number" rule.
 3. **Tier 3: Naive Timestamp Match**: Matches dives if their start times fall within the configured `grace_window_minutes` (default is 15 minutes).
 
-### 2b. Field catalogue and field links (what happens on a matched pair)
-Every adapter declares a `service_id` and a `field_catalog()` of `FieldSpec`s (key `<service_id>.<name>`, type, writability). The user's mapping is `SettingsModel.field_links`, a list of `FieldLink`s (source field(s) → target field, direction, conflict policy, optional template). `SyncEngine._apply_link` runs every active link on every matched pair: read both ends, compare, and if they differ decide who wins from the global `directionality` (which sides may be written) and the link's `conflict` policy. The shipped default board (`fields.default_field_links()`) reproduces the pre-Track-C behaviour exactly. Fields with no `UnifiedDive` attribute (Garmin `activityName`/`locationName`, Divelogs `location`/`divesite`) live in `UnifiedDive.service_fields`. A link with several sources renders its target from a `{key}` template (`templates.py`); links also run on uploads of new dives (`SyncEngine.prepare_upload`). A link with policy `manual` records real conflicts to `conflicts.json` (`conflicts.py`) instead of overwriting; `SyncEngine.resolve_conflict` pushes the chosen side. `SyncEngine.test_mapping` rehearses a board read-only on the newest dives. The whole configuration travels as a versioned *sync profile* (`config.export_profile` / `import_profile`). Design and open steps: [rework.md](rework.md) Track C.
+### 2b. Field catalogue, rules and links (what happens on a matched pair)
+Every adapter declares a `service_id` and a `field_catalog()` of `FieldSpec`s (key `<service_id>.<name>`, type, writability). The user's mapping is stored per pair as **receiver rules** (`SyncPairModel.rules`, a `SyncRule` list per receiving service: receiver field ← sender field(s), policy, optional template/reverse; rework.md Track G) plus the pair's ordered `match_keys`. The Garmin ↔ Divelogs pair is the explicit `garmin_divelogs` entry, always `sync_pairs[0]`; `SettingsModel.directionality` / `.field_links` and `SyncPairModel.field_links` are compatibility views over it. `SyncEngine` resolves its pair from settings (`pair_id`, else by the two service ids, else a transient default pair) and applies the rules natively (G2): `active_rules()` is the run's receiver's list (minus `target_wins`, which means never-overwrite) plus the reverse splits of the other side's composites, and `_apply_rule` reads every policy from the receiver's side (`source_wins` always takes the sender's value, `prefer_source` when the sender has one, `prefer_non_empty`/`manual` only fill a blank, `manual` queues a real disagreement). Both boards edit the rules directly (G5/G6). The **link view** (`fields.rules_to_links`, a list of `FieldLink`s: source field(s) → target field, direction, conflict policy) remains as the form save-time validation runs on (`templates.validate_links`), as what a version-1 settings file, profile or API payload is converted from (`fields.links_to_rules`), and for a cron job's optional per-job board; the two are lossless for every board the link model can express (`tests/test_rules.py`). The shipped default board (`fields.default_field_links()`) reproduces the pre-Track-C behaviour exactly. Fields with no `UnifiedDive` attribute (Garmin `activityName`/`locationName`, Divelogs `location`/`divesite`) live in `UnifiedDive.service_fields`. A link with several sources renders its target from a `{key}` template (`templates.py`); links also run on uploads of new dives (`SyncEngine.prepare_upload`). A link with policy `manual` records real conflicts to `conflicts.json` (`conflicts.py`) instead of overwriting; `SyncEngine.resolve_conflict` pushes the chosen side. `SyncEngine.test_mapping` rehearses a board read-only on the newest dives. The whole configuration travels as a versioned *sync profile* (`config.export_profile` / `import_profile`). Design and open steps: [rework.md](rework.md) Track C.
 
 ### 3. Scheduling
 `src/core/scheduler.py` holds `scheduler_loop()` (an asyncio loop started from `web/app.py`'s FastAPI `lifespan`), `run_sync_thread()`, and `get_next_scheduled_run()`. It reads `SettingsModel.schedule`/`cron_jobs` (via `ConfigManager.load_settings()`) every minute and spawns a background thread calling `SyncEngine.run_sync()` when a job is due. This module has no FastAPI dependency, so it can be reused by non-web entry points.
@@ -94,8 +94,9 @@ uvicorn src.web.app:app --reload
 
 ### Running the CLI Sync Engine
 ```bash
-# Perform bidirectional incremental sync
+# Perform an incremental sync in the saved direction (one receiver per run; two-way = two runs)
 python sync.py
+python sync.py --direction to_garmin
 
 # Perform a dry-run sync without updating remote services
 python sync.py --dry-run

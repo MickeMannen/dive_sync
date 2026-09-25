@@ -135,7 +135,51 @@ the same dive. `update_dive()` now always includes both keys together
 whenever either coordinate changes, filling in the unchanged one from the
 current dive.
 
-## 5. Things worth using later
+## 5. Start time, duration and the depths are writable after all
+
+Probed live 2026-09-23 (rework.md G8) after the owner asked why the mapping
+board blocked Garmin from receiving average depth, max depth, duration and
+start time. The honest answer was that nobody had tried: those four were
+marked `writable=False` on the assumption that Garmin derives them from the
+recorded dive, the same assumption the water-temperature fields carried until
+section 4 disproved it. All four live in `summaryDTO`, so the minimal-partial
+PUT above applies to them too.
+
+`tests/live/test_live_garmin_writes.py` wrote each field on one
+`MANUAL_CONNECT` dive and one `GARMIN_DEVICE` dive, read it back, and restored
+it:
+
+| field | hand-entered dive | device dive |
+|---|---|---|
+| `duration` | writable | writable |
+| `maxDepth` | writable | writable |
+| `averageDepth` | writable | writable |
+| `startTimeLocal` | writable | writable |
+
+No difference between the two kinds of dive: a device-logged dive's measured
+summary is just as editable as a hand-entered one. **The diving service
+follows**, so the change shows in the app's dive detail and not only on the
+activity: after the start-time writes, `GET /diving/v1/dive/summary` reported
+the new `startTime`. That answers the open worry from section 3, where
+`PATCH /diving/v1/dive/{id}` answers 403 - the diving record cannot be edited
+directly, but it does track the activity.
+
+**`startTimeGMT` is recomputed by Garmin, so never send it.** Writing
+`startTimeLocal` alone moved `startTimeGMT` by the same amount, using the
+activity's own zone. `update_dive()` therefore sends only the local time; a
+GMT of our own could only disagree with Garmin's. This is the opposite of
+`startLatitude`/`startLongitude`, which must travel together - there is no
+general rule here, each field had to be tried.
+
+**A trap when reading a timestamp back.** Garmin echoes a written
+`...T15:01:00.000000` back as `...T15:01:00.0`. The same instant, a different
+spelling. The first version of the probe compared these as strings, concluded
+the write had not persisted, and therefore skipped its restore - leaving two
+test-account dives two minutes late until a follow-up repair. Compare
+timestamps as parsed instants, and restore after any accepted write rather
+than only after one you could confirm.
+
+## 6. Things worth using later
 
 - The diving-service summary is one request for the whole account with time
   zone, gas roles and dive numbers; `fetch_recent_dives` and C15 could use it

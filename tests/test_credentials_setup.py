@@ -28,7 +28,7 @@ def test_old_credentials_file_loads_with_empty_new_sections(tmp_path):
     assert saved["garmin"]["username"] == "g" and saved["subsurface"]["email"] == ""
 
 
-def test_new_sections_round_trip_and_configured_rules(tmp_path):
+def test_new_sections_round_trip_and_configured_rules(tmp_path, submersion_enabled):
     creds = CredentialsModel(
         subsurface=SubsurfaceCredentials(email="me@x.org", password="pw"),
         submersion=SubmersionCredentials(endpoint_url="https://s3.eu-central-003.backblazeb2.com", region="eu-central-003",
@@ -102,8 +102,35 @@ class FakeS3Client:
 
 
 def _b2():
-    return SubmersionCredentials(endpoint_url="https://s3.eu-central-003.backblazeb2.com", region="eu-central-003",
+    # No region: it is read out of the endpoint, exactly as Submersion does it.
+    return SubmersionCredentials(endpoint_url="https://s3.eu-central-003.backblazeb2.com",
                                  bucket="dives", prefix="submersion-sync/", access_key_id="id", secret_access_key="key")
+
+
+@pytest.mark.parametrize("typed, endpoint, region", [
+    # Submersion asks for a bare host; https is assumed, never plain http.
+    ("s3.eu-central-003.backblazeb2.com", "https://s3.eu-central-003.backblazeb2.com", "eu-central-003"),
+    ("https://s3.eu-central-003.backblazeb2.com/", "https://s3.eu-central-003.backblazeb2.com", "eu-central-003"),
+    ("  s3.us-west-002.backblazeb2.com  ", "https://s3.us-west-002.backblazeb2.com", "us-west-002"),
+    ("abc123.r2.cloudflarestorage.com", "https://abc123.r2.cloudflarestorage.com", "auto"),
+    ("s3.amazonaws.com", "https://s3.amazonaws.com", "us-east-1"),
+    ("s3.eu-west-1.amazonaws.com", "https://s3.eu-west-1.amazonaws.com", "eu-west-1"),
+    ("fra1.digitaloceanspaces.com", "https://fra1.digitaloceanspaces.com", "fra1"),
+    # An explicit http:// is kept - a self-hosted store without TLS has to ask
+    # for it - and such a host names no region of its own.
+    ("http://192.168.1.5:9000", "http://192.168.1.5:9000", ""),
+    ("", "", ""),
+])
+def test_endpoint_is_normalized_and_region_read_from_it(typed, endpoint, region):
+    creds = SubmersionCredentials(endpoint_url=typed, bucket="b", access_key_id="i", secret_access_key="s")
+    assert creds.endpoint_url == endpoint
+    assert creds.region == ""  # nothing saved; derived on use
+    assert creds.effective_region == region
+
+
+def test_region_override_wins_over_the_endpoint():
+    creds = _b2().model_copy(update={"region": "somewhere-else"})
+    assert creds.effective_region == "somewhere-else"
 
 
 def test_s3_store_operations_and_access_check():
@@ -174,8 +201,9 @@ def test_setup_adds_subsurface_and_b2_without_touching_existing(tmp_path, monkey
                    "divelogs": {"username": "d", "password": "p"}}, f)
     monkeypatch.setattr(subsurface_cloud, "check_cloud_login", lambda e, p, b: (True, "ok"))
     monkeypatch.setattr(submersion_store, "check_store_access", lambda c: (True, "ok"))
-    # subsurface: email, server; submersion: endpoint, region (auto default), bucket, prefix, key id
-    _drive(monkeypatch, ["me@x.org", "", "https://s3.eu-central-003.backblazeb2.com", "", "dives", "", "keyid"],
+    # subsurface: email, server; submersion: endpoint (typed without a scheme,
+    # as Submersion itself shows it), bucket, key id, no region override, prefix
+    _drive(monkeypatch, ["me@x.org", "", "s3.eu-central-003.backblazeb2.com", "dives", "keyid", "", ""],
            ["pw", "secret"])
     rc = setup_credentials.run(["subsurface", "submersion"], path=path, assume_yes=True)
     assert rc == 0
@@ -184,7 +212,10 @@ def test_setup_adds_subsurface_and_b2_without_touching_existing(tmp_path, monkey
     assert saved["divelogs"]["username"] == "d"
     assert saved["subsurface"]["email"] == "me@x.org" and saved["subsurface"]["password"] == "pw"
     sub = saved["submersion"]
-    assert sub["region"] == "eu-central-003" and sub["bucket"] == "dives" and sub["prefix"] == "submersion-sync/"
+    assert sub["endpoint_url"] == "https://s3.eu-central-003.backblazeb2.com"
+    # Nothing saved for the region: it is read back out of the endpoint on use.
+    assert sub["region"] == "" and sub["bucket"] == "dives" and sub["prefix"] == "submersion-sync/"
+    assert SubmersionCredentials(**sub).effective_region == "eu-central-003"
     assert sub["access_key_id"] == "keyid" and sub["secret_access_key"] == "secret"
     assert oct(os.stat(path).st_mode & 0o777) == "0o600"
 

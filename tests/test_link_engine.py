@@ -15,7 +15,7 @@ from typing import List, Optional
 import pytest
 
 from src.core.adapter import BaseDiveAdapter
-from src.core.config import ConfigManager, SettingsModel, SyncFilters
+from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncPairModel
 from src.core.fields import FieldLink, FieldSpec, are_gas_mixtures_different, default_field_links, legacy_field_links
 from src.core.models import GasMixture, UnifiedDive, UnifiedSample
 from src.core.sync_engine import SyncEngine
@@ -210,14 +210,22 @@ def _apply_state(dive: UnifiedDive, st):
 
 
 def _snapshot(dive: UnifiedDive):
-    return dive.model_dump(mode="json")
+    # tank names are left out: the legacy loop dropped them, the rules carry
+    # them across (see test_matched_dive_takes_the_garmin_tank_sensor_name)
+    data = dive.model_dump(mode="json")
+    for gas in data.get("gas_mixtures") or []:
+        gas.pop("tank_name", None)
+    return data
 
 
-def test_link_loop_reproduces_legacy_loop(tmp_path):
+@pytest.mark.parametrize("direction", ["to_divelogs", "to_garmin"])
+def test_link_loop_reproduces_legacy_loop(tmp_path, direction):
+    """One directed half per run (rework.md G0): the old loop's
+    'bidirectional' branch was its two directed branches applied in turn,
+    which is exactly what two directed runs now do."""
     rng = random.Random(20260921)
     cases = 0
-    for _ in range(400):
-        direction = rng.choice(["bidirectional", "to_divelogs", "to_garmin"])
+    for _ in range(200):
         sync_gases = rng.random() > 0.2
         g_state, d_state = _random_state(rng), _random_state(rng)
 
@@ -245,12 +253,15 @@ def test_link_loop_reproduces_legacy_loop(tmp_path):
         assert _snapshot(g_new) == _snapshot(g_ref), f"garmin dive differs: {ctx}"
         assert _snapshot(d_new) == _snapshot(d_ref), f"divelogs dive differs: {ctx}"
         cases += 1
-    assert cases == 400
+    assert cases == 200
 
 
 # ---------------------------------------------------------------- policies (C3 groundwork)
 
-def _one_link(tmp_path, g_kw, d_kw, link: FieldLink, direction="bidirectional"):
+def _one_link(tmp_path, g_kw, d_kw, link: FieldLink, direction="to_divelogs"):
+    """One matched pair through one link. ``direction`` is the run's receiver
+    (rework.md G0: a run writes one side) - pass ``to_garmin`` for a case
+    that expects the Garmin side to change."""
     g, d = _pair(g_kw, d_kw)
     engine = _engine(tmp_path, [g], [d], directionality=direction, field_links=[link])
     results = engine.run_sync(dry_run=False)
@@ -263,13 +274,14 @@ def test_policy_source_wins_and_target_wins(tmp_path):
     assert (g.buddy, d.buddy) == ("A", "A") and len(res["updated_on_divelogs"]) == 1 and not res["updated_on_garmin"]
 
     g, d, res = _one_link(tmp_path, {"buddy": "A"}, {"buddy": "B"},
-                          FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="target_wins"))
+                          FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="target_wins"),
+                          direction="to_garmin")
     assert (g.buddy, d.buddy) == ("B", "B") and len(res["updated_on_garmin"]) == 1 and not res["updated_on_divelogs"]
 
 
 def test_policy_prefer_non_empty_fills_blanks_only(tmp_path):
     link = FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="prefer_non_empty")
-    g, d, _ = _one_link(tmp_path, {"buddy": None}, {"buddy": "B"}, link)
+    g, d, _ = _one_link(tmp_path, {"buddy": None}, {"buddy": "B"}, link, direction="to_garmin")
     assert (g.buddy, d.buddy) == ("B", "B")
     g, d, _ = _one_link(tmp_path, {"buddy": "A"}, {"buddy": ""}, link)
     assert (g.buddy, d.buddy) == ("A", "A")
@@ -287,8 +299,8 @@ def test_policy_prefer_source_mirrors_when_source_has_data(tmp_path):
     # source has data, target has different data -> source overwrites (the fix)
     g, d, res = _one_link(tmp_path, {"buddy": "A"}, {"buddy": "B"}, link)
     assert (g.buddy, d.buddy) == ("A", "A") and len(res["updated_on_divelogs"]) == 1
-    # source empty, target has data -> target kept, source filled from target (bidirectional fallback)
-    g, d, res = _one_link(tmp_path, {"buddy": None}, {"buddy": "B"}, link)
+    # source empty, target has data -> target kept; on a run towards Garmin the source is filled from it
+    g, d, res = _one_link(tmp_path, {"buddy": None}, {"buddy": "B"}, link, direction="to_garmin")
     assert (g.buddy, d.buddy) == ("B", "B") and len(res["updated_on_garmin"]) == 1 and not res["updated_on_divelogs"]
     # both empty -> no-op
     g, d, res = _one_link(tmp_path, {"buddy": None}, {"buddy": None}, link)
@@ -323,12 +335,12 @@ def test_link_direction_and_global_direction_gate_writes(tmp_path):
     link = FieldLink(id="buddy", source=["divelogs.buddy"], target="garmin.buddy", direction="to_target")
     g, d, res = _one_link(tmp_path, {"buddy": "A"}, {"buddy": "B"}, link, direction="to_divelogs")
     assert (g.buddy, d.buddy) == ("A", "B") and not res["updated_on_garmin"] and not res["updated_on_divelogs"]
-    # Same link, global bidirectional: Divelogs is the origin regardless of policy name
-    g, d, res = _one_link(tmp_path, {"buddy": "A"}, {"buddy": "B"}, link)
+    # Same link on a run towards Garmin: Divelogs is the origin regardless of policy name
+    g, d, res = _one_link(tmp_path, {"buddy": "A"}, {"buddy": "B"}, link, direction="to_garmin")
     assert (g.buddy, d.buddy) == ("B", "B") and len(res["updated_on_garmin"]) == 1
     # A one-way link with a fill-only policy leaves an existing value alone
     link = FieldLink(id="buddy", source=["divelogs.buddy"], target="garmin.buddy", direction="to_target", conflict="prefer_non_empty")
-    g, d, _ = _one_link(tmp_path, {"buddy": "A"}, {"buddy": "B"}, link)
+    g, d, _ = _one_link(tmp_path, {"buddy": "A"}, {"buddy": "B"}, link, direction="to_garmin")
     assert (g.buddy, d.buddy) == ("A", "B")
     # 'off' never writes
     link = FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", direction="off")
@@ -376,7 +388,7 @@ def test_create_on_garmin_off_by_default_skips_new_garmin_dives(tmp_path):
     """rework.md C16: a dive found only on Divelogs (or any other source) is
     not created on Garmin unless create_on_garmin is on for the pair."""
     d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
-    engine = _engine(tmp_path, [], d)  # create_on_garmin defaults to off
+    engine = _engine(tmp_path, [], d, directionality="to_garmin")  # create_on_garmin defaults to off
 
     res = engine.run_sync(dry_run=False)
 
@@ -387,7 +399,7 @@ def test_create_on_garmin_off_by_default_skips_new_garmin_dives(tmp_path):
 
 def test_create_on_garmin_on_allows_new_garmin_dives(tmp_path):
     d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
-    engine = _engine(tmp_path, [], d, create_on_garmin=True)
+    engine = _engine(tmp_path, [], d, create_on_garmin=True, directionality="to_garmin")
 
     res = engine.run_sync(dry_run=False)
 
@@ -412,7 +424,7 @@ def test_create_on_garmin_does_not_affect_matched_dive_updates(tmp_path):
     links still apply with create_on_garmin off."""
     g = [_dive(external_ids={"garmin": "1"}, buddy=None)]
     d = [_dive(external_ids={"divelogs": "1"}, buddy="A")]
-    engine = _engine(tmp_path, g, d)  # create_on_garmin defaults to off
+    engine = _engine(tmp_path, g, d, directionality="to_garmin")  # create_on_garmin defaults to off
 
     res = engine.run_sync(dry_run=False)
 
@@ -568,8 +580,15 @@ def test_engine_results_and_aliases_follow_service_ids(tmp_path):
     assert res["source"] == "garmin" and res["target"] == "divelogs"
     up = res["uploaded_to_divelogs"][0]
     assert up["garmin_id"] == "1" and up["source_id"] == "1" and up["new_divelogs_id"] == "new-1" and up["new_id"] == "new-1"
+    assert res["uploaded_to_garmin"] == []       # one receiver per run (rework.md G0)
+    # the other direction is its own run
+    back = tmp_path / "back"
+    back.mkdir()
+    engine = _engine(back, g, d, create_on_garmin=True, directionality="to_garmin")
+    res = engine.run_sync(dry_run=False)
     up = res["uploaded_to_garmin"][0]
     assert up["divelogs_id"] == "2" and up["new_garmin_id"] == "new-1"
+    assert res["uploaded_to_divelogs"] == []
 
 
 def test_engine_with_a_non_garmin_pair(tmp_path):
@@ -586,7 +605,10 @@ def test_engine_with_a_non_garmin_pair(tmp_path):
         FieldLink(id="buddy", source=["divelogs.buddy"], target="uddf.buddy"),
         FieldLink(id="num", source=["divelogs.dive_number"], target="uddf.dive_number", direction="off", match_order=1),
     ]
-    path = _settings_file(tmp_path, field_links=links, directionality="to_uddf")
+    # rework.md G1: a pair's board and direction live on its sync_pairs entry
+    # (the top-level keys describe the garmin_divelogs pair only)
+    pair = SyncPairModel(id="d2u", source="divelogs", target="uddf:x.uddf", directionality="to_uddf", field_links=links)
+    path = _settings_file(tmp_path, sync_pairs=[pair])
     a = [_dive(external_ids={"divelogs": "10"}, dive_number=3, buddy="Anna"),
          _dive(date_time=datetime(2026, 8, 1), external_ids={"divelogs": "11"}, dive_number=4)]
     # same number and same day: the match key counts (a hit more than a day apart would not)
@@ -622,7 +644,7 @@ SITE_LINK = FieldLink(id="site_to_garmin", source=["divelogs.location", "divelog
 def test_composite_link_on_matched_pair(tmp_path):
     g, d = _pair({"service_fields": {"activityName": "Old name"}},
                  {"dive_number": 7, "service_fields": {"location": "Larnaca", "divesite": "Zenobia"}})
-    engine = _engine(tmp_path, [g], [d], field_links=[SITE_LINK])
+    engine = _engine(tmp_path, [g], [d], field_links=[SITE_LINK], directionality="to_garmin")
     res = engine.run_sync(dry_run=False)
     assert g.service_fields["activityName"] == "Larnaca, Zenobia #007"
     assert len(res["updated_on_garmin"]) == 1 and not res["updated_on_divelogs"]
@@ -667,7 +689,7 @@ def test_upload_renders_composite_and_service_links(tmp_path):
               service_fields={"location": "Larnaca", "divesite": "Zenobia"},
               gas_mixtures=[GasMixture(oxygen=32.0, tank_name="left")])
     board = [l for l in default_field_links() if l.id != "activity_name"] + [SITE_LINK]
-    engine = _engine(tmp_path, [], [d], field_links=board, create_on_garmin=True)
+    engine = _engine(tmp_path, [], [d], field_links=board, create_on_garmin=True, directionality="to_garmin")
     engine.run_sync(dry_run=False)
     added = engine.source.added[0]
     assert added.service_fields["activityName"] == "Larnaca, Zenobia #007"
@@ -845,22 +867,57 @@ def test_deletion_propagates_on_full_sync_when_enabled(tmp_path):
 
 
 def test_deletion_only_logged_when_propagate_deletes_off(tmp_path):
-    """When off, the deleted-from-garmin dive is untouched on Divelogs and,
-    exactly as before C13, falls through to the normal unmatched-dive
-    upload path - re-created on Garmin as a new dive (the "log that the
-    dive will be re-uploaded" case from the original decision)."""
+    """When off, the deleted-from-garmin dive is untouched on Divelogs; the
+    stale link stays (a run towards Garmin would then re-create it there,
+    see the receiver test below)."""
     g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
     d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
     engine = _engine(tmp_path, g, d)
     engine.run_sync(dry_run=False)
 
-    engine2 = _engine(tmp_path, [], d, create_on_garmin=True)  # propagate_deletes defaults to off
+    engine2 = _engine(tmp_path, [], d)  # propagate_deletes defaults to off
     res = engine2.run_sync(dry_run=False)
 
     assert engine2.target.deleted == []
     assert res["deleted_on_divelogs"] == []
+    assert engine2.load_links() == {"1": "2"}  # stale link kept
+
+
+def test_deletion_follows_the_direction(tmp_path):
+    """rework.md G0: deletes only ever happen on the run's receiver. A dive
+    gone from the sender is removed on the receiver; a dive gone from the
+    receiver is left alone by this run (the opposite run would remove it
+    from the sender) and the sender's copy falls through to the normal
+    unmatched-dive upload, exactly as with propagate_deletes off."""
+    g = [_dive(external_ids={"garmin": "1"}, buddy="A")]
+    d = [_dive(external_ids={"divelogs": "2"}, buddy="A")]
+    engine = _engine(tmp_path, g, d)
+    engine.run_sync(dry_run=False)
+
+    # Run towards Divelogs, dive gone from Divelogs (the receiver): nothing deleted on Garmin
+    engine2 = _engine(tmp_path, g, [], propagate_deletes=True)
+    res = engine2.run_sync(dry_run=False)
+    assert engine2.source.deleted == [] and engine2.target.deleted == []
+    assert res["deleted_on_garmin"] == [] and res["deleted_on_divelogs"] == []
+    assert len(res["uploaded_to_divelogs"]) == 1          # the surviving Garmin dive is re-sent
+    assert engine2.load_links() == {"1": "new-1"}
+
+    # Run towards Garmin, same situation: Divelogs is now the sender, so Garmin's copy goes
+    engine3 = _engine(tmp_path, g, [], propagate_deletes=True, directionality="to_garmin")
+    res = engine3.run_sync(dry_run=False)
+    assert engine3.source.deleted == ["1"] and engine3.target.deleted == []
+    assert res["deleted_on_garmin"] == [{"id": "1", "gone_from": "divelogs"}]
+    assert engine3.load_links() == {}
+
+    # Run towards Garmin, dive gone from Garmin (the receiver): left alone, re-created from Divelogs
+    engine4 = _engine(tmp_path, g, d)
+    engine4.run_sync(dry_run=False)
+    engine5 = _engine(tmp_path, [], d, propagate_deletes=True, create_on_garmin=True, directionality="to_garmin")
+    res = engine5.run_sync(dry_run=False)
+    assert engine5.source.deleted == [] and engine5.target.deleted == []
+    assert res["deleted_on_divelogs"] == []
     assert len(res["uploaded_to_garmin"]) == 1
-    assert engine2.load_links() == {"1": "2", "new-1": "2"}  # stale link kept, plus the fresh re-upload
+    assert engine5.load_links() == {"1": "2", "new-1": "2"}  # stale link kept, plus the fresh re-upload
 
 
 def test_deletion_not_checked_on_incremental_sync(tmp_path):
@@ -872,7 +929,8 @@ def test_deletion_not_checked_on_incremental_sync(tmp_path):
     engine = _engine(tmp_path, g, d)
     engine.run_sync(dry_run=False)
 
-    engine2 = _engine(tmp_path, [], d, propagate_deletes=True, create_on_garmin=True, sync_filters=SyncFilters(only_new=True))
+    engine2 = _engine(tmp_path, [], d, propagate_deletes=True, create_on_garmin=True, directionality="to_garmin",
+                      sync_filters=SyncFilters(only_new=True))
     res = engine2.run_sync(dry_run=False)
 
     assert engine2.target.deleted == []
@@ -937,3 +995,66 @@ def test_full_compare_flag_is_honoured_once(tmp_path):
     assert engine.load_state()["full_compare_once"] is True
     engine.request_full_compare(False)
     assert "full_compare_once" not in engine.load_state()
+
+
+def test_matched_dive_takes_the_garmin_tank_sensor_name(tmp_path):
+    """A Garmin tank with a transmitter carries its name (tankSensors[].name)
+    to Divelogs on a matched dive; a Garmin tank without one keeps the name
+    Divelogs already has."""
+    from src.core.services.garmin import GarminAdapter
+    garmin = GarminAdapter.__new__(GarminAdapter)
+    summary = {"activityId": 1, "startTimeLocal": "2026-06-27T11:24:00.0", "duration": 3000, "maxDepth": 20.0}
+    details = {"activityId": 1, "diveInfo": {"diveGases": [{"gasIndex": 0, "oxygenContent": 32, "heliumContent": 0,
+                                                             "tankStartingPressure": 193.0, "tankEndingPressure": 96.0}]}}
+    sensor = {"tankSensors": [{"tankIndex": 0, "name": "Micke01", "pressureUnit": "BAR",
+                               "startingPressure": 192.91, "endingPressure": 95.76}]}
+    mapped = garmin._map_to_unified(summary, details, None, sensor)
+    assert [g.tank_name for g in mapped.gas_mixtures] == ["Micke01"]
+
+    tank = mapped.gas_mixtures[0]
+    g, d = _pair({"gas_mixtures": [tank]},
+                 {"gas_mixtures": [tank.model_copy(update={"tank_name": None})]})
+    res = _engine(tmp_path, [g], [d]).run_sync(dry_run=False)
+    assert d.gas_mixtures[0].tank_name == "Micke01" and len(res["updated_on_divelogs"]) == 1
+    assert not _engine(tmp_path, [g], [d]).run_sync(dry_run=False)["updated_on_divelogs"]   # settled
+
+    # no transmitter on Garmin: the name on Divelogs is neither a difference nor blanked
+    unnamed = tank.model_copy(update={"tank_name": None})
+    g, d = _pair({"gas_mixtures": [unnamed]}, {"gas_mixtures": [tank.model_copy(update={"tank_name": "Main"})]})
+    assert not _engine(tmp_path, [g], [d]).run_sync(dry_run=False)["updated_on_divelogs"]
+    g.gas_mixtures[0] = unnamed.model_copy(update={"end_pressure": 50.0})
+    _engine(tmp_path, [g], [d]).run_sync(dry_run=False)
+    assert d.gas_mixtures[0].end_pressure == 50.0 and d.gas_mixtures[0].tank_name == "Main"
+
+
+def test_mirror_makes_the_receiver_a_copy_of_the_sender(tmp_path):
+    """Mirror: every dive compared (even with only_new on), missing dives
+    created, fields forced to the sender's value, and receiver dives the
+    sender does not have deleted. Without it nothing is deleted."""
+    from src.core.fields import SyncRule
+    from src.core.config import SyncPairModel
+    rules = {"divelogs": [SyncRule(id="buddy", target="divelogs.buddy", source=["garmin.buddy"], conflict="prefer_non_empty"),
+                          SyncRule(id="notes", target="divelogs.notes", source=["garmin.notes"], conflict="target_wins")]}
+    pair = SyncPairModel(id="garmin_divelogs", source="garmin", target="divelogs", directionality="to_divelogs", rules=rules)
+
+    def run(mirror, dry_run=False):
+        g = [_dive(external_ids={"garmin": "1"}, buddy="Anna", notes="from garmin"),
+             _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "2"})]
+        d = [_dive(external_ids={"divelogs": "10"}, buddy="Bob", notes="mine"),
+             _dive(date_time=datetime(2025, 1, 1, 9), external_ids={"divelogs": "11"})]
+        engine = _engine(tmp_path, g, d, sync_pairs=[pair], sync_filters=SyncFilters(only_new=True))
+        return engine, d, engine.run_sync(dry_run=dry_run, mirror_override=mirror)
+
+    engine, d, res = run(mirror=False)
+    assert engine.target.deleted == [] and res["deleted_on_divelogs"] == []
+    assert d[0].buddy == "Bob"                                     # prefer_non_empty keeps the receiver's value
+
+    engine, d, res = run(mirror=True, dry_run=True)
+    assert engine.target.deleted == [] and res["deleted_on_divelogs"][0]["dry_run"] is True
+
+    engine, d, res = run(mirror=True)
+    assert engine.target.deleted == ["11"]                         # Divelogs-only dive removed
+    assert [e["id"] for e in res["deleted_on_divelogs"]] == ["11"]
+    assert d[0].buddy == "Anna" and d[0].notes == "mine"           # forced; "never overwrite" left alone
+    assert len(engine.target.added) == 1                           # the Garmin-only dive created
+    assert engine.source.deleted == []                             # the sender is never touched

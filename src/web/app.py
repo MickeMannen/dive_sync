@@ -1,3 +1,4 @@
+import os
 import json
 import queue
 import logging
@@ -11,8 +12,8 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, CredentialsModel, CronJobModel, SyncPairModel
-from src.core.fields import FieldLink, build_catalog
+from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, CredentialsModel, CronJobModel, SyncPairModel
+from src.core.fields import FieldLink, SyncRule, build_catalog, links_to_rules
 from src.core.templates import preview as preview_link, validate_links
 from src.core.config import ProfileError, export_profile, import_profile
 from src.core.services.garmin import GarminAdapter
@@ -65,11 +66,12 @@ class SyncFiltersSchema(BaseModel):
     date_to: Optional[str] = None
     only_new: bool = True
     sync_gases: bool = True
-    sync_fit: bool = False
+    use_garmin_cache: bool = True
 
 class CronJobSchema(BaseModel):
     id: str
-    directionality: str
+    # None / "" = the pair's saved direction (rework.md G0: one receiver per job)
+    directionality: Optional[str] = None
     frequency: str
     hour: int
     minute: int
@@ -84,16 +86,21 @@ class CronJobSchema(BaseModel):
     divelogs_username: Optional[str] = None
 
 class SettingsSchema(BaseModel):
-    directionality: str
+    # Direction of the garmin_divelogs pair (rework.md G1: kept as the form's
+    # field; omitted keeps what is stored)
+    directionality: Optional[str] = None
     sync_filters: SyncFiltersSchema
     grace_window_minutes: int
     api_cooldown_seconds: float
     propagate_deletes: bool = False
     create_on_garmin: bool = False
+    create_device_dives_on_submersion: bool = False
     schedule: List[Dict[str, int]]
     cron_jobs: List[CronJobSchema] = []
     # Omitted (None) keeps the board / pairs currently on disk, so a settings
-    # form that does not know about them cannot wipe them.
+    # form that does not know about them cannot wipe them. field_links is the
+    # garmin_divelogs pair's board in its link form (rework.md G1/G4); a pair
+    # in sync_pairs may likewise carry field_links instead of rules.
     field_links: Optional[List[FieldLink]] = None
     sync_pairs: Optional[List[SyncPairModel]] = None
     # Same omitted-keeps-current rule; an explicit "" (an emptied form field,
@@ -107,6 +114,8 @@ class SyncTriggerRequest(BaseModel):
     date_to: Optional[str] = None
     only_new: Optional[bool] = None
     sync_gases: Optional[bool] = None
+    # None = the saved default (sync_filters.use_garmin_cache)
+    use_garmin_cache: Optional[bool] = None
     garmin_username: Optional[str] = None
     divelogs_username: Optional[str] = None
 
@@ -125,8 +134,14 @@ class CredentialsSchema(BaseModel):
 
 @app.get("/api/settings")
 def get_settings():
+    """Settings as stored (version 2: rules on pairs). The garmin_divelogs
+    pair's direction is also given at top level as ``directionality`` for the
+    default-settings form (rework.md G7: the link views are gone; a
+    version-1 ``field_links`` payload is still accepted on POST)."""
     settings = ConfigManager.load_settings()
-    return settings.model_dump()
+    data = settings.model_dump()
+    data["directionality"] = settings.directionality
+    return data
 
 @app.post("/api/settings")
 def save_settings(data: SettingsSchema):
@@ -138,7 +153,7 @@ def save_settings(data: SettingsSchema):
         cron_jobs = [
             CronJobModel(
                 id=job.id,
-                directionality=job.directionality,
+                directionality=job.directionality or None,
                 frequency=job.frequency,
                 hour=job.hour,
                 minute=job.minute,
@@ -155,10 +170,20 @@ def save_settings(data: SettingsSchema):
             for job in data.cron_jobs
         ]
         current = ConfigManager.load_settings()
-        field_links = data.field_links if data.field_links is not None else current.field_links
+        sync_pairs = list(data.sync_pairs) if data.sync_pairs is not None else list(current.sync_pairs)
+        if all(p.id != DEFAULT_PAIR_ID for p in sync_pairs):
+            # The pairs table on the status page leaves the garmin_divelogs
+            # pair out (its direction is posted at top level, its board as
+            # part of sync_pairs when the mapping board saves), so carry the
+            # stored entry over rather than resetting it.
+            sync_pairs.insert(0, current.default_pair())
+        board_kwargs = {}
+        if data.field_links is not None:
+            # a version-1 style client posting the garmin_divelogs board as links
+            board_kwargs["field_links"] = data.field_links
 
         catalog = _pair_catalog()
-        problems = validate_links(field_links, catalog)
+        problems = []
         for job in cron_jobs:
             if job.field_links:
                 problems.extend(f"Job '{job.id}': {p}" for p in validate_links(job.field_links, catalog))
@@ -166,25 +191,36 @@ def save_settings(data: SettingsSchema):
             raise HTTPException(status_code=400, detail={"message": "Field links are invalid.", "errors": problems})
 
         settings = SettingsModel(
-            directionality=data.directionality,
+            directionality=data.directionality or current.directionality,
+            **board_kwargs,
             sync_filters=SyncFilters(
                 date_from=data.sync_filters.date_from,
                 date_to=data.sync_filters.date_to,
                 only_new=data.sync_filters.only_new,
                 sync_gases=data.sync_filters.sync_gases,
-                sync_fit=data.sync_filters.sync_fit
+                use_garmin_cache=data.sync_filters.use_garmin_cache,
             ),
             grace_window_minutes=data.grace_window_minutes,
             api_cooldown_seconds=data.api_cooldown_seconds,
             propagate_deletes=data.propagate_deletes,
             create_on_garmin=data.create_on_garmin,
+            create_device_dives_on_submersion=data.create_device_dives_on_submersion,
             schedule=schedule_slots,
             cron_jobs=cron_jobs,
-            field_links=field_links,
-            sync_pairs=data.sync_pairs if data.sync_pairs is not None else current.sync_pairs,
+            sync_pairs=sync_pairs,
             garmin_timezone=current.garmin_timezone,
             notify_url=data.notify_url if data.notify_url is not None else current.notify_url,
         )
+        # Every pair's board is checked against its own catalogue (rework.md G5)
+        for pair in settings.sync_pairs:
+            if pair.rules is None:
+                continue
+            pair_catalog = _catalog_for_pair(pair)
+            if pair_catalog is None:
+                continue
+            problems.extend(f"Pair '{pair.id}': {p}" for p in validate_links(pair.field_links or [], pair_catalog))
+        if problems:
+            raise HTTPException(status_code=400, detail={"message": "Field links are invalid.", "errors": problems})
         ConfigManager.save_settings(settings)
         logger.info("Schedule configuration updated successfully.")
         return {"status": "success", "message": "Settings updated."}
@@ -197,6 +233,17 @@ def save_settings(data: SettingsSchema):
 
 def _pair_catalog(source=GarminAdapter, target=DivelogsAdapter):
     return build_catalog(source.field_catalog(), target.field_catalog())
+
+
+def _catalog_for_pair(pair: SyncPairModel):
+    """The merged catalogue of a pair's two services, or None when a spec is unknown."""
+    from src.core.pairs import parse_service_spec
+    try:
+        source = _adapter_class(parse_service_spec(pair.source)[0])
+        target = _adapter_class(parse_service_spec(pair.target)[0])
+    except (ValueError, KeyError):
+        return None
+    return _pair_catalog(source, target)
 
 
 class PreviewRequest(BaseModel):
@@ -227,26 +274,36 @@ def _adapter_class(service_id: str):
 
 @app.get("/api/fields")
 def get_fields():
-    """Field catalogues per sync pair (the implicit Garmin -> Divelogs pair
-    plus every configured one), for the mapping board. Needs no login."""
-    from src.core.pairs import default_links_for, parse_service_spec
+    """Field catalogues per sync pair (the garmin_divelogs pair first, then
+    every saved one, then each combination of configured services with no
+    saved pair yet - pairs.board_pairs), for the mapping board. Needs no
+    login."""
+    from src.core.pairs import board_pairs, default_links_for, parse_service_spec
     settings = ConfigManager.load_settings()
-    specs = [("default", "garmin", "divelogs")] + [(p.id, p.source, p.target) for p in settings.sync_pairs]
+    configured = ConfigManager.load_credentials().configured_services()
+    specs = [(p["id"], p["source"], p["target"], p["saved"]) for p in board_pairs(settings, configured)]
     pairs = []
-    for pair_id, source_spec, target_spec in specs:
+    for pair_id, source_spec, target_spec, saved in specs:
         try:
             source = _adapter_class(parse_service_spec(source_spec)[0])
             target = _adapter_class(parse_service_spec(target_spec)[0])
         except (ValueError, KeyError) as e:
             logger.warning("Skipping sync pair %s: %s", pair_id, e)
             continue
+        default_links = default_links_for(source.service_id, target.service_id)
+        default_rules, default_keys = links_to_rules(default_links, source.service_id, target.service_id)
         pairs.append({
             "id": pair_id,
             "source": source.service_id,
             "target": target.service_id,
+            # the specs a save writes into sync_pairs for a board not saved yet
+            "source_spec": source_spec,
+            "target_spec": target_spec,
+            "saved": saved,
             "source_name": source.display_name,
             "target_name": target.display_name,
-            "default_links": [l.model_dump() for l in default_links_for(source.service_id, target.service_id)],
+            "default_rules": {receiver: [r.model_dump() for r in items] for receiver, items in default_rules.items()},
+            "default_match_keys": default_keys,
             "fields": {
                 source.service_id: [f.model_dump() for f in source.field_catalog()],
                 target.service_id: [f.model_dump() for f in target.field_catalog()],
@@ -271,8 +328,13 @@ def get_credentials_status():
         # Structured rows (no passwords) for the repeatable-account-row
         # credentials form; garmin_accounts/divelogs_accounts above stay a
         # flat username list for dropdown-style consumers (cron job editor).
-        "garmin_account_rows": [{"username": a.username, "token_dir": a.token_dir} for a in garmin_accounts if a.username],
-        "divelogs_account_rows": [{"username": a.username} for a in divelogs_accounts if a.username],
+        # has_password is whether one is stored at all, never the password
+        # itself: a username saved without one can't log in, and the form
+        # should say so rather than leaving it to the next sync.
+        "garmin_account_rows": [{"username": a.username, "token_dir": a.token_dir, "has_password": bool(a.password)}
+                                for a in garmin_accounts if a.username],
+        "divelogs_account_rows": [{"username": a.username, "has_password": bool(a.password)}
+                                  for a in divelogs_accounts if a.username],
         "subsurface_configured": creds.subsurface.configured,
         "subsurface_email": creds.subsurface.email,
         "submersion_configured": creds.submersion.configured,
@@ -280,6 +342,9 @@ def get_credentials_status():
             "store_type": creds.submersion.store_type,
             "endpoint_url": creds.submersion.endpoint_url,
             "region": creds.submersion.region,
+            # No override saved: the region comes from the endpoint, so the
+            # settings page can leave its Advanced section folded away.
+            "region_auto": not creds.submersion.region,
             "bucket": creds.submersion.bucket,
             "prefix": creds.submersion.prefix,
             "path_style": creds.submersion.path_style,
@@ -401,19 +466,18 @@ def test_credentials(data: CredentialsSchema):
 # ---------------------------------------------------------------------------
 
 def _engine_for_pair_id(pair_id: Optional[str]):
-    """The engine for the implicit Garmin -> Divelogs pair or a configured one."""
+    """The engine for a configured pair; None / "default" = the garmin_divelogs pair."""
     from src.core.pairs import engine_for_pair, find_pair
-    from src.core.sync_engine import SyncEngine
     if not pair_id or pair_id == "default":
-        engine = SyncEngine()
-        engine.run_overrides = {}
-        return engine
+        pair_id = DEFAULT_PAIR_ID
     return engine_for_pair(find_pair(ConfigManager.load_settings(), pair_id))
 
 
 class MappingTestRequest(BaseModel):
     pair: Optional[str] = None
-    field_links: Optional[List[FieldLink]] = None
+    field_links: Optional[List[FieldLink]] = None          # a candidate board as links (version-1 clients)
+    rules: Optional[Dict[str, List[SyncRule]]] = None       # ... or as receiver rules (rework.md G5)
+    match_keys: Optional[List[List[str]]] = None
     limit: int = 10
 
 
@@ -426,10 +490,8 @@ def test_mapping(data: MappingTestRequest):
         raise HTTPException(status_code=409, detail="A synchronization run is in progress; try again when it has finished.")
     try:
         engine = _engine_for_pair_id(data.pair)
-        links = data.field_links
-        if links is None and engine.run_overrides.get("field_links_override") is not None:
-            links = engine.run_overrides["field_links_override"]
-        return engine.test_mapping(links, limit=max(1, min(data.limit, 50)))
+        return engine.test_mapping(data.field_links, limit=max(1, min(data.limit, 50)),
+                                   rules=data.rules, match_keys=data.match_keys)
     except Exception as e:
         logger.error("Test mapping failed: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
@@ -519,11 +581,72 @@ def trigger_sync(request: Optional[SyncTriggerRequest] = None):
     threading.Thread(target=scheduler.run_sync_thread, args=(dry_run, custom_settings), daemon=True).start()
     return {"status": "success", "message": "Sync job triggered in background."}
 
+# ---- Garmin dive list + FIT files --------------------------------------------
+
+_GARMIN_ROW_KEYS = ("filename", "account", "id", "dive_number", "date", "time", "location",
+                    "max_depth", "duration", "fit", "fit_file", "manual")
+
+
+class FitDownloadRequest(BaseModel):
+    # Cached JSON names of the dives to fetch; None = every dive without a FIT yet
+    filenames: Optional[List[str]] = None
+
+
+def _require_idle():
+    if scheduler.is_sync_running or scheduler.is_download_running:
+        raise HTTPException(status_code=409, detail="A sync or download is already running.")
+
+
+@app.get("/api/dives/garmin")
+def list_garmin_dives():
+    """The locally cached Garmin dives (what the last refresh fetched), each
+    with whether its original .fit has been downloaded."""
+    from src.core import dive_cache
+    rows = dive_cache.list_dives("garmin")
+    return {"dives": [{k: row.get(k) for k in _GARMIN_ROW_KEYS} for row in rows]}
+
+
+@app.post("/api/dives/garmin/refresh")
+def refresh_garmin_dives():
+    _require_idle()
+    threading.Thread(target=scheduler.run_download_thread, kwargs={"services": ["garmin"]}, daemon=True).start()
+    return {"status": "started"}
+
+
+@app.post("/api/dives/garmin/fit")
+def download_garmin_fits(request: Optional[FitDownloadRequest] = None):
+    _require_idle()
+    from src.core import dive_cache
+    filenames = request.filenames if request else None
+    if filenames is None:
+        filenames = [r["filename"] for r in dive_cache.list_dives("garmin") if not r.get("fit")]
+    if not filenames:
+        return {"status": "nothing_to_do", "count": 0}
+    threading.Thread(target=scheduler.run_fit_download_thread, args=(filenames,), daemon=True).start()
+    return {"status": "started", "count": len(filenames)}
+
+
+@app.get("/api/dives/garmin/fit/{activity_id}")
+def get_garmin_fit(activity_id: str, account: Optional[str] = None):
+    """Hands a downloaded .fit to the browser, e.g. to import in Submersion."""
+    from src.core import garmin_files
+    if not activity_id.isdigit() or (account and (account != os.path.basename(account) or account.startswith("."))):
+        raise HTTPException(status_code=400, detail="Invalid activity id or account.")
+    path = garmin_files.find_fit(activity_id, account or None)
+    if not path:
+        raise HTTPException(status_code=404, detail="No FIT downloaded for this dive.")
+    return FileResponse(path, media_type="application/octet-stream", filename=os.path.basename(path))
+
+
 @app.get("/api/status")
 def get_status():
     settings = ConfigManager.load_settings()
+    from src.core import progress
     return {
         "is_running": scheduler.is_sync_running,
+        "is_downloading": scheduler.is_download_running,
+        # How far a long job has got (rework.md E14); None when nothing runs
+        "progress": progress.current(),
         "last_results": scheduler.last_sync_results,
         "next_scheduled_run": scheduler.get_next_scheduled_run(settings)
     }
@@ -574,6 +697,13 @@ def stream_logs():
 def get_app_version():
     from src.core.version import get_version_info
     return get_version_info()
+
+
+@app.get("/api/about")
+def get_about():
+    """Version, license, project links and component versions (the About page)."""
+    from src.core.about import about_info
+    return about_info()
 
 # Serve index.html statically
 @app.get("/")

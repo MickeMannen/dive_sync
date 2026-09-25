@@ -18,6 +18,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 from desktop import credentials as creds_store
 from desktop import logging_bridge
+from desktop.controllers.about import AboutController
 from desktop.controllers.conflicts import ConflictsController
 from desktop.controllers.dives import DivesController
 from desktop.controllers.mapping import MappingController
@@ -35,18 +36,43 @@ def build_controllers(log_queue) -> Dict[str, object]:
         "syncController": SyncController(log_queue),
         "garminDives": DivesController("garmin", log_queue),
         "divelogsDives": DivesController("divelogs", log_queue),
+        "subsurfaceDives": DivesController("subsurface", log_queue),
         "settingsController": SettingsController(),
         "mappingController": MappingController(),
         "conflictsController": ConflictsController(),
+        "aboutController": AboutController(),
     }
 
 
-def create_engine(controllers: Dict[str, object], initial_section: str) -> QQmlApplicationEngine:
+def available_screen_size() -> Dict[str, int]:
+    """The launch screen's usable area, menu bar and dock/taskbar excluded.
+
+    QML's Screen attached property only offers ``desktopAvailable*``, which is
+    the union of every screen: on a laptop docked to a larger monitor that is
+    far taller than the screen the window actually opens on, so it cannot be
+    used to keep the window on-screen. QScreen gives the real thing."""
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:      # offscreen/headless platform plugin
+        return {"width": 0, "height": 0}
+    geometry = screen.availableGeometry()
+    return {"width": geometry.width(), "height": geometry.height()}
+
+
+def create_engine(controllers: Dict[str, object], initial_section: str,
+                  on_warnings=None) -> QQmlApplicationEngine:
+    """``on_warnings`` is connected before the QML is loaded, so it sees the
+    errors raised while loading it too. A caller that connects to
+    ``engine.warnings`` on the returned engine only ever sees later ones -
+    which is how a "Delegate must be of Item type" in MappingPage.qml went
+    unnoticed by the test suite while printing on every single launch."""
     engine = QQmlApplicationEngine()
+    if on_warnings is not None:
+        engine.warnings.connect(on_warnings)
     context = engine.rootContext()
     for name, controller in controllers.items():
         context.setContextProperty(name, controller)
     context.setContextProperty("initialSection", initial_section)
+    context.setContextProperty("availableScreen", available_screen_size())
     engine.addImportPath(QML_DIR)
     engine.load(QUrl.fromLocalFile(os.path.join(QML_DIR, "main.qml")))
     return engine
@@ -99,4 +125,13 @@ def main() -> int:
         return 1
     app.aboutToQuit.connect(cleanup_on_quit)
     app._dive_sync_controllers = controllers  # keep them alive for the app's lifetime
-    return app.exec()
+    result = app.exec()
+    # Tear the QML tree down here, while the controllers its bindings read are
+    # still alive. Left to interpreter shutdown, the controllers can be
+    # collected first: every binding on every page the user visited then
+    # re-evaluates against a context property that has become null, and the
+    # app exits behind a screenful of "TypeError: Cannot read property ... of
+    # null". Nothing is broken when that happens, but it buries any real
+    # message in the log.
+    del engine
+    return result

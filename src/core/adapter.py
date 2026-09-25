@@ -26,6 +26,14 @@ class BaseDiveAdapter(ABC):
         """Fields this service can read and/or write. Default: none."""
         return []
 
+    @classmethod
+    def canonical_id(cls, external_id) -> str:
+        """The part of a dive id that stays the same for the dive's lifetime,
+        which is what links are compared on. Default: the id itself; a
+        service whose id carries something editable (Subsurface's Dive-N
+        file name holds the dive number) reduces it."""
+        return str(external_id).strip()
+
     @abstractmethod
     def login(self) -> bool:
         """Authenticate with the service."""
