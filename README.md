@@ -19,6 +19,12 @@ It comes in two forms that share the same sync engine and settings format:
 * **The desktop app** (DiveSync, PySide6/Qt Quick; macOS first, Windows and Linux builds in CI): run syncs by hand, browse and edit your dives on each service, edit the mapping board, resolve conflicts.
 * **The Docker image**: an unattended, scheduled sync with a web dashboard (Sync now, scheduled jobs, live log, mapping board, conflicts, accounts). It syncs only; browsing and editing dives is the desktop app's job.
 
+<p align="center">
+  <img src="media/app_garmin.png" alt="Desktop app: Garmin dives" width="49%">
+  <img src="media/docker_sync.png" alt="Web dashboard: Sync page" width="49%">
+</p>
+<p align="center"><em>The desktop app (left) and the Docker image's web dashboard (right).</em></p>
+
 <p align="left">
   <a href="https://skillicons.dev">
     <img src="https://skillicons.dev/icons?i=python,fastapi,js,html,css,docker,bash,git,gemini,claude" alt="Tech Stack" />
@@ -136,6 +142,21 @@ The pages:
 * **Conflicts** — every pair's queued conflicts, with the two values side by side and **Keep this** per side.
 * **Settings** — accounts for Garmin Connect, Divelogs.org and Subsurface Cloud (with a login test), and export/import of the whole sync configuration as a profile.
 * **About** — version, update check, license, data folder.
+
+<table>
+  <tr>
+    <td><img src="media/app_sync.png" alt="Sync page" width="100%"><br><sub><b>Sync</b>: source → target, options, Download dives and the run log</sub></td>
+    <td><img src="media/app_mapping.png" alt="Mapping page" width="100%"><br><sub><b>Mapping</b>: what the target takes from the source, with a split (dashed)</sub></td>
+  </tr>
+  <tr>
+    <td><img src="media/app_garmin.png" alt="Garmin dives page" width="100%"><br><sub><b>Garmin Dives</b>: FIT status per dive, staged edits, Save all changes</sub></td>
+    <td><img src="media/app_divelogs.png" alt="Divelogs dives page" width="100%"><br><sub><b>Divelogs Dives</b>: the same editor for Divelogs.org</sub></td>
+  </tr>
+  <tr>
+    <td><img src="media/app_settings.png" alt="Settings page" width="100%"><br><sub><b>Settings</b>: accounts (kept in the OS keychain) and the sync profile</sub></td>
+    <td></td>
+  </tr>
+</table>
 
 ---
 
@@ -324,6 +345,14 @@ Open `http://localhost:8000` in your web browser. It is the unattended side of t
 3. **Conflicts**: every pair's queued conflicts with **Keep this** per side.
 4. **Settings**: Garmin, Divelogs.org and Subsurface Cloud credentials (with a test), the API cooldown, file pairs (UDDF file, Subsurface checkout) under *Advanced*, and the sync profile export/import.
 5. **About**: version (the Docker image's `APP_VERSION`), update check and license.
+
+<table>
+  <tr>
+    <td><img src="media/docker_sync.png" alt="Web dashboard: Sync" width="100%"><br><sub><b>Sync</b>: Sync now, the live log and scheduled jobs</sub></td>
+    <td><img src="media/docker_mapping.png" alt="Web dashboard: Mapping" width="100%"><br><sub><b>Mapping</b>: the same board as the desktop app</sub></td>
+    <td><img src="media/docker_settings.png" alt="Web dashboard: Settings" width="100%"><br><sub><b>Settings</b>: accounts, API cooldown, file pairs, profile</sub></td>
+  </tr>
+</table>
 
 ---
 
