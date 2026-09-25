@@ -3,10 +3,10 @@
 # Solution is still in Beta!!!!!
 ## I have mainly tested Garmin sync to Divelogs and not the other direction - be careful and keep a backup!
 
-> **Note:** Submersion sync doesn't work as of now and is disabled: it isn't offered in the status page, the desktop app, `setup_credentials.py` or the CLI. The Submersion sections below describe how it is meant to work once it is re-enabled (`SUBMERSION_ENABLED` in `src/core/config.py`).
+> **Note:** Submersion sync doesn't work as of now and is disabled: it isn't offered in the web dashboard, the desktop app, `setup_credentials.py` or the CLI.
 
 
-Dive Sync is a dive log synchronization engine that seamlessly matches and syncs your dive history between **Garmin Connect** and **Divelogs.org**. 
+Dive Sync is a dive log synchronization engine that matches and syncs your dive history between **Garmin Connect**, **Divelogs.org** and **Subsurface** (Subsurface Cloud, a Subsurface git checkout, or a UDDF file).
 
 I started this project when i got back to diving and had to import all dives from logbooks to Garmin and to Divelogs.
 I managed to make the import but the stability of the code wasn't good enough for release. Because of lack of time I didnt continue but with Gemini I saw the opportunity to finalize the project.
@@ -15,7 +15,9 @@ There are most likely a lot of bugs so please use it carefully, I will use the d
 
 It features two-way syncing (one direction per run), detailed telemetry parsing (depth/temperature graphs and gas mixture sensors), and multi-account support.
 
-**Project direction**: the Docker deployment is a scheduled-sync engine with a status page (schedule, credentials, mapping board — no dive editing there). Interactive dive editing lives in the native desktop app (`python -m desktop`; Briefcase + PySide6/Qt Quick, macOS first, Windows and Linux planned) — see [rework.md](rework.md) for the plan and status.
+It comes in two forms that share the same sync engine and settings format:
+* **The desktop app** (DiveSync, PySide6/Qt Quick; macOS first, Windows and Linux builds in CI): run syncs by hand, browse and edit your dives on each service, edit the mapping board, resolve conflicts.
+* **The Docker image**: an unattended, scheduled sync with a web dashboard (status, live log, mapping board, conflicts, accounts, schedule). It has no dive editing beyond the Garmin dive list.
 
 <p align="left">
   <a href="https://skillicons.dev">
@@ -27,12 +29,14 @@ It features two-way syncing (one direction per run), detailed telemetry parsing 
 
 ## 🚀 Key Features
 
-* **Two-Way Syncing, One Direction Per Run**: Every run has exactly one receiving service (to Divelogs, to Garmin, to Submersion, ...). To keep two services in step both ways, schedule one job per direction — the second run sees what the first wrote, so nothing needs a tiebreak and no single run ever writes both sides.
-* **Telemetry & Gas Mapping**: Maps complex dive metrics, temperature profiles, start/end tank pressures, gas mixtures (Nitrox/Trimix), and telemetry graph coordinates.
-* **Field-Level Mapping Board**: A drag-and-drop editor (status page and desktop app) of what each service accepts from the other, field by field, with a policy per rule, composite templates, and a queue for conflicts that need a manual pick.
-* **Scheduled Sync**: Configure one or more cron-like jobs (hourly/daily/weekly/custom interval, per-job direction and filters) that run unattended.
-* **Status Page**: A read-only web page showing whether a sync is running, the last result, the next scheduled run, and a live log tail — plus a small form for credentials and schedule configuration.
-* **Multi-Account Support**: Configure multiple Garmin and Divelogs credentials. Run the sync globally or target specific accounts using selection arguments.
+* **Two-Way Syncing, One Direction Per Run**: Every run reads a **source** and writes a **target** (to Divelogs, to Garmin, to Subsurface, ...). To keep two services in step both ways, run or schedule both directions — the second run sees what the first wrote, so nothing needs a tiebreak and no single run ever writes both sides.
+* **Safe by default, Mirror on request**: a normal sync never deletes anything. The desktop app's **Mirror** option makes the target a copy of the source for one run (compares every dive, forces the mapped fields, deletes target dives the source doesn't have) — with a dry run to preview it.
+* **Reliable matching**: dives are paired by stored links first, then by start time, and only then by match keys such as the dive number — so a renumbered log or a re-imported Garmin activity doesn't pair a dive with the wrong one.
+* **Telemetry & Gas Mapping**: depth/temperature profiles, start/end tank pressures, gas mixtures (Nitrox/Trimix) and tank transmitter names (Garmin tank sensors).
+* **Field-Level Mapping Board**: a drag-and-drop editor (desktop app and web dashboard) of what the target accepts from the source, field by field, with a policy per rule, composite templates, **splits** (e.g. Garmin's activity name "Gozo, Blue Hole" into Divelogs' location and dive site), and a queue for conflicts that need a manual pick.
+* **Dive editing (desktop app)**: edit dives on Garmin Connect, Divelogs.org and Subsurface; changes are staged, shown in the list, and uploaded together with **Save all changes** (Garmin is slow — three requests per dive). Undo, staged deletes, Garmin FIT file downloads, and hand-logged Subsurface dives' duration and depths are editable too.
+* **Scheduled Sync**: cron-like jobs (hourly/daily/weekly/custom interval, per-job pair, direction and filters) that run unattended in the Docker image, with optional failure alerts to a webhook (ntfy, Gotify, ...).
+* **Multi-Account Support**: several Garmin and Divelogs accounts, selected per run from the CLI.
 * **Docker Ready**: Package and run the scheduler with custom port routing and unified volume mapping to persist settings, credentials, session tokens, and data caches.
 
 ---
@@ -60,9 +64,9 @@ DATA_DIR=~/.dive_sync_test python sync.py --dry-run
 Supported services:
 * **Garmin Connect** and **Divelogs.org**: username and password.
 * **Subsurface Cloud**: the email and password from Subsurface's cloud storage preferences. Verified with one read-only request against the cloud git server.
-* **Submersion**: the S3-compatible bucket Submersion syncs through. Backblaze B2 is the recommended hosted option: create a bucket, then an application key restricted to it; the endpoint is `https://s3.<region>.backblazeb2.com`. Point Submersion's sync provider at the same bucket. Google Drive cannot be used (see [docs/submersion_sync_format.md](docs/submersion_sync_format.md)). If the library has end-to-end encryption turned on in Submersion, also set a `passphrase` — otherwise leave it blank.
+* **Submersion**: disabled for now (see the note at the top); its settings are kept for when it works.
 
-Subsurface Cloud is fully supported; Submersion sync doesn't work as of now and is disabled (see "Other services" below).
+The desktop app asks for the same credentials on its **Settings** page and keeps them in the OS keychain instead of a file.
 
 #### Single Account Structure (`credentials.json`):
 ```json
@@ -80,27 +84,10 @@ Subsurface Cloud is fully supported; Submersion sync doesn't work as of now and 
     "email": "you@example.com",
     "password": "yourpassword",
     "base_url": "https://cloud.subsurface-divelog.org/"
-  },
-  "submersion": {
-    "store_type": "s3",
-    "endpoint_url": "s3.eu-central-003.backblazeb2.com",
-    "bucket": "my-submersion-sync",
-    "access_key_id": "…",
-    "secret_access_key": "…",
-    "passphrase": ""
   }
 }
 ```
-The `subsurface` and `submersion` sections are optional; an older file without them still loads.
-
-The `submersion` fields are the ones Submersion's own sync settings ask for. An
-`endpoint_url` without a scheme is read as `https://`; give it an explicit
-`http://` only for a self-hosted store without TLS. Three more settings sit
-behind **Advanced** in both UIs and can be left out of the file entirely:
-`region` (otherwise read out of the endpoint — B2, S3, R2, Wasabi, Spaces,
-Scaleway; a self-hosted store needs it set by hand), `prefix` (defaults to
-`submersion-sync/`, what Submersion writes under) and `path_style` (off;
-some self-hosted stores need it on).
+The `subsurface` section is optional; an older file without it still loads.
 
 #### Multiple Accounts Structure (`credentials.json`):
 You can configure a list of credentials. The sync engine will segregate data directories per user (e.g. `./data/garmin/user@domain.com/`):
@@ -133,6 +120,25 @@ You can configure a list of credentials. The sync engine will segregate data dir
 
 ---
 
+## 🖥️ Desktop App
+
+```bash
+python -m desktop          # from a source checkout
+briefcase dev              # the same, through Briefcase
+briefcase build macOS app && briefcase package macOS app    # a DiveSync.app / installer
+```
+Pre-built installers are attached to the GitHub releases (built by `.github/workflows/desktop-build.yml`). The app keeps its settings and caches in its own data folder (shown on the **About** page) and credentials in the OS keychain.
+
+The pages:
+* **Sync** — pick a **source** and a **target** (⇄ swaps them) and press **Sync now**. Options: *Dry run*, *Only new dives*, *Sync gases*, *Mirror* (make the target a copy of the source; asks for confirmation) and *Use cached Garmin dives*. **Download dives** stores each service's dives on this computer for its Dives page; the run log is below.
+* **Garmin Dives / Divelogs Dives / Subsurface Dives** — every dive of that service in a sortable table (pick columns with a right-click on the header). Select a dive to edit it; edits are staged (✎) and shown in the table, deletions are staged too (🗑), **Undo** drops them, and **Save all changes** uploads them in one go (on Divelogs and Subsurface, **Save** uploads a single dive right away). On Garmin: separate *Activity name* and *Location name*, a **FIT files** menu to download the original `.fit` files (✓ downloaded, ✗ not yet, M hand-logged), and **Full refresh** that re-fetches every dive and its FIT file. On Subsurface, duration and depths come from the dive profile, so they are editable on hand-logged dives only.
+* **Mapping** — the mapping board for a source → target (see below); pair options (scheduled direction, grace window, propagate deletes, create on Garmin) are on their own card.
+* **Conflicts** — every pair's queued conflicts, with the two values side by side and **Keep this** per side.
+* **Settings** — accounts for Garmin Connect, Divelogs.org and Subsurface Cloud (with a login test), and export/import of the whole sync configuration as a profile.
+* **About** — version, update check, license, data folder.
+
+---
+
 ## 💻 CLI Usage
 
 The synchronization command-line interface is accessed via `sync.py`.
@@ -162,7 +168,7 @@ python sync.py --backup --garmin-path my_garmin.json --divelogs-path my_divelogs
 * `--date-to YYYY-MM-DD`: Sync only dives occurring on or before this date.
 * `--full-sync`: Force a full sync instead of an incremental check.
 * `--no-garmin-cache`: Fetch every Garmin dive from Garmin Connect. By default a sync reads a Garmin dive from the local refresh cache when Garmin's activity list shows it unchanged (and caches what it does fetch); that list does not reveal an edit to only notes, buddy, weight or visibility, which is what this flag is for.
-* `--direction`: Which side this run writes: `to_garmin`, `to_divelogs`, `to_<service>`, `to_target` or `to_source`. Without it the pair's saved direction is used. `bidirectional` is no longer accepted — run each direction separately. **Deletes follow the direction**: with *propagate deletes* on, a dive gone from the sending side is deleted on the receiving side; a dive gone from the receiving side is left alone by that run (the opposite run removes it from the sender).
+* `--direction`: Which side this run writes: `to_garmin`, `to_divelogs`, `to_<service>`, `to_target` or `to_source`. Without it the pair's saved direction is used. `bidirectional` is no longer accepted — run each direction separately. **Deletes follow the direction**: with *propagate deletes* on, a dive gone from the sending side is deleted on the receiving side; a dive gone from the receiving side is left alone by that run (the opposite run removes it from the sender). A sync started from the desktop app's Sync page never deletes unless *Mirror* is ticked.
 * `--overwrite`: With `--save-raw-data`, fetch every Garmin dive again instead of reusing the unchanged ones (other services are always downloaded in full).
 
 ### Other services: UDDF files and Subsurface
@@ -189,17 +195,12 @@ Each pair has its own direction, grace window and mapping board (defaults are ge
 python sync.py --source garmin --target subsurface-cloud --full-sync
 ```
 
-**Submersion** *(disabled for now — Submersion sync doesn't work yet)* joins the library's sync store as one more device (S3 bucket or a local synced folder, configured under `submersion` in `credentials.json`), and syncs **metadata only**:
+**Submersion** is disabled for now (see the note at the top).
 
-```bash
-python sync.py --source garmin --target submersion --direction to_submersion
-```
-
-Submersion builds a dive's depth profile, cylinders, tank pressures and gas switches from the `.fit` file you import in the app itself, and those tables reference one another. dive_sync does not write them: **import each dive computer dive's `.fit` in Submersion first** (export it from Garmin Connect, or from your watch), then let a sync fill in the dive site, dive name, buddy, notes, weight, visibility, GPS and the extra Submersion fields on the dive that import created. A dive you entered by hand on Garmin Connect has no `.fit` to import, so dive_sync creates that one for you, gas and all. To have dive_sync create recorded dives too (profile from Garmin's API, no tank pressures), set `"create_device_dives_on_submersion": true` in `settings.json` or tick the box on the status page.
 
 ### Mapping, conflicts and profiles
 
-Which field feeds which, in what direction, and who wins a conflict is defined by the *mapping board* — see the "🗺️ Mapping Board" section below for what that actually means. Edit it visually on the status page or in the desktop app, or from the CLI:
+Which field feeds which, in what direction, and who wins a conflict is defined by the *mapping board* — see the "🗺️ Mapping Board" section below for what that actually means. Edit it visually in the desktop app or on the web dashboard, or from the CLI:
 
 ```bash
 # Show the board as a table (and any problems with it)
@@ -222,7 +223,7 @@ python sync.py --import-profile dive_sync_profile.json     # shows a summary, as
 
 ## 🗺️ Mapping Board (fields, rules, templates and conflicts)
 
-Every synced field is controlled by the *mapping board*, identical whether you edit it on the status page, in the desktop app, or by hand in `settings.json`. There's one board per sync pair — the Garmin ↔ Divelogs pair (`garmin_divelogs`) and one more for each pair you add (a UDDF file, a Subsurface checkout, Subsurface Cloud, Submersion) — and a board is two lists of **rules**, one per receiving side: *what Divelogs takes from Garmin* and *what Garmin takes from Divelogs*. A sync run writes exactly one side, and applies that side's list.
+Every synced field is controlled by the *mapping board*, identical whether you edit it in the desktop app, on the web dashboard, or by hand in `settings.json`. There's one board per pair of services — the Garmin ↔ Divelogs pair (`garmin_divelogs`), one for every pair you add (a UDDF file, a Subsurface checkout, ...), and one for each combination of the services you have accounts for (e.g. Garmin ↔ Subsurface Cloud), which starts from the shipped defaults and is saved into `sync_pairs` the first time you save it. A board is two lists of **rules**, one per receiving side: *what Divelogs takes from Garmin* and *what Garmin takes from Divelogs*. A sync run writes exactly one side, and applies that side's list.
 
 **Field catalogue.** Each service publishes what it can read and write (`GET /api/fields`) — a read-only field (e.g. Divelogs numbers its own dives) can never be written by a rule; the board UIs show these as locked.
 
@@ -242,15 +243,15 @@ template: "{divelogs.location}, {divelogs.divesite}"
 ```
 so a Divelogs dive with location `Larnaca` and dive site `Zenobia` uploads to Garmin titled `Larnaca, Zenobia`. In either board UI, you build one by dropping a *second* field onto a field that already has a rule; the editor shows a live preview as you edit the template.
 
-**Reverse parsing (splitting a composite back).** A composite rule can also work backwards by adding a `reverse` regex with named groups matching its source field names, e.g. `(?P<divesite>.+) \((?P<location>.+)\)` for a template of `{divesite} ({location})`. On a run *towards the sources' side*, whenever the composite's field has been hand-edited to something the template no longer reproduces, the pattern is matched against its whole current value and, if it fully matches, splits it back into the named fields. That split has its own policy (`reverse_conflict`; blank = the rule's own policy), read from the sources' side. A value that no longer fits the pattern at all is left alone rather than guessed at. Only text-typed source fields are supported. Both board UIs show a live self-check next to the preview — "reverse -> {...}" — proving the pattern actually inverts the template on the example dive.
+**Splits (a composite taken apart).** A composite rule can also work backwards: on a run *towards the sources' side* its field is split back into the fields it is built from. With the template `{divelogs.location}, {divelogs.divesite}`, Garmin's activity name "Gozo, Blue Hole" becomes Divelogs location "Gozo" and dive site "Blue Hole" — on matched dives and on newly uploaded ones. The value is cut at the text between the fields in the template (spacing around it doesn't matter; the first occurrence wins); a value without that text is left alone rather than guessed at. The easiest way to make one: in the source → target panel, drag the same text field onto two fields of the target, and the board offers to split it. In the rule editor it is the **"Split … back into …"** checkbox with its own policy; a custom regex with named groups is still possible under *Custom split pattern*. In `settings.json` a split is `"reverse": "auto"` (or the regex) with `"reverse_conflict"` as its policy. Only text fields can be split.
 
-**Match keys.** Before falling back to start times, the engine can pair dives on a field that both sides carry (a dive number, a timestamp): the pair's ordered `match_keys` list, edited in the strip under the board. A hit only counts within a day of each other.
+**Matching.** Dives are paired in passes: first the links remembered from earlier runs (and the ids Subsurface stores on its dives), then **start times** within the grace window (closest first), and only then the pair's ordered `match_keys` — a field both sides carry, such as the dive number — for dives whose clocks disagree (a time-zone shift), within a day of each other. Start time comes first on purpose: a number can go stale when a log is renumbered, a start time doesn't.
 
-**Shipped defaults (Garmin ↔ Divelogs).** Buddy, notes, weight, visibility, GPS, and site name are accepted on both sides with `manual`; tanks and depth/temperature profiles are accepted by Divelogs only (Garmin's gas API can't be written, and can't record samples at all); Garmin's activity title is built from Divelogs' location/dive site for new dives (see the template above). A pair beyond Garmin ↔ Divelogs starts from a smaller, generic default board covering the fields both sides actually have. If you want the old pre-board behaviour (Garmin always wins every difference), that board is still available as `fields.legacy_field_links()`.
+**Shipped defaults (Garmin ↔ Divelogs).** Buddy, notes, weight, visibility, GPS, and site name are accepted on both sides with `manual`; tanks and depth/temperature profiles are accepted by Divelogs only (Garmin's gas API can't be written, and can't record samples at all); Garmin's activity title is built from Divelogs' location/dive site for new dives (see the template above). A pair beyond Garmin ↔ Divelogs starts from a smaller, generic default board covering the fields both sides actually have; where both services let you set the dive number (e.g. Garmin → Subsurface), the number is a match key and follows the source. If you want the old pre-board behaviour (Garmin always wins every difference), that board is still available as `fields.legacy_field_links()`.
 
-**The conflict queue.** Any `manual`-policy rule where both sides hold a value and they differ gets recorded (`conflicts.json`) instead of being resolved automatically. Resolve one from the status page or desktop app's **Conflicts** view (pick which side wins; the other side gets updated), or from the CLI (`--list-conflicts`, `--resolve <id> source|target`). An unresolved conflict is re-evaluated — and re-queued if it's still unresolved — on the next run that revisits that dive.
+**The conflict queue.** Any `manual`-policy rule where both sides hold a value and they differ gets recorded (`conflicts.json`) instead of being resolved automatically. Resolve one from the desktop app's **Conflicts** page (all pairs; **Keep this** on the value to keep, the other side gets updated) or the web dashboard's Mapping page, or from the CLI (`--list-conflicts`, `--resolve <id> source|target`). An unresolved conflict is re-evaluated — and re-queued if it's still unresolved — on the next run that revisits that dive.
 
-**Editing the board.** Visually: each receiving side is a panel, "Y → X" (sender on the left, receiver on the right) (the side the current direction writes comes first, badged); drag a field from the sender's list on the left onto a field on the right to add a rule; drag the same text field onto a second field to **split** it (e.g. Garmin's *Activity name* "Gozo, Blue Hole" onto Divelogs' *Location* and then *Dive site*: the split is cut at the text between the fields in its template, applies to matched and newly uploaded dives, and shows as "⇠ split of …" in the panel it writes); click a rule to change its policy, template or split; **Save** asks whether to re-apply the changed mapping to every already-matched dive on the next run. By hand: `sync_pairs[].rules` in `settings.json` (see below), or `POST /api/settings` — the API also still accepts a version-1 board as `field_links` (top level for the `garmin_divelogs` pair, or on a pair) and stores it as rules.
+**Editing the board.** Visually: pick a **source** and a **target** (⇄ shows the other direction) and the board shows what the target takes from the source — the source's fields on the left, the target's on the right. Drag a field from the left onto a field on the right (or click one, then the other) to add a rule; drop a second field onto a rule to make a composite; drag the same text field onto a second field to split it (shown as "⇠ split of …"). Click a rule to change its policy (and, where it applies, its template or split). **Save board** asks whether to re-apply the changed mapping to every already-matched dive on the next run. The pair's own options — the direction scheduled runs write, grace window, propagate deletes, create on Garmin — sit apart from the board. By hand: `sync_pairs[].rules` in `settings.json` (see below), or `POST /api/settings` — the API also still accepts a version-1 board as `field_links` (top level for the `garmin_divelogs` pair, or on a pair) and stores it as rules.
 
 **How a board is stored (`settings_version` 2).** Under the receiver's id in the pair's `rules`, plus the pair's `match_keys`:
 ```json
@@ -290,11 +291,16 @@ docker run -d \
 ```
 
 The container exposes:
-- **Status Page**: available at `http://localhost:8080` — sync status, live log tail, credentials, and schedule configuration
+- **Web dashboard**: available at `http://localhost:8080` — sync status, live log, mapping board, accounts and schedule (see "🌐 Web Dashboard" below)
 - **Volume Mount**: `/app/data/` (contains `settings.json`, `credentials.json`, `tokens/`, `garmin/`, and `divelogs/`)
 
-### 3. Automated Docker Hub Builds on Release (GitHub Actions)
-An automated GitHub Actions workflow (`.github/workflows/docker-release.yml`) builds and publishes updated multi-architecture images (`linux/amd64`, `linux/arm64`) to Docker Hub whenever a new GitHub Release is published or a version tag (e.g., `v1.0.0`) is pushed.
+### 3. Building a release (GitHub Actions)
+Nothing is built or published automatically. To release:
+1. Set the version in `pyproject.toml` (`version = "…"`; the desktop app shows it on its About page) and create a GitHub Release with a matching tag, e.g. `v0.1.0` (draft or published).
+2. In the **Actions** tab, run **Build and attach release artifacts** (`.github/workflows/release-build.yml`) with that tag and the platforms to build: macOS (signed and notarized), Windows and Linux installers are attached to the release.
+3. Tick **push_docker** there (or run `.github/workflows/docker-release.yml` on its own) to build the multi-architecture image (`linux/amd64`, `linux/arm64`) and push it to Docker Hub; the tag is baked in as `APP_VERSION`, which the web dashboard's About page shows.
+
+`.github/workflows/desktop-build.yml` builds the desktop app for a quick check (ad-hoc signed) without a release.
 
 #### Required GitHub Secrets:
 Set the following secrets in your GitHub repository (**Settings ➔ Secrets and variables ➔ Actions**):
@@ -302,28 +308,24 @@ Set the following secrets in your GitHub repository (**Settings ➔ Secrets and 
 - `DOCKERHUB_TOKEN`: A Personal Access Token (PAT) generated in Docker Hub (**Account Settings ➔ Security ➔ Personal access tokens**)
 
 #### Updating the Docker Hub Overview Page:
-The GitHub workflow automatically syncs [`DOCKERHUB.md`](DOCKERHUB.md) to your Docker Hub repository description overview page (`hub.docker.com/r/mickemannen/dive_sync`) on every release.
+The GitHub workflow automatically syncs [`DOCKERHUB.md`](DOCKERHUB.md) to your Docker Hub repository description overview page (`hub.docker.com/r/mickemannen/dive_sync`) every time it pushes an image.
 
 ---
 
-## 🖥️ Status Page
+## 🌐 Web Dashboard
 
-Start the status page locally without Docker:
+Start the web dashboard locally without Docker:
 ```bash
 python docker_run.py
 ```
-Open `http://localhost:8000` in your web browser.
+Open `http://localhost:8000` in your web browser. The pages:
+1. **Sync**: whether a sync is running, the last result, the next scheduled run, a **Sync now** button (dry run optional) and the live log; below, the default sync settings, failure alerts (a webhook such as ntfy), extra sync pairs (UDDF file, Subsurface checkout or Cloud), scheduled jobs and the sync profile export/import.
+2. **Mapping**: the mapping board for a source → target and the conflict queue — see the "🗺️ Mapping Board" section above.
+3. **Garmin dives**: the dives the last refresh cached, with their FIT files to download.
+4. **Accounts**: set and test Garmin, Divelogs.org and Subsurface Cloud credentials without editing `credentials.json` by hand.
+5. **About**: version (the Docker image's `APP_VERSION`), update check and license.
 
-The status page provides:
-1. **Status**: whether a sync is currently running, the last result, the next scheduled run, and a manual "Sync now" trigger (with an optional dry-run toggle).
-2. **Live log**: a streamed tail of the scheduler's log output.
-3. **Mapping board**: one board per sync pair — see the "🗺️ Mapping Board" section above for what a rule, its policy and its template mean.
-4. **Conflicts**: what rules with the `manual` policy have queued, with a button per side to resolve.
-5. **Credentials**: set/test Garmin, Divelogs.org and Subsurface Cloud credentials without editing `credentials.json` by hand.
-6. **Sync pairs** and **scheduled jobs**: pairs beyond Garmin ↔ Divelogs (UDDF file, Subsurface checkout, Subsurface Cloud), and cron-like jobs that can name a pair.
-7. **Sync profile**: export the whole configuration as a file, or import one after reviewing the diff.
-
-There is no dive-editing UI here — that capability belongs to the desktop app (see [rework.md](rework.md)).
+Dive editing is the desktop app's job; the dashboard is for the scheduled, unattended side.
 
 ---
 
@@ -344,19 +346,21 @@ Run all unit, mock, and API tests to verify execution logic:
 - **Profiles and tanks flow one way to Divelogs** (Garmin cannot take them back). Divelogs stores profiles at a fixed sample rate; irregular Garmin profiles are resampled on the way.
 - **Two runners, one account.** Docker (scheduled) and the desktop app (manual) may sync the same accounts from different machines. There is no shared lock and each keeps its own `sync_state.json`, `conflicts.json` and Garmin token cache; both honour `api_cooldown_seconds`, but back-to-back runs from two machines can still hit Garmin's login rate limit (HTTP 429, wait 10–15 minutes). Let one runner finish before starting the other.
 - **Pairs are remembered locally.** Garmin and Divelogs cannot store each other's id, so the matched pairs live in `sync_state.json` next to your settings. Deleting that file makes the next run re-match by time (fine) and forget which dives it uploaded (uploads are not repeated because they now match by time, unless the times were shifted).
-- **Multi-account** works only from the CLI (`--garmin`, `--divelogs`); the scheduler, status page and desktop app assume one account per service.
-- **Submersion takes metadata only.** The profile, cylinders, tank pressures and gas switches come from the `.fit` file you import in the Submersion app; dive_sync syncs the soft fields onto the dive that import created, and leaves a recorded dive uncreated until you import it (see "Other services" above).
-- **Submersion**: Google Drive as its store is not reachable by third parties at all, so the library's sync provider must be S3, Dropbox or iCloud (see `docs/submersion_sync_format.md`); Dropbox/iCloud need the desktop app pointed at the local synced folder, not the CLI/Docker deployment. dive_sync publishes a full base snapshot on every write rather than incremental changesets, and there is no 7-day heartbeat scheduler yet, so an unattended dive_sync-only peer can go quiet long enough for another device to consider it stale.
+- **Multi-account** works only from the CLI (`--garmin`, `--divelogs`); the scheduler, web dashboard and desktop app assume one account per service.
+- **Subsurface keeps a recorded dive's profile as recorded.** Its duration and depths follow from the dive computer's profile and are only written on hand-logged dives; Subsurface has no visibility in metres (only a 0–5 rating), so visibility is not synced there.
+- **A water temperature of 0 °C counts as "not recorded".** Garmin stores 0 on a hand-logged dive whose temperature was never entered; a genuine 0 °C dive would be treated the same.
+- **Mirror deletes for real.** Mirroring to Garmin removes device dives that cannot be restored from here (the automatic pre-sync backup keeps the dive data, not the original file). Run it as a dry run first, and download the FIT files beforehand if you want them.
+- **Submersion sync is disabled** until it works reliably.
 
 ---
 
 ## 🔒 Security
 
-The status page has **no authentication**. Anyone who can reach its port can read the log, change the schedule and save credentials. Run it on a private network only, or behind something that authenticates for it: a reverse proxy with a login (Caddy, nginx, Authelia), a VPN, or Tailscale. Note that the default `DIVE_SYNC_HOST=0.0.0.0` binds every interface of the host; use `127.0.0.1` when a proxy on the same machine fronts it.
+The web dashboard has **no authentication**. Anyone who can reach its port can read the log, change the schedule and save credentials. Run it on a private network only, or behind something that authenticates for it: a reverse proxy with a login (Caddy, nginx, Authelia), a VPN, or Tailscale. Note that the default `DIVE_SYNC_HOST=0.0.0.0` binds every interface of the host; use `127.0.0.1` when a proxy on the same machine fronts it.
 
-`credentials.json` holds passwords and the Submersion store keys in clear text, and the Garmin token cache under `tokens/` grants API access without the password. Keep `DATA_DIR` private (mode 700) and out of version control. The desktop app keeps credentials in the OS keychain instead and writes them to disk only for the duration of an operation.
+`credentials.json` holds passwords in clear text, and the Garmin token cache under `tokens/` grants API access without the password. Keep `DATA_DIR` private (mode 700) and out of version control. The desktop app keeps credentials in the OS keychain instead and writes them to disk only for the duration of an operation.
 
 ---
 
 ## 📄 License
-MIT, see [LICENSE](LICENSE). The planned Qt desktop build uses PySide6, which is LGPL and links dynamically; that is compatible with the MIT licence of this project.
+MIT, see [LICENSE](LICENSE). The desktop app uses PySide6 (Qt for Python), which is LGPL and linked dynamically; that is compatible with the MIT licence of this project. Garmin Connect, Divelogs.org and Subsurface are the names of their owners' services; this is an independent project, not affiliated with them.
