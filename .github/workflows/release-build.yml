@@ -67,12 +67,15 @@ jobs:
           security set-keychain-settings -lut 1800 build.keychain
           security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" build.keychain
           security list-keychains -d user -s build.keychain login.keychain
+          security default-keychain -s build.keychain
           echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security import "$RUNNER_TEMP/cert.p12" -k build.keychain -P "$MACOS_CERT_PASSWORD" \
             -T /usr/bin/codesign -T /usr/bin/security
           rm -f "$RUNNER_TEMP/cert.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" build.keychain
 
+      # notarytool needs the keychain's full path; the security commands
+      # above find it by name.
       - name: Store notarization credentials
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -82,7 +85,7 @@ jobs:
           set -eu
           xcrun notarytool store-credentials "briefcase-macOS-$APPLE_TEAM_ID" \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --keychain build.keychain
+            --keychain "$HOME/Library/Keychains/build.keychain-db"
 
       - name: Find the Developer ID signing identity
         run: |
