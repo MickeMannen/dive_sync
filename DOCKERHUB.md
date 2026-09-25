@@ -1,6 +1,6 @@
 # Dive Sync 🤿✨
 
-**Dive Sync** keeps dive logs in sync between **Garmin Connect**, **Divelogs.org** and **Subsurface Cloud** (UDDF files too). This image runs the scheduled-sync engine with a small status page: schedule, credentials, live log. Dive editing lives in the separate desktop app, not here.
+**Dive Sync** keeps dive logs in sync between **Garmin Connect**, **Divelogs.org** and **Subsurface Cloud** (UDDF files too). This image runs the sync on a schedule, with a web dashboard: Sync now, scheduled jobs, mapping board, conflicts, settings and a live log. Dive editing and Mirror (making a target an exact copy) live in the separate desktop app, not here; a sync from this image never deletes dives.
 
 # THIS IS STILL IN BETA - KEEP BACKUPS
 
@@ -15,10 +15,11 @@ docker run -d \
   --name dive_sync \
   -p 127.0.0.1:8080:8000 \
   -v /path/to/local/data:/app/data \
+  -e TZ=Europe/Stockholm \
   mickemannen/dive_sync:latest
 ```
 
-Then open `http://localhost:8080`, enter your credentials on the status page (or run `setup_credentials.py` with `DATA_DIR` pointing at the mounted folder) and add a schedule.
+Then open `http://localhost:8080`, enter your credentials under **Settings** (or run `setup_credentials.py` with `DATA_DIR` pointing at the mounted folder) and add a job under **Sync → Scheduled jobs** with **+ Add job**, then **Save schedule**.
 
 ---
 
@@ -36,11 +37,14 @@ services:
     environment:
       - DIVE_SYNC_PORT=8000
       - DIVE_SYNC_HOST=0.0.0.0
+      - TZ=Europe/Stockholm     # your time zone; scheduled jobs run on this clock
     restart: unless-stopped
 ```
 
 ```bash
-docker compose up -d
+docker compose up -d                           # start (and after editing the file)
+docker compose pull && docker compose up -d    # update to the newest image
+docker compose logs -f                         # follow the log
 ```
 
 ---
@@ -50,8 +54,9 @@ docker compose up -d
 - **Matches** dives across services by remembered pairs, then by start time (time-zone aware where the service provides it).
 - **Syncs fields** according to a mapping board: which field feeds which, in which direction, and what happens on a conflict (fill blanks, one side wins, or ask). Defaults never overwrite a real value with another one.
 - **Uploads** new dives in either direction, including profiles and tanks where the target can take them (Garmin Connect accepts no gas data from outside).
-- **Services**: Garmin Connect, Divelogs.org, Subsurface Cloud (clone, commit, push), UDDF files; Submersion is in progress.
-- **Scheduling**: hourly, daily, weekly or every N minutes; dry-run mode; manual "Sync now" from the page; optional per-job sync pair and board.
+- **Services**: Garmin Connect, Divelogs.org, Subsurface Cloud (clone, commit, push), UDDF files. Submersion sync doesn't work yet and is disabled.
+- **Scheduling**: jobs from any source to any target, hourly, daily, weekly or every N minutes; a job writes its target only, so add one each way for both directions. Dry-run mode and a manual "Sync now" from the page.
+- **Garmin cache**: *Use cached Garmin dives* re-reads only the dives Garmin's activity list shows as new or changed, saving three slow API calls per dive. That list doesn't include notes, buddies, weight or visibility, so an edit to only those is picked up by a run with the option off - e.g. a weekly job next to a frequent cached one.
 - **Portable profile**: export/import the whole sync configuration (never credentials) to move it between the desktop app and Docker.
 
 ---
@@ -72,12 +77,15 @@ Map a host folder to `/app/data`. It holds:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `DIVE_SYNC_PORT` | `8000` | Port of the status page inside the container |
+| `DIVE_SYNC_PORT` | `8000` | Port of the dashboard inside the container |
 | `DIVE_SYNC_HOST` | `0.0.0.0` | Bind address inside the container |
 | `DATA_DIR` | `/app/data` | Persistent configuration and caches |
+| `TZ` | UTC | Time zone of the container's clock, e.g. `Europe/Stockholm` |
+
+**Time zone.** Scheduled jobs run on the container's clock, which is UTC unless `TZ` is set: without it, a job set to 06:00 runs at 06:00 UTC (08:00 in Swedish summer time). Set `TZ` to your [time zone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) and check it with `docker exec dive_sync date`.
 
 ---
 
 ## 🔒 Security Notice
 
-The status page has **no login**. Publish the port only on a private network or behind an authenticating reverse proxy, VPN or Tailscale (the examples above bind it to localhost on the host). Treat `/app/data` as secret: it contains your passwords and Garmin tokens.
+The dashboard has **no login**. Publish the port only on a private network or behind an authenticating reverse proxy, VPN or Tailscale (the examples above bind it to localhost on the host). Treat `/app/data` as secret: it contains your passwords and Garmin tokens.
