@@ -55,7 +55,8 @@ body {
   margin-bottom: 0.5rem;
 }
 
-.sidebar-header h1 { margin: 0; font-size: 1.15rem; color: #fff; }
+.sidebar-header h1 { margin: 0; font-size: 1.15rem; color: #fff; display: flex; align-items: center; gap: 0.5rem; }
+.brand-icon { width: 28px; height: 28px; }
 .sidebar-header .muted { color: #9ca3af; }
 
 .nav-item {

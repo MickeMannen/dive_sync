@@ -13,7 +13,7 @@ import sys
 from typing import Dict
 
 from PySide6.QtCore import QCoreApplication, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 
 from desktop import credentials as creds_store
@@ -117,6 +117,8 @@ def main() -> int:
     QCoreApplication.setApplicationName(APP_NAME)
     QCoreApplication.setOrganizationName("Mikael Christersson")
     app = QGuiApplication(sys.argv)
+    # The window and taskbar icon (the bundle icon is set by Briefcase)
+    app.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "icon.png")))
     log_queue = logging_bridge.install()
     controllers = build_controllers(log_queue)
     initial = "Sync" if creds_store.has_any_credentials() else "Settings"

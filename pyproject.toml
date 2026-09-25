@@ -40,6 +40,8 @@ you edit dive metadata on either service. This is the desktop app - for
 scheduled/unattended sync, see the Docker image instead.
 """
 sources = ["desktop"]
+# icons/divesync.icns (macOS), .ico (Windows), -<size>.png (Linux)
+icon = "icons/divesync"
 requires = ["PySide6-Essentials>=6.7", "PySide6-Addons>=6.7", "keyring", "platformdirs"]
 
 [tool.briefcase.app.desktop.macOS]

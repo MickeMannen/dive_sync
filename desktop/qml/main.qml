@@ -75,7 +75,17 @@ ApplicationWindow {
             ColumnLayout {
                 anchors { left: parent.left; right: parent.right; top: parent.top }
                 spacing: 2
-                Text { text: "DiveSync"; color: Theme.sidebarText; font.bold: true; font.pixelSize: 18; Layout.margins: 16 }
+                RowLayout {
+                    Layout.margins: 16
+                    spacing: 8
+                    Image {
+                        source: Qt.resolvedUrl("../resources/icon.png")
+                        sourceSize.width: 56; sourceSize.height: 56
+                        Layout.preferredWidth: 28; Layout.preferredHeight: 28
+                        smooth: true; mipmap: true
+                    }
+                    Text { text: "DiveSync"; color: Theme.sidebarText; font.bold: true; font.pixelSize: 18 }
+                }
                 Repeater {
                     model: window.sections
                     delegate: Rectangle {
