@@ -154,7 +154,7 @@ The pages:
   </tr>
   <tr>
     <td><img src="media/app_settings.png" alt="Settings page" width="100%"><br><sub><b>Settings</b>: accounts (kept in the OS keychain) and the sync profile</sub></td>
-    <td></td>
+    <td><img src="media/app_subsurface.png" alt="Subsurface dives page" width="100%"><br><sub><b>Subsurface Dives</b>: the same editor for Subsurface Cloud, with its own account picker</sub></td>
   </tr>
 </table>
 
