@@ -4,6 +4,39 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
+## 0.3.0 - Unreleased
+
+**Breaking: new data folder and layout. This version starts fresh** - it
+does not read the data of earlier versions, and never touches it. Enter
+your logins again and download your dives again; delete the old folder
+once this version works for you (the desktop app logs where it is).
+
+- New data folder, named after the app's identity `org.christersson.dive_sync`:
+  - macOS: `~/Library/Application Support/org.christersson.dive_sync`
+    (was `~/Library/Application Support/DiveSync`); the app's bundle id is
+    now `org.christersson.dive_sync`
+  - Windows: `%LOCALAPPDATA%\Christersson\DiveSync`
+  - Linux: `~/.local/share/dive-sync`
+  - Docker and the CLI: `DATA_DIR`, as before
+- Everything one account owns is in one folder: `<service>/<account>/data`
+  holds its cached dives, and Garmin accounts also have `fit/` (downloaded
+  `.fit` files, was `garmin_fit/<account>/`) and `tokens/` (login tokens,
+  was `tokens/garmin/`). A Subsurface Cloud checkout is in
+  `subsurface/<account>/cloud` (was `subsurface_cloud/<account>`). A side
+  without accounts uses the account folder `default`.
+- Sync state, conflicts and run history are in `sync/`
+  (`sync_state*.json`, `conflicts*.json`, `sync_history.jsonl`); backups
+  stay in `backups/`. Docker users: the remembered dive pairs start empty,
+  and the first sync re-matches dives by time.
+- Garmin `token_dir` is blank by default, meaning the account's own
+  `tokens` folder; the old default `tokens/garmin` is read the same way.
+- Desktop app: passwords are stored in the keychain under
+  `org.christersson.dive_sync` (was `DiveSync`).
+- Garmin dives page: a Dive computer column and a read-only field naming
+  the watch that recorded each dive (e.g. Descent X50i, Descent Mk3(i)
+  51mm; "Hand-logged" for a dive typed in on Connect), read from the
+  dive's `.fit` file.
+
 ## 0.1.0 - Unreleased
 
 First packaged release.

@@ -6,7 +6,7 @@ A *service spec* is ``<service id>[:<argument>]``:
     divelogs               Divelogs.org (credentials.json)
     uddf:<file>            a UDDF 3.2 file
     subsurface:<directory> a Subsurface git-storage checkout
-    subsurface-cloud       Subsurface Cloud (credentials.json ``subsurface``; clone under DATA_DIR/subsurface_cloud)
+    subsurface-cloud       Subsurface Cloud (credentials.json ``subsurface``; clone under subsurface/<account>/cloud)
     submersion             Submersion sync store (credentials.json ``submersion``: S3 bucket or folder)
 
 Relative file arguments resolve against ``DATA_DIR``. With ``mock_data_dir``
@@ -20,7 +20,7 @@ import re
 from typing import List, Optional, Tuple
 
 from src.core.adapter import BaseDiveAdapter
-from src.core import config
+from src.core import config, layout
 from src.core.config import SERVICE_ID_ALIASES, ConfigManager, SettingsModel, SyncPairModel
 from src.core.fields import FieldLink, common_default_links, default_field_links, submersion_default_links
 
@@ -143,9 +143,7 @@ def build_adapter(spec: str, settings: SettingsModel, credentials_path: Optional
         from src.core.services.garmin import GarminAdapter
         accounts = creds.get_garmin_accounts()
         account = _pick(accounts, garmin_username, "Garmin", "--garmin")
-        token_dir = account.token_dir
-        if not os.path.isabs(token_dir):
-            token_dir = os.path.join(os.environ.get("DATA_DIR", "."), token_dir)
+        token_dir = layout.garmin_token_dir(account.username, account.token_dir)
         return GarminAdapter(username=account.username, password=account.password, token_dir=token_dir,
                              cooldown_seconds=settings.api_cooldown_seconds)
     from src.core.services.divelogs import DivelogsAdapter
@@ -254,10 +252,11 @@ def _safe_state_part(account: str) -> str:
 
 
 def legacy_state_file(state_dir: str, source_id: str, target_id: str) -> str:
-    """The state file a pair had before it was kept per account."""
+    """The state file a pair had before it was kept per account, in the
+    ``sync/`` folder beside settings.json (``state_dir``, layout.py)."""
     name = "sync_state.json" if (source_id, target_id) == ("garmin", "divelogs") \
         else f"sync_state_{source_id}_{target_id}.json"
-    return os.path.join(state_dir or ".", name)
+    return os.path.join(layout.sync_dir(state_dir), name)
 
 
 def account_state_file(state_dir: str, source_id: str, source_account: str,
@@ -268,11 +267,11 @@ def account_state_file(state_dir: str, source_id: str, source_account: str,
     names each side as ``<service>-<account>`` (just ``<service>`` for a side
     without accounts)."""
     if (source_id, target_id) == ("garmin", "divelogs") and source_account and target_account:
-        return os.path.join(state_dir or ".", f"sync_state_{source_account}_{target_account}.json")
+        return os.path.join(layout.sync_dir(state_dir), f"sync_state_{source_account}_{target_account}.json")
 
     def part(service_id: str, account: str) -> str:
         return f"{service_id}-{_safe_state_part(account)}" if account else service_id
-    return os.path.join(state_dir or ".", f"sync_state_{part(source_id, source_account)}_{part(target_id, target_account)}.json")
+    return os.path.join(layout.sync_dir(state_dir), f"sync_state_{part(source_id, source_account)}_{part(target_id, target_account)}.json")
 
 
 def find_pair(settings: SettingsModel, pair_id: str) -> SyncPairModel:

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
+from src.core import layout
 from src.core.adapter import BaseDiveAdapter
 from src.core.fields import FieldSpec
 from src.core.models import UnifiedDive
@@ -26,10 +27,10 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
         return GarminAdapter.field_catalog()
 
     def __init__(self, mock_data_dir: str = get_default_mock_data_dir(), username: Optional[str] = None):
-        if username and os.path.exists(os.path.join(mock_data_dir, "garmin", username)):
-            self.mock_dir = os.path.join(mock_data_dir, "garmin", username)
-        else:
-            self.mock_dir = os.path.join(mock_data_dir, "garmin")
+        # the account's folder when it has one, else the ``default`` account's
+        self.mock_dir = layout.dives_dir("garmin", username, mock_data_dir)
+        if not os.path.isdir(self.mock_dir):
+            self.mock_dir = layout.dives_dir("garmin", None, mock_data_dir)
         # Dummy adapter to reuse parsing & mapping logic
         self.helper = GarminAdapter("dummy", "dummy", token_dir="/tmp")
 
@@ -180,10 +181,10 @@ class LocalMockDivelogsAdapter(BaseDiveAdapter):
         return DivelogsAdapter.field_catalog()
 
     def __init__(self, mock_data_dir: str = get_default_mock_data_dir(), username: Optional[str] = None):
-        if username and os.path.exists(os.path.join(mock_data_dir, "divelogs", username)):
-            self.mock_dir = os.path.join(mock_data_dir, "divelogs", username)
-        else:
-            self.mock_dir = os.path.join(mock_data_dir, "divelogs")
+        # the account's folder when it has one, else the ``default`` account's
+        self.mock_dir = layout.dives_dir("divelogs", username, mock_data_dir)
+        if not os.path.isdir(self.mock_dir):
+            self.mock_dir = layout.dives_dir("divelogs", None, mock_data_dir)
         # Dummy adapter to reuse parsing & mapping logic
         self.helper = DivelogsAdapter("dummy", "dummy")
 

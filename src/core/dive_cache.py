@@ -16,15 +16,11 @@ import logging
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.core import garmin_files
+from src.core import garmin_files, layout
 from src.core.config import ConfigManager
 from src.core.models import recorded_water_temp
 
 logger = logging.getLogger("dive_sync.dive_cache")
-
-
-def _base_dir(base_dir: Optional[str] = None) -> str:
-    return base_dir or os.environ.get("DATA_DIR", "./data")
 
 
 def _normalize_date_time(raw: Any) -> str:
@@ -156,86 +152,57 @@ def _format_sac(tanks: List[Dict[str, Any]], avg_depth: Any, duration_seconds: A
     return f"{litres / (minutes * ata):.1f}"
 
 
-def _resolve_service_dir(service: str, username: Optional[str], base_dir: Optional[str] = None) -> Optional[str]:
-    root = _base_dir(base_dir)
-    path_direct = os.path.join(root, service)
+def _dives_dirs(service: str, username: Optional[str], base_dir: Optional[str] = None) -> List[str]:
+    """The cache folders a listing reads: the account's own
+    (``<service>/<account>/data``, layout.py), or every account's when no
+    account is given."""
     if username:
-        path_user = os.path.join(root, service, username)
-        if os.path.isdir(path_user) and os.listdir(path_user):
-            return path_user
-        # Nothing cached for this account yet. Fall back to a flat, pre-account
-        # cache only - never to the service directory when it holds other
-        # accounts' folders, or one account's page would list another's dives
-        # (rework.md E19).
-        if os.path.isdir(path_direct) and any(os.path.isdir(os.path.join(path_direct, n))
-                                              for n in os.listdir(path_direct)):
-            return None
-    if os.path.isdir(path_direct) and os.listdir(path_direct):
-        return path_direct
-    return None
+        path = layout.dives_dir(service, username, base_dir)
+        return [path] if os.path.isdir(path) else []
+    return [path for _, path in layout.all_dives_dirs(service, base_dir)]
 
 
-def _iter_dive_files(service_dir: str) -> List[Tuple[str, str]]:
+def _iter_dive_files(dirs: List[str]) -> List[Tuple[str, str]]:
+    """(filename, path) of every cached dive in ``dirs``."""
     files = []
-    for name in os.listdir(service_dir):
-        path_name = os.path.join(service_dir, name)
-        if os.path.isdir(path_name):
-            for subname in os.listdir(path_name):
-                if subname.endswith(".json") and subname != "sync_state.json":
-                    files.append((subname, os.path.join(path_name, subname)))
-        elif name.endswith(".json") and name != "sync_state.json":
-            files.append((name, path_name))
+    for directory in dirs:
+        for name in os.listdir(directory):
+            if name.endswith(".json"):
+                files.append((name, os.path.join(directory, name)))
     return files
 
 
 def _find_dive_file(service: str, filename: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> Optional[str]:
-    root = _base_dir(base_dir)
-    if username and is_unified_cache(service):
-        # per-account cache: only that account's folder (ids may repeat across accounts)
-        path = os.path.join(unified_cache_dir(service, username, base_dir), filename)
-        return path if os.path.exists(path) else None
-    if username:
-        path = os.path.join(root, service, username, filename)
+    """A cached dive by file name: in the account's folder, or - without an
+    account - in the first account that has it (ids may repeat across
+    accounts, so callers that know the account pass it)."""
+    for directory in _dives_dirs(service, username, base_dir):
+        path = os.path.join(directory, filename)
         if os.path.exists(path):
             return path
-    path = os.path.join(root, service, filename)
-    if os.path.exists(path):
-        return path
-    service_dir = os.path.join(root, service)
-    if os.path.isdir(service_dir):
-        for sub in os.listdir(service_dir):
-            sub_path = os.path.join(service_dir, sub)
-            if os.path.isdir(sub_path):
-                candidate = os.path.join(sub_path, filename)
-                if os.path.exists(candidate):
-                    return candidate
     return None
 
 
 def _username_from_filepath(service: str, filepath: str) -> Optional[str]:
-    parts = filepath.replace("\\", "/").split("/")
-    if is_unified_cache(service):
-        # <service>/dives/<account>/<file> (unified_cache_dir); the flat
-        # <service>/dives/<file> names no account
-        if len(parts) >= 4 and parts[-4] == service and parts[-3] == UNIFIED_CACHE_SUBDIR:
-            return parts[-2]
-        return None
-    if len(parts) >= 3 and parts[-3] == service:
-        return parts[-2]
-    return None
+    return layout.account_of_path(service, filepath)
 
 
 def garmin_file_mtimes(username: Optional[str] = None, base_dir: Optional[str] = None) -> Dict[str, float]:
     """{path: mtime} of every cached Garmin dive file - where
     list_garmin_dives(known=...) starts from while a refresh runs."""
-    service_dir = _resolve_service_dir("garmin", username, base_dir)
     mtimes: Dict[str, float] = {}
-    for _, filepath in _iter_dive_files(service_dir) if service_dir else []:
+    for _, filepath in _iter_dive_files(_dives_dirs("garmin", username, base_dir)):
         try:
             mtimes[filepath] = os.path.getmtime(filepath)
         except OSError:
             pass
     return mtimes
+
+
+# serial -> FIT product number of every Garmin watch named so far
+# (garmin_files.device_products), kept across listings: a refresh lists its
+# new dives a few at a time, and a watch never changes model.
+_device_products: Dict[str, int] = {}
 
 
 def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = None,
@@ -244,14 +211,10 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
     written since: a refresh fills the dives table as Garmin's dives arrive,
     a few seconds apart, without re-reading the whole cache each time."""
     dives = []
-    service_dir = _resolve_service_dir("garmin", username, base_dir)
-    if not service_dir:
-        return dives
-
     # One directory read per account for the FIT column, not one per dive.
     fit_indexes: Dict[Optional[str], Dict[str, str]] = {}
 
-    for filename, filepath in _iter_dive_files(service_dir):
+    for filename, filepath in _iter_dive_files(_dives_dirs("garmin", username, base_dir)):
         try:
             if known is not None:
                 mtime = os.path.getmtime(filepath)
@@ -272,6 +235,7 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
                 details = {}
             manual = garmin_files.is_manual_dive(data)
             fit_file = fit_indexes[account].get(str(summary.get("activityId") or "")) or ""
+            device_serial, device_type = garmin_files.device_ids(data)
 
             sum_dto = details.get("summaryDTO", {}) or summary.get("summaryDTO", {}) or {}
             metadata = details.get("metadataDTO", {}) or summary.get("metadataDTO", {}) or {}
@@ -385,6 +349,10 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
                 # marked "manual" instead and never counted as missing one.
                 "fit": "manual" if manual else ("✓" if fit_file else ""),
                 "fit_file": fit_file,
+                # The dive computer's serial and Connect model id; the row's
+                # "device" name is filled in once all rows are read (below).
+                "device_serial": device_serial,
+                "device_type": device_type,
             })
         except Exception as e:
             if known is None:
@@ -392,17 +360,29 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
             else:       # replaced or pruned by the refresh; the final listing reports it
                 logger.debug("Skipped Garmin dive file %s while refreshing: %s", filename, e)
 
+    # One FIT per watch names every dive it recorded: look up only serials
+    # not seen before, trying their dives' downloaded FITs until one reads.
+    wanted: Dict[str, List[str]] = {}
+    for d in dives:
+        serial = d["device_serial"]
+        if serial and d["fit_file"] and serial not in _device_products:
+            wanted.setdefault(serial, []).append(
+                os.path.join(garmin_files.fit_dir(d["account"], base_dir), d["fit_file"]))
+    for serial, paths in wanted.items():
+        for path in paths:
+            garmin_files.device_products([path], _device_products)
+            if serial in _device_products:
+                break
+    for d in dives:
+        d["device"] = garmin_files.device_name(d["manual"], d["device_serial"], d["device_type"], _device_products)
+
     dives.sort(key=lambda x: x["date_time"], reverse=True)
     return dives
 
 
 def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     dives = []
-    service_dir = _resolve_service_dir("divelogs", username, base_dir)
-    if not service_dir:
-        return dives
-
-    for filename, filepath in _iter_dive_files(service_dir):
+    for filename, filepath in _iter_dive_files(_dives_dirs("divelogs", username, base_dir)):
         try:
             with open(filepath, "r") as f:
                 data = json.load(f)
@@ -524,30 +504,16 @@ def _safe_filename(stem: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", stem) or "dive"
 
 
-UNIFIED_CACHE_SUBDIR = "dives"
-
-
 def unified_cache_dir(service: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> str:
-    """``DATA_DIR/<service>/dives`` - deliberately NOT ``DATA_DIR/<service>``.
-
-    SubmersionAdapter keeps its device identity and HLC clock in
-    ``DATA_DIR/submersion`` (device.json, hlc_<id>.json): that device id is
-    how the Submersion sync mesh knows this installation, and losing it makes
+    """``<service>/<account>/data`` (layout.py). Submersion's device identity
+    and clock stay in ``submersion/`` itself, out of reach of an
+    ``overwrite=True`` that clears this folder: losing that device id makes
     dive_sync republish as a brand-new device, orphaning everything it
-    published before. Caching dives in that same directory would have put
-    them one ``overwrite=True`` (which clears the directory) away from being
-    wiped out, and would have had the listing try to parse those state files
-    as dives. The cache gets its own subdirectory instead."""
-    parts = [_base_dir(base_dir), service, UNIFIED_CACHE_SUBDIR]
-    if username:
-        parts.append(account_dir_name(username))
-    return os.path.join(*parts)
+    published before."""
+    return layout.dives_dir(service, username, base_dir)
 
 
-def account_dir_name(username: str) -> str:
-    """One account's cache folder under ``<service>/dives`` (a Subsurface
-    Cloud email): readable, but never able to leave the cache directory."""
-    return re.sub(r"[^A-Za-z0-9_.@-]", "_", username.strip()) or "account"
+account_dir_name = layout.account_dir_name
 
 
 def prune_cache_dir(directory: str, keep: "set[str]", label: str = "") -> List[str]:
@@ -622,8 +588,8 @@ def download_service_dives(service: str, overwrite: bool = False, base_dir: Opti
     exactly what this cache stores.
 
     ``username`` (the desktop app, rework.md E19) picks the account and
-    caches it in its own folder; the flat cache from before accounts is then
-    removed, being re-downloaded per account rather than guessed at."""
+    caches it in its own folder; without one the cache is the ``default``
+    account's (layout.py)."""
     if not is_unified_cache(service):
         raise ValueError(f"{service!r} is not cached as UnifiedDive; use SyncEngine.download_and_save_raw_data.")
     adapter = _unified_adapter(service, username)
@@ -634,22 +600,8 @@ def download_service_dives(service: str, overwrite: bool = False, base_dir: Opti
     finally:
         adapter.finish()
     written = save_unified_dives(service, dives, username=username, base_dir=base_dir, overwrite=overwrite, prune=True)
-    if username:
-        _remove_flat_unified_cache(service, base_dir)
     logger.info("Cached %d %s dive(s)%s.", written, service, f" for {username}" if username else "")
     return written
-
-
-def _remove_flat_unified_cache(service: str, base_dir: Optional[str] = None) -> None:
-    directory = unified_cache_dir(service, None, base_dir)
-    stale = [n for n in os.listdir(directory) if n.endswith(".json")] if os.path.isdir(directory) else []
-    for name in stale:
-        try:
-            os.remove(os.path.join(directory, name))
-        except OSError as e:
-            logger.warning("Could not remove %s from the pre-account %s cache: %s", name, service, e)
-    if stale:
-        logger.info("Removed %d %s dive(s) cached before accounts were kept apart.", len(stale), service)
 
 
 def _unified_row(data: Dict[str, Any], service: str, filename: str) -> Dict[str, Any]:
@@ -713,12 +665,7 @@ def _visibility_unit(data: Dict[str, Any]) -> str:
 def list_unified_dives(service: str, username: Optional[str] = None,
                        base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     dives: List[Dict[str, Any]] = []
-    # Only the cache subdirectory, never the service directory itself - the
-    # adapter's own state files live up there (see unified_cache_dir).
-    service_dir = unified_cache_dir(service, username, base_dir)
-    if not os.path.isdir(service_dir):
-        return dives
-    for filename, filepath in _iter_dive_files(service_dir):
+    for filename, filepath in _iter_dive_files(_dives_dirs(service, username, base_dir)):
         try:
             with open(filepath, "r") as f:
                 dives.append(_unified_row(json.load(f), service, filename))
@@ -1263,7 +1210,7 @@ def download_garmin_fits(filenames: List[str], username: Optional[str] = None,
                 continue
             if account not in adapters:
                 creds = _active_credentials("garmin", account)
-                adapter = GarminAdapter(creds.username, creds.password, token_dir=creds.token_dir,
+                adapter = GarminAdapter(creds.username, creds.password, token_dir=layout.garmin_token_dir(creds.username, creds.token_dir),
                                         cooldown_seconds=ConfigManager.load_settings().api_cooldown_seconds)
                 adapters[account] = adapter if adapter.login() else None
             adapter = adapters[account]
@@ -1328,7 +1275,7 @@ def push_remote_update(service: str, filepath: str, username: Optional[str] = No
             return False
 
         from src.core.services.garmin import GarminAdapter
-        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=active_creds.token_dir)
+        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=layout.garmin_token_dir(active_creds.username, active_creds.token_dir))
         unified_dive = adapter._map_to_unified(summary, details)
         logger.info("Updating Garmin Connect for Activity ID %s...", activity_id)
         success = adapter.update_dive(str(activity_id), unified_dive)
@@ -1373,7 +1320,7 @@ def push_remote_delete(service: str, external_id: str, username: Optional[str] =
 
     if service == "garmin":
         from src.core.services.garmin import GarminAdapter
-        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=active_creds.token_dir)
+        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=layout.garmin_token_dir(active_creds.username, active_creds.token_dir))
     elif service == "divelogs":
         from src.core.services.divelogs import DivelogsAdapter
         adapter = DivelogsAdapter(active_creds.username, active_creds.password)

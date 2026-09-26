@@ -17,6 +17,7 @@ import os
 import sys
 from typing import Callable, Dict, List, Optional, Tuple
 
+from src.core import layout
 from src.core.config import (
     CREDENTIALS_FILE,
     ConfigManager,
@@ -78,10 +79,10 @@ def setup_garmin(current: CredentialsModel) -> Tuple[Optional[GarminCredentials]
     if not (user and password):
         print("ℹ Garmin skipped.")
         return None, None
-    creds = GarminCredentials(username=user, password=password, token_dir=existing.token_dir or "tokens/garmin")
+    creds = GarminCredentials(username=user, password=password, token_dir=existing.token_dir)
     print("Authenticating with Garmin Connect...")
     from src.core.services.garmin import GarminAdapter
-    token_dir = creds.token_dir if os.path.isabs(creds.token_dir) else os.path.join(os.environ.get("DATA_DIR", "."), creds.token_dir)
+    token_dir = layout.garmin_token_dir(user, creds.token_dir)
     ok = GarminAdapter(username=user, password=password, token_dir=token_dir, cooldown_seconds=1.0).login()
     print("✓ Garmin Connect authentication succeeded!" if ok else "✗ Garmin Connect authentication failed.")
     return creds, ok
@@ -217,8 +218,8 @@ def run(services: List[str], path: str = CREDENTIALS_FILE, assume_yes: bool = Fa
         print(f"⚠ Saved without a successful check: {', '.join(failed)}")
     if os.path.abspath(os.path.dirname(path) or ".") == os.path.abspath("."):
         append_to_gitignore("credentials.json")
-        append_to_gitignore("tokens/")
-        append_to_gitignore("sync_state.json")
+        append_to_gitignore("data/")
+        append_to_gitignore("sync/")
     return 1 if failed else 0
 
 

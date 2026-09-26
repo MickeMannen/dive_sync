@@ -145,7 +145,7 @@ def test_header_click_sorting_and_per_service_columns(qapp, scratch_data_dir, fa
     shared = [k for k, _, _ in ALL_COLUMNS]
     # Garmin also has the dive's title (activity name), placed in front of Location
     with_title = shared[:shared.index("location")] + ["activity_name"] + shared[shared.index("location"):]
-    assert divelogs_keys == shared + ["garmin_id"] and garmin_keys == with_title + ["fit"]
+    assert divelogs_keys == shared + ["garmin_id"] and garmin_keys == with_title + ["fit", "device"]
     assert {"avg_depth", "sac", "tanks", "notes", "id"} <= set(shared)   # more than the original ten
     c.setVisibleColumns(["date", "garmin_id"])
     assert c.visibleColumns == ["date", "garmin_id"]
@@ -222,8 +222,8 @@ def test_dives_refresh_lists_garmin_dives_as_they_arrive(qapp, scratch_data_dir,
     import threading
     from desktop.controllers.dives import DivesController
     from src.core import scheduler
-    garmin_dir = scratch_data_dir / "garmin"
-    garmin_dir.mkdir()
+    garmin_dir = scratch_data_dir / "garmin" / "default" / "data"
+    garmin_dir.mkdir(parents=True)
     halfway, finish = threading.Event(), threading.Event()
 
     def download(*args, **kwargs):
@@ -496,8 +496,8 @@ def test_mapping_controller_board_operations(qapp, scratch_data_dir, fake_keyrin
     m.applyToAll()
     # the board is shared by every account combination; the desktop keeps
     # each combination's state apart (rework.md E19)
-    state_files = sorted(p.name for p in scratch_data_dir.glob("sync_state*.json"))
-    assert state_files and all(json.load(open(scratch_data_dir / n))["full_compare_once"] is True for n in state_files)
+    state_files = sorted(p.name for p in (scratch_data_dir / "sync").glob("sync_state*.json"))
+    assert state_files and all(json.load(open(scratch_data_dir / "sync" / n))["full_compare_once"] is True for n in state_files)
 
 
 def test_mapping_controller_click_to_connect(qapp, scratch_data_dir, fake_keyring):
@@ -560,17 +560,17 @@ def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratc
     s.saveDivelogsAccounts([{"username": "d", "password": "pw2"}])
     s.save("me@x.org", "pw3", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "secret", False, "", "hunter2")
     assert s.hasCredentials and s.garminAccounts == [
-        {"username": "g@x", "token_dir": creds_store.DEFAULT_GARMIN_TOKEN_DIR, "has_password": True}]
+        {"username": "g@x", "token_dir": "", "has_password": True}]
     assert s.divelogsAccounts == [{"username": "d", "has_password": True}]
     assert s.subsurfaceAccounts == [{"username": "me@x.org", "has_password": True}] and s.message == "Saved to keychain."
     assert s.submersionBucket == "my-bucket"
-    assert json.loads(fake_keyring.store[("DiveSync", "submersion_secret")])["secret_access_key"] == "secret"
+    assert json.loads(fake_keyring.store[(creds_store.SERVICE_NAME, "submersion_secret")])["secret_access_key"] == "secret"
     assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
     # keeping a blank password/passphrase keeps the stored ones
     s.saveGarminAccounts([{"username": "g@x", "password": "", "token_dir": ""}])
     s.save("me@x.org", "", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "", False, "", "")
     assert creds_store.load_credentials_model().get_garmin_accounts()[0].password == "pw"
-    assert json.loads(fake_keyring.store[("DiveSync", "submersion_secret")])["secret_access_key"] == "secret"
+    assert json.loads(fake_keyring.store[(creds_store.SERVICE_NAME, "submersion_secret")])["secret_access_key"] == "secret"
     assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
     # Subsurface Cloud holds several accounts too (rework.md E19): a saved
     # list replaces the stored one, a blank password keeps the stored one.
@@ -1040,7 +1040,7 @@ def test_conflicts_controller_lists_every_pair(qapp, scratch_data_dir, fake_keyr
             self.source_id, self.target_id, self.conflicts_file = source_id, target_id, conflicts_file
     import os
     from src.core import config
-    base = os.path.dirname(config.SETTINGS_FILE)
+    base = os.path.join(os.path.dirname(config.SETTINGS_FILE), "sync")
     # kept per account combination (rework.md E19)
     record(Pair("garmin", "divelogs", os.path.join(base, "conflicts_g@x_d.json")), "buddy", "garmin.buddy", "divelogs.buddy", "Anna", "Bob")
     record(Pair("garmin", "subsurface", os.path.join(base, "conflicts_garmin-g@x_subsurface-me@x.org.json")),

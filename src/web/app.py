@@ -19,7 +19,7 @@ from src.core.config import ProfileError, export_profile, import_profile
 from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
 import src.core.scheduler as scheduler
-from src.core import run_history
+from src.core import layout, run_history
 
 # Configure logger
 logger = logging.getLogger("dive_sync.web")
@@ -414,7 +414,7 @@ def test_credentials(data: CredentialsSchema):
                 adapter = GarminAdapter(
                     username=account.username,
                     password=account.password,
-                    token_dir=account.token_dir,
+                    token_dir=layout.garmin_token_dir(account.username, account.token_dir),
                     cooldown_seconds=1.0
                 )
                 ok = adapter.login()

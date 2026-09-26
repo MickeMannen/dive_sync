@@ -12,7 +12,7 @@ auth using the account email and password. The generic host
 
 ``SubsurfaceCloudAdapter`` (step F6) wraps the git-storage
 ``SubsurfaceAdapter`` around a local clone kept under
-``DATA_DIR/subsurface_cloud/<account>``: every run starts by fetching and
+``subsurface/<account>/cloud`` (layout.py): every run starts by fetching and
 hard-resetting the clone to the remote branch (Subsurface Cloud is a shared
 history, so local state is never trusted), writes go into the checkout, and
 ``finish()`` commits and pushes once. A push rejected because someone else
@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
 from datetime import datetime
 from typing import List, Optional, Tuple
 
 import requests
 
+from src.core import layout
 from src.core.models import UnifiedDive
 from src.core.services.subsurface import SubsurfaceAdapter
 
@@ -77,11 +77,12 @@ def check_cloud_login(email: str, password: str, base_url: str = DEFAULT_BASE_UR
 # ---------------------------------------------------------------------------
 
 def safe_account_dir(email: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.@-]", "_", email.strip()) or "account"
+    return layout.account_dir_name(email)
 
 
 def default_clone_dir(email: str) -> str:
-    return os.path.join(os.environ.get("DATA_DIR", "."), "subsurface_cloud", safe_account_dir(email))
+    """``subsurface/<account>/cloud``, beside the account's dive cache (layout.py)."""
+    return layout.subsurface_cloud_dir(email)
 
 
 class SubsurfaceCloudAdapter(SubsurfaceAdapter):

@@ -1,7 +1,8 @@
 [tool.briefcase]
 project_name = "DiveSync"
-bundle = "com.mikaelchristersson"
-version = "0.1.0"
+# bundle + app name = org.christersson.dive_sync, the id desktop/paths.py uses (rework.md E21)
+bundle = "org.christersson"
+version = "0.3.0"
 license = "MIT"
 license-files = ["LICENSE"]
 author = "Mikael Christersson"

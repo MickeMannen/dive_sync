@@ -37,6 +37,7 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 │   │   ├── fields.py          # Field catalogue (FieldSpec), field links (FieldLink), value access, defaults, validation
 │   │   ├── templates.py       # {key} templates for composite links: render, validate, loop detection, preview
 │   │   ├── conflicts.py       # conflicts.json queue for links with the 'manual' policy
+│   │   ├── layout.py          # The data folder layout: <service>/<account>/data|fit|tokens, sync/, backups/
 │   │   ├── mapping_helper.py  # Mapping Engine that applies JSONPath rules
 │   │   ├── models.py          # Unified Dive schemas (Pydantic)
 │   │   ├── sync_engine.py     # Dive matching and link-driven synchronization engine (any source/target adapter pair)
@@ -50,9 +51,10 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 │   ├── test_mock_sync.py      # Dry-run and offline sync tests
 │   ├── test_scheduler.py      # Scheduler extraction unit tests
 │   └── test_web_api.py        # Status page API endpoint integration tests
-├── data/                      # Local JSON cache directory (auto-created)
-│   ├── garmin/                # Cached Garmin JSON dives
-│   └── divelogs/              # Cached Divelogs JSON dives
+├── data/                      # DATA_DIR when unset (auto-created); layout.py
+│   ├── garmin/<account>/      # data/ (cached dive JSON), fit/ (.fit files), tokens/ (login tokens)
+│   ├── divelogs/<account>/    # data/ (cached dive JSON)
+│   └── subsurface/<account>/  # data/ (cached dives), cloud/ (Subsurface Cloud checkout)
 ├── sync.py                    # Sync Engine Command Line Interface (CLI)
 └── settings.json              # Local application settings
 ```

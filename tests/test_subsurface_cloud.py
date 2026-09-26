@@ -171,7 +171,7 @@ def test_login_failures_and_paths(tmp_path):
     assert safe_account_dir("Me+You@Example.com") == "Me_You@Example.com"
     os.environ["DATA_DIR"] = str(tmp_path)
     try:
-        assert default_clone_dir(EMAIL) == str(tmp_path / "subsurface_cloud" / EMAIL)
+        assert default_clone_dir(EMAIL) == str(tmp_path / "subsurface" / EMAIL / "cloud")
     finally:
         os.environ.pop("DATA_DIR", None)
 

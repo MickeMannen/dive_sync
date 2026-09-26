@@ -18,6 +18,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 from desktop import credentials as creds_store
 from desktop import logging_bridge
+from desktop.paths import WINDOWS_COMPANY
 from desktop.controllers.about import AboutController
 from desktop.controllers.conflicts import ConflictsController
 from desktop.controllers.dives import DivesController
@@ -118,28 +119,29 @@ def cleanup_on_quit() -> None:
         logger.warning("Failed to remove the materialized credentials file on quit: %s", e)
 
 
-def migrate_sync_history() -> None:
-    """Give each pair's pre-E19 sync history to the accounts it was made
-    with (desktop/accounts.py). Never stops the app from starting."""
+def note_old_data_dir() -> None:
+    """Log, once, where the data of a version before 0.3.0 still lies: the
+    new layout starts fresh and never touches it (rework.md E21), so the
+    diver can delete it once this version works for them."""
     try:
-        from desktop import accounts
-        from src.core import config
-        from src.core.pairs import board_pairs
-        model = creds_store.load_credentials_model()
-        boards = board_pairs(config.ConfigManager.load_settings(), model.configured_services())
-        accounts.migrate_legacy_state(os.path.dirname(config.SETTINGS_FILE) or ".", boards, model)
+        from desktop import paths, preferences
+        old = paths.old_data_dir()
+        if old and preferences.take_once("old_data_dir_notice"):
+            logger.warning("The data of an earlier DiveSync version is still in %s. This version starts fresh "
+                           "and does not use it; delete that folder once you no longer need it.", old)
     except Exception as e:
-        logger.warning("Could not move the sync history to per-account files: %s", e)
+        logger.debug("Could not check for an earlier data folder: %s", e)
 
 
 def main() -> int:
     QCoreApplication.setApplicationName(APP_NAME)
-    QCoreApplication.setOrganizationName("Mikael Christersson")
+    QCoreApplication.setOrganizationName(WINDOWS_COMPANY)
+    QCoreApplication.setOrganizationDomain("christersson.org")
     app = QGuiApplication(sys.argv)
     # The window and taskbar icon (the bundle icon is set by Briefcase)
     app.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "icon.png")))
     log_queue = logging_bridge.install()
-    migrate_sync_history()
+    note_old_data_dir()
     controllers = build_controllers(log_queue)
     initial = "Sync" if creds_store.has_any_credentials() else "Settings"
     engine = create_engine(controllers, initial)

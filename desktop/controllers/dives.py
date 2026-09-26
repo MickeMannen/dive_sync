@@ -51,8 +51,9 @@ SERVICE_EXTRA_COLUMNS = {
     # Divelogs stores the id of the Garmin activity a dive came from; seeing
     # it is the quickest way to tell a synced dive from a native one.
     "divelogs": [("garmin_id", "Garmin ID", False)],
-    # Whether the dive's original .fit has been downloaded (garmin_files).
-    "garmin": [("fit", "FIT", False)],
+    # Whether the dive's original .fit has been downloaded (garmin_files),
+    # and the dive computer that recorded it (garmin_files.device_name).
+    "garmin": [("fit", "FIT", False), ("device", "Dive computer", False)],
 }
 # Service columns that belong next to a shared one rather than at the end:
 # (column, the shared column it goes in front of). Garmin keeps a dive's
@@ -63,7 +64,7 @@ SERVICE_PLACED_COLUMNS = {
 }
 # Extra columns shown by default, and switched on once for a table whose
 # saved column choice predates them (preferences.introduce_columns).
-SERVICE_DEFAULT_ON = {"garmin": ["fit", "activity_name"]}
+SERVICE_DEFAULT_ON = {"garmin": ["fit", "activity_name", "device"]}
 
 
 # Columns a service never has a value for, left out of its table and dialog.
@@ -90,7 +91,7 @@ COLUMN_LABELS = {key: heading for key, heading, _ in _EVERY_COLUMN}
 DEFAULT_VISIBLE_COLUMNS = [key for key, _, _ in ALL_COLUMNS[:9]]
 COLUMN_WIDTHS = {"date": 100, "time": 80, "dive_number": 70, "location": 240, "max_depth": 100, "duration": 90,
                  "buddy": 110, "weight": 90, "visibility": 90, "water_temp": 110, "avg_depth": 100,
-                 "sac": 100, "tanks": 180, "notes": 220, "id": 110, "garmin_id": 110, "fit": 50,
+                 "sac": 100, "tanks": 180, "notes": 220, "id": 110, "garmin_id": 110, "fit": 50, "device": 150,
                  "activity_name": 220}
 # The one column that takes whatever width is left over, so the table fits
 # the window at any size instead of only near the size it was designed at:
@@ -400,6 +401,11 @@ class DivesController(QObject):
     def fitSupported(self) -> bool:
         """Only Garmin keeps the original file a dive computer uploaded."""
         return self.service == "garmin"
+
+    @Property(bool, constant=True)
+    def showsDevice(self) -> bool:
+        """Garmin: which dive computer recorded the dive (read-only)."""
+        return any(key == "device" for key, _, _ in columns_for(self.service))
 
     @Property(float, notify=progressChanged)
     def progressFraction(self) -> float:

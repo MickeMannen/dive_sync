@@ -10,8 +10,8 @@ TEST_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 def test_mock_sync_offline_mode(tmp_path):
     # Set up mock data directory structure
     mock_data_dir = str(tmp_path)
-    garmin_dir = os.path.join(mock_data_dir, "garmin")
-    divelogs_dir = os.path.join(mock_data_dir, "divelogs")
+    garmin_dir = os.path.join(mock_data_dir, "garmin", "default", "data")
+    divelogs_dir = os.path.join(mock_data_dir, "divelogs", "default", "data")
     os.makedirs(garmin_dir, exist_ok=True)
     os.makedirs(divelogs_dir, exist_ok=True)
 
@@ -125,7 +125,7 @@ def test_mock_sync_offline_mode(tmp_path):
     # being "linked" through an update. Nothing differs that Divelogs could
     # take (the notes fill goes the other way), so no update either.
     assert results["updated_on_garmin"] == [] and results["updated_on_divelogs"] == []
-    state = json.load(open(os.path.join(mock_data_dir, "sync_state.json")))
+    state = json.load(open(os.path.join(mock_data_dir, "sync", "sync_state.json")))
     assert state["links"]["10001"] == "50001"
     assert state["links"]["10002"] == "2"      # Garmin 2 -> new Divelogs 2
 
@@ -139,7 +139,7 @@ def test_mock_sync_offline_mode(tmp_path):
     # filled from the dive site its own upload gave the Divelogs copy in run 1
     assert [u["id"] for u in results["updated_on_garmin"]] == ["10001", "10002"]
     assert results["updated_on_divelogs"] == []
-    state = json.load(open(os.path.join(mock_data_dir, "sync_state.json")))
+    state = json.load(open(os.path.join(mock_data_dir, "sync", "sync_state.json")))
     assert state["links"]["10001"] == "50001"
     assert state["links"]["10002"] == "2" and state["links"]["3"] == "50003"
 
@@ -252,7 +252,7 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
     
     # Run the downloader with overwrite=True and a leftover file
     mock_data_dir = str(tmp_path)
-    garmin_leftover = os.path.join(mock_data_dir, "garmin", "test_user@garmin", "999.json")
+    garmin_leftover = os.path.join(mock_data_dir, "garmin", "test_user@garmin", "data", "999.json")
     os.makedirs(os.path.dirname(garmin_leftover), exist_ok=True)
     with open(garmin_leftover, "w") as f:
         f.write("{}")
@@ -263,7 +263,7 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
     assert not os.path.exists(garmin_leftover)
     
     # Verify Garmin raw file
-    garmin_file = os.path.join(mock_data_dir, "garmin", "test_user@garmin", "10_2026-06-22_100000_999001.json")
+    garmin_file = os.path.join(mock_data_dir, "garmin", "test_user@garmin", "data", "10_2026-06-22_100000_999001.json")
     assert os.path.exists(garmin_file)
     with open(garmin_file, "r") as f:
         data = json.load(f)
@@ -273,7 +273,7 @@ def test_download_and_save_raw_data(tmp_path, monkeypatch):
         assert data["tanksensor"]["sensorData"] == "mock_tanksensor_data"
         
     # Verify Divelogs raw file
-    divelogs_file = os.path.join(mock_data_dir, "divelogs", "test_user_divelogs", "12.json")
+    divelogs_file = os.path.join(mock_data_dir, "divelogs", "test_user_divelogs", "data", "12.json")
     assert os.path.exists(divelogs_file)
     with open(divelogs_file, "r") as f:
         data = json.load(f)
@@ -320,7 +320,7 @@ def test_download_and_save_raw_data_scoped_to_one_service(tmp_path, monkeypatch)
 
 def test_update_dive_preserves_other_fields(tmp_path):
     mock_data_dir = str(tmp_path)
-    garmin_dir = os.path.join(mock_data_dir, "garmin")
+    garmin_dir = os.path.join(mock_data_dir, "garmin", "default", "data")
     os.makedirs(garmin_dir, exist_ok=True)
     
     # Write a detailed mock file with extra fields
@@ -382,8 +382,8 @@ def test_update_dive_preserves_other_fields(tmp_path):
 class TestSync:
     @staticmethod
     def _setup_mock_directories(tmp_path, dive_numbers, copy_garmin=True, copy_divelogs=True):
-        garmin_dest = os.path.join(tmp_path, "garmin")
-        divelogs_dest = os.path.join(tmp_path, "divelogs")
+        garmin_dest = os.path.join(tmp_path, "garmin", "default", "data")
+        divelogs_dest = os.path.join(tmp_path, "divelogs", "default", "data")
         os.makedirs(garmin_dest, exist_ok=True)
         os.makedirs(divelogs_dest, exist_ok=True)
 
@@ -431,7 +431,7 @@ class TestSync:
         self._setup_mock_directories(tmp_path, [488], copy_garmin=False, copy_divelogs=True)
 
         # Let's modify the Garmin 502 data to check if sync uses the modified values
-        g502_path = os.path.join(mock_dir, "garmin", "502.json")
+        g502_path = os.path.join(mock_dir, "garmin", "default", "data", "502.json")
         with open(g502_path, "r") as f:
             g502_data = json.load(f)
         
@@ -445,7 +445,7 @@ class TestSync:
             json.dump(g502_data, f, indent=2)
 
         # Let's modify the Divelogs 488 data to check if sync uses the modified values
-        d488_path = os.path.join(mock_dir, "divelogs", "488.json")
+        d488_path = os.path.join(mock_dir, "divelogs", "default", "data", "488.json")
         with open(d488_path, "r") as f:
             d488_data = json.load(f)
         
@@ -467,7 +467,7 @@ class TestSync:
         assert len(results["uploaded_to_garmin"]) == 1
 
         # Check created Divelogs 502 JSON contains the modified location & notes
-        d502_path = os.path.join(mock_dir, "divelogs", "502.json")
+        d502_path = os.path.join(mock_dir, "divelogs", "default", "data", "502.json")
         assert os.path.exists(d502_path)
         with open(d502_path, "r") as f:
             d502_created = json.load(f)
@@ -475,7 +475,7 @@ class TestSync:
         assert d502_created["notes"] == "Modified Garmin Notes for 502"
 
         # Check created Garmin 488 JSON contains the modified location & notes
-        g488_path = os.path.join(mock_dir, "garmin", "488.json")
+        g488_path = os.path.join(mock_dir, "garmin", "default", "data", "488.json")
         assert os.path.exists(g488_path)
         with open(g488_path, "r") as f:
             g488_created = json.load(f)
@@ -492,7 +492,7 @@ class TestSync:
         self._setup_mock_directories(tmp_path, [488], copy_garmin=True, copy_divelogs=False)
 
         # Modify Divelogs 502 notes
-        d502_path = os.path.join(mock_dir, "divelogs", "502.json")
+        d502_path = os.path.join(mock_dir, "divelogs", "default", "data", "502.json")
         with open(d502_path, "r") as f:
             d502_data = json.load(f)
         d502_data["notes"] = "Test to_garmin notes"
@@ -506,7 +506,7 @@ class TestSync:
 
         # Divelogs 502 should be uploaded to Garmin
         assert len(results["uploaded_to_garmin"]) == 1
-        g502_path = os.path.join(mock_dir, "garmin", "502.json")
+        g502_path = os.path.join(mock_dir, "garmin", "default", "data", "502.json")
         assert os.path.exists(g502_path)
         with open(g502_path, "r") as f:
             g502_created = json.load(f)
@@ -514,7 +514,7 @@ class TestSync:
 
         # Unique Garmin 488 should NOT be uploaded to Divelogs because direction is to_garmin
         assert len(results["uploaded_to_divelogs"]) == 0
-        assert not os.path.exists(os.path.join(mock_dir, "divelogs", "488.json"))
+        assert not os.path.exists(os.path.join(mock_dir, "divelogs", "default", "data", "488.json"))
 
     def test_to_divelogs_directionality(self, tmp_path):
         if not os.path.exists(os.path.join(TEST_DATA_DIR, "garmin", "502.json")) or not os.path.exists(os.path.join(TEST_DATA_DIR, "divelogs", "488.json")):
@@ -526,7 +526,7 @@ class TestSync:
         self._setup_mock_directories(tmp_path, [488], copy_garmin=False, copy_divelogs=True)
 
         # Modify Garmin 502 description
-        g502_path = os.path.join(mock_dir, "garmin", "502.json")
+        g502_path = os.path.join(mock_dir, "garmin", "default", "data", "502.json")
         with open(g502_path, "r") as f:
             g502_data = json.load(f)
         g502_data["summary"]["description"] = "Test to_divelogs description"
@@ -541,7 +541,7 @@ class TestSync:
 
         # Garmin 502 should be uploaded to Divelogs
         assert len(results["uploaded_to_divelogs"]) == 1
-        d502_path = os.path.join(mock_dir, "divelogs", "502.json")
+        d502_path = os.path.join(mock_dir, "divelogs", "default", "data", "502.json")
         assert os.path.exists(d502_path)
         with open(d502_path, "r") as f:
             d502_created = json.load(f)
@@ -549,7 +549,7 @@ class TestSync:
 
         # Unique Divelogs 488 should NOT be uploaded to Garmin because direction is to_divelogs
         assert len(results["uploaded_to_garmin"]) == 0
-        assert not os.path.exists(os.path.join(mock_dir, "garmin", "488.json"))
+        assert not os.path.exists(os.path.join(mock_dir, "garmin", "default", "data", "488.json"))
 
     def test_declarative_jsonpath_mappings(self):
         from src.core.mapping_helper import resolve_jsonpath, set_jsonpath, MappingEngine
@@ -596,12 +596,12 @@ class TestSync:
         # Calling run_sync without override should use "to_garmin" which does NOT sync Garmin -> Divelogs
         res1 = engine.run_sync(dry_run=False)
         assert len(res1["uploaded_to_divelogs"]) == 0
-        assert not os.path.exists(os.path.join(mock_dir, "divelogs", "502.json"))
+        assert not os.path.exists(os.path.join(mock_dir, "divelogs", "default", "data", "502.json"))
 
         # Calling run_sync WITH override "to_divelogs" should override config and perform sync Garmin -> Divelogs!
         res2 = engine.run_sync(dry_run=False, direction_override="to_divelogs")
         assert len(res2["uploaded_to_divelogs"]) == 1
-        assert os.path.exists(os.path.join(mock_dir, "divelogs", "502.json"))
+        assert os.path.exists(os.path.join(mock_dir, "divelogs", "default", "data", "502.json"))
 
 
 def test_mock_adapters_delete_dive(tmp_path):
@@ -610,8 +610,8 @@ def test_mock_adapters_delete_dive(tmp_path):
     from datetime import datetime
 
     # Setup directories
-    garmin_mock_dir = os.path.join(tmp_path, "garmin")
-    divelogs_mock_dir = os.path.join(tmp_path, "divelogs")
+    garmin_mock_dir = os.path.join(tmp_path, "garmin", "default", "data")
+    divelogs_mock_dir = os.path.join(tmp_path, "divelogs", "default", "data")
     os.makedirs(garmin_mock_dir, exist_ok=True)
     os.makedirs(divelogs_mock_dir, exist_ok=True)
 

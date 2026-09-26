@@ -79,8 +79,7 @@ The desktop app asks for the same credentials on its **Settings** page and keeps
 {
   "garmin": {
     "username": "user@domain.com",
-    "password": "yourpassword",
-    "token_dir": "tokens/garmin"
+    "password": "yourpassword"
   },
   "divelogs": {
     "username": "user_divelogs",
@@ -93,22 +92,20 @@ The desktop app asks for the same credentials on its **Settings** page and keeps
   }
 }
 ```
-The `subsurface` section is optional; an older file without it still loads.
+The `subsurface` section is optional; an older file without it still loads. A Garmin account may also set `token_dir`, the folder for its login tokens; left out (the default), it is the account's own `garmin/<account>/tokens` folder.
 
 #### Multiple Accounts Structure (`credentials.json`):
-You can configure a list of credentials. The sync engine will segregate data directories per user (e.g. `./data/garmin/user@domain.com/`):
+You can configure a list of credentials. Each account gets its own folder (e.g. `garmin/user1@domain.com/`, see [Where your data is kept](#where-your-data-is-kept)):
 ```json
 {
   "garmin": [
     {
       "username": "user1@domain.com",
-      "password": "pass1",
-      "token_dir": "tokens/garmin"
+      "password": "pass1"
     },
     {
       "username": "user2@domain.com",
-      "password": "pass2",
-      "token_dir": "tokens/garmin"
+      "password": "pass2"
     }
   ],
   "divelogs": [
@@ -210,7 +207,7 @@ python sync.py --pair to-subsurface                                             
 
 Each pair has its own direction, grace window and mapping board (defaults are generated per pair). The Garmin ↔ Divelogs pair is itself an entry in `sync_pairs`, always the first one, with the fixed id `garmin_divelogs` — `python sync.py` with no `--pair`, the Docker default job and the boards' first entry all mean that pair. Settings files written before this (a top-level `directionality` / `field_links`) are upgraded on first load; the file then says `"settings_version": 2`.
 
-**Subsurface Cloud** needs no checkout of your own: with the account configured by `setup_credentials.py --services subsurface`, the spec `subsurface-cloud` clones the repository under `DATA_DIR/subsurface_cloud/`, refreshes it from the cloud at the start of every run, and commits and pushes once at the end. It never force-pushes; if Subsurface pushed in between, the run's changes are replayed on top of the new state.
+**Subsurface Cloud** needs no checkout of your own: with the account configured by `setup_credentials.py --services subsurface`, the spec `subsurface-cloud` clones the repository under `DATA_DIR/subsurface/<account>/cloud/`, refreshes it from the cloud at the start of every run, and commits and pushes once at the end. It never force-pushes; if Subsurface pushed in between, the run's changes are replayed on top of the new state.
 
 ```bash
 python sync.py --source garmin --target subsurface-cloud --full-sync
@@ -314,7 +311,7 @@ docker run -d \
 
 The container exposes:
 - **Web dashboard**: available at `http://localhost:8080` — sync status, live log, mapping board, accounts and schedule (see "🌐 Web Dashboard" below)
-- **Volume Mount**: `/app/data/` (contains `settings.json`, `credentials.json`, `tokens/`, `garmin/`, and `divelogs/`)
+- **Volume Mount**: `/app/data/` (contains `settings.json`, `credentials.json`, `sync/`, `backups/` and one folder per service - see [Where your data is kept](#where-your-data-is-kept))
 
 #### Or with Docker Compose
 Save this as `docker-compose.yml`; `./data` next to it becomes the data folder:
@@ -391,6 +388,32 @@ Open `http://localhost:8000` in your web browser. It is the unattended side of t
 
 ---
 
+## 📂 Where your data is kept
+
+| Runs as | Data folder |
+| --- | --- |
+| Desktop app, macOS | `~/Library/Application Support/org.christersson.dive_sync` |
+| Desktop app, Windows | `%LOCALAPPDATA%\Christersson\DiveSync` |
+| Desktop app, Linux | `~/.local/share/dive-sync` |
+| Docker | the volume mounted at `/app/data` (`DATA_DIR`) |
+| CLI | `DATA_DIR`; unset, settings in the working directory and caches in `./data` |
+
+Inside it, everything one account owns sits in one folder:
+
+```
+settings.json, credentials.json    settings (the desktop app keeps passwords in the OS keychain)
+sync/                              remembered dive pairs, conflicts, run history
+backups/                           a snapshot of both sides before each sync run
+garmin/<account>/data/             cached Garmin dives
+garmin/<account>/fit/              downloaded .fit files
+garmin/<account>/tokens/           Garmin login tokens
+divelogs/<account>/data/           cached Divelogs dives
+subsurface/<account>/data/         cached Subsurface dives
+subsurface/<account>/cloud/        the Subsurface Cloud checkout
+```
+
+A side without accounts (a Submersion store, a local Subsurface folder) uses the account folder `default`. Version 0.3.0 changed this layout and the desktop app's folder: it starts fresh and leaves an earlier version's data where it was (see `CHANGELOG.md`).
+
 ## 🗄️ Garmin Dive Cache
 
 Garmin Connect is slow: each dive takes three API calls, with a cooldown between calls. **Use cached Garmin dives** (on by default; desktop app, web dashboard, scheduled jobs; `--no-garmin-cache` turns it off on the CLI) makes a sync skip dives it already has. The cache is refreshed as part of every sync, not in a separate step:
@@ -402,7 +425,7 @@ Garmin Connect is slow: each dive takes three API calls, with a cooldown between
 
 New dives and most edits are always picked up. **The catch:** the activity list doesn't include notes, buddies, weight or visibility, so an edit to *only* those fields on Garmin leaves the dive looking unchanged, and the old cached copy is used. Such an edit is picked up by a sync with the option off, or by a **Full refresh** on the desktop app's Garmin dives page.
 
-For scheduled jobs, a good setup is a frequent job with the cache on, plus a weekly job with it off to catch those edits. The cache lives in `garmin/<account>/` in the data folder.
+For scheduled jobs, a good setup is a frequent job with the cache on, plus a weekly job with it off to catch those edits. The cache lives in `garmin/<account>/data/` in the data folder.
 
 ## 🧪 Testing
 
@@ -419,8 +442,8 @@ Run all unit, mock, and API tests to verify execution logic:
 - **Gases and tanks never reach Garmin Connect.** Garmin's activity API accepts no gas or tank data, on creation or update; gases on Garmin come only from the dive computer and from tank sensors assigned in the Garmin Connect mobile app. Dives uploaded to Garmin therefore arrive without tanks. Reading works: once a second transmitter is assigned to a dive in the mobile app, both tanks are visible to dive_sync. Details of the investigation: [docs/garmin_diving_api.md](docs/garmin_diving_api.md).
 - **Divelogs numbers dives itself** from date and time, so dive numbers are never synced or matched on that pair.
 - **Profiles and tanks flow one way to Divelogs** (Garmin cannot take them back). Divelogs stores profiles at a fixed sample rate; irregular Garmin profiles are resampled on the way.
-- **Two runners, one account.** Docker (scheduled) and the desktop app (manual) may sync the same accounts from different machines. There is no shared lock and each keeps its own `sync_state.json`, `conflicts.json` and Garmin token cache; both honour `api_cooldown_seconds`, but back-to-back runs from two machines can still hit Garmin's login rate limit (HTTP 429, wait 10–15 minutes). Let one runner finish before starting the other.
-- **Pairs are remembered locally.** Garmin and Divelogs cannot store each other's id, so the matched pairs live in `sync_state.json` next to your settings. Deleting that file makes the next run re-match by time (fine) and forget which dives it uploaded (uploads are not repeated because they now match by time, unless the times were shifted).
+- **Two runners, one account.** Docker (scheduled) and the desktop app (manual) may sync the same accounts from different machines. There is no shared lock and each keeps its own sync state, conflicts and Garmin token cache; both honour `api_cooldown_seconds`, but back-to-back runs from two machines can still hit Garmin's login rate limit (HTTP 429, wait 10–15 minutes). Let one runner finish before starting the other.
+- **Pairs are remembered locally.** Garmin and Divelogs cannot store each other's id, so the matched pairs live in `sync/sync_state.json` next to your settings. Deleting that file makes the next run re-match by time (fine) and forget which dives it uploaded (uploads are not repeated because they now match by time, unless the times were shifted).
 - **Multi-account** works only from the CLI (`--garmin`, `--divelogs`); the scheduler, web dashboard and desktop app assume one account per service.
 - **Subsurface keeps a recorded dive's profile as recorded.** Its duration and depths follow from the dive computer's profile and are only written on hand-logged dives; Subsurface has no visibility in metres (only a 0–5 rating), so visibility is not synced there.
 - **A water temperature of 0 °C counts as "not recorded".** Garmin stores 0 on a hand-logged dive whose temperature was never entered; a genuine 0 °C dive would be treated the same.
@@ -433,7 +456,7 @@ Run all unit, mock, and API tests to verify execution logic:
 
 The web dashboard has **no authentication**. Anyone who can reach its port can read the log, change the schedule and save credentials. Run it on a private network only, or behind something that authenticates for it: a reverse proxy with a login (Caddy, nginx, Authelia), a VPN, or Tailscale. Note that the default `DIVE_SYNC_HOST=0.0.0.0` binds every interface of the host; use `127.0.0.1` when a proxy on the same machine fronts it.
 
-`credentials.json` holds passwords in clear text, and the Garmin token cache under `tokens/` grants API access without the password. Keep `DATA_DIR` private (mode 700) and out of version control. The desktop app keeps credentials in the OS keychain instead and writes them to disk only for the duration of an operation.
+`credentials.json` holds passwords in clear text, and the Garmin token cache under `garmin/<account>/tokens/` grants API access without the password. Keep `DATA_DIR` private (mode 700) and out of version control. The desktop app keeps credentials in the OS keychain instead and writes them to disk only for the duration of an operation.
 
 ---
 

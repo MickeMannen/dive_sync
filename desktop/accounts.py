@@ -10,13 +10,10 @@ account's dives or history. Mapping boards stay per service pair: they
 describe fields, not accounts."""
 from __future__ import annotations
 
-import logging
-import os
 from typing import Dict, List
 
 from desktop import credentials, preferences
 
-logger = logging.getLogger("dive_sync.desktop.accounts")
 
 ACCOUNT_SERVICES = ("garmin", "divelogs", "subsurface")
 
@@ -73,33 +70,3 @@ def accounts_for_spec(spec: str, model=None) -> List[str]:
     # "subsurface:<dir>" is a local checkout; only the cloud has accounts
     service = {"subsurface-cloud": "subsurface", "subsurface": ""}.get(service, service)
     return names(service, model) or [""]
-
-
-def migrate_legacy_state(state_dir: str, boards: List[dict], model=None) -> List[str]:
-    """Move each pair's state and conflicts from before E19 (one file per
-    pair) to the per-account name - only where every side of the pair has
-    exactly one account, so it is certain whose history it is. Where a side
-    already has several accounts the old file is left alone. Returns the
-    files moved."""
-    from src.core.conflicts import conflicts_path_for
-    from src.core.pairs import account_state_file, legacy_state_file, service_id_of
-    model = model or credentials.load_credentials_model()
-    moved = []
-    for board in boards:
-        try:
-            s, t = service_id_of(board["source"]), service_id_of(board["target"])
-        except ValueError:
-            continue
-        sources, targets = accounts_for_spec(board["source"], model), accounts_for_spec(board["target"], model)
-        if len(sources) != 1 or len(targets) != 1:
-            continue
-        legacy = legacy_state_file(state_dir, s, t)
-        scoped = account_state_file(state_dir, s, sources[0], t, targets[0])
-        if legacy == scoped:
-            continue
-        for old, new in ((legacy, scoped), (conflicts_path_for(legacy), conflicts_path_for(scoped))):
-            if os.path.exists(old) and not os.path.exists(new):
-                os.replace(old, new)
-                moved.append(new)
-                logger.info("Sync history %s now belongs to %s.", os.path.basename(old), os.path.basename(new))
-    return moved

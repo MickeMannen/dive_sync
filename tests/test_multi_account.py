@@ -44,7 +44,7 @@ def test_build_adapter_picks_the_named_subsurface_account(tmp_path):
     ConfigManager.save_credentials(_two_of_each(), str(creds))
     adapter = build_adapter("subsurface-cloud", SettingsModel(), credentials_path=str(creds), subsurface_username="test@s.org")
     assert adapter.email == "test@s.org"
-    assert adapter.clone_dir.endswith(os.path.join("subsurface_cloud", "test@s.org"))
+    assert adapter.clone_dir.endswith(os.path.join("subsurface", "test@s.org", "cloud"))
     with pytest.raises(ValueError, match="Multiple Subsurface Cloud accounts"):
         build_adapter("subsurface-cloud", SettingsModel(), credentials_path=str(creds))
     with pytest.raises(ValueError, match="nobody@s.org"):
@@ -55,13 +55,13 @@ def test_account_state_file_names(tmp_path):
     from src.core.pairs import account_state_file, legacy_state_file
     d = str(tmp_path)
     # Garmin -> Divelogs keeps the name it already had with several accounts
-    assert account_state_file(d, "garmin", "g@x", "divelogs", "d") == os.path.join(d, "sync_state_g@x_d.json")
+    assert account_state_file(d, "garmin", "g@x", "divelogs", "d") == os.path.join(d, "sync", "sync_state_g@x_d.json")
     assert account_state_file(d, "garmin", "g@x", "subsurface", "me@x.org") == \
-        os.path.join(d, "sync_state_garmin-g@x_subsurface-me@x.org.json")
-    assert account_state_file(d, "garmin", "g@x", "uddf", "") == os.path.join(d, "sync_state_garmin-g@x_uddf.json")
-    assert account_state_file(d, "garmin", "a/b", "uddf", "") == os.path.join(d, "sync_state_garmin-a_b_uddf.json")
-    assert legacy_state_file(d, "garmin", "divelogs") == os.path.join(d, "sync_state.json")
-    assert legacy_state_file(d, "garmin", "subsurface") == os.path.join(d, "sync_state_garmin_subsurface.json")
+        os.path.join(d, "sync", "sync_state_garmin-g@x_subsurface-me@x.org.json")
+    assert account_state_file(d, "garmin", "g@x", "uddf", "") == os.path.join(d, "sync", "sync_state_garmin-g@x_uddf.json")
+    assert account_state_file(d, "garmin", "a/b", "uddf", "") == os.path.join(d, "sync", "sync_state_garmin-a_b_uddf.json")
+    assert legacy_state_file(d, "garmin", "divelogs") == os.path.join(d, "sync", "sync_state.json")
+    assert legacy_state_file(d, "garmin", "subsurface") == os.path.join(d, "sync", "sync_state_garmin_subsurface.json")
 
 
 def test_engine_keeps_state_per_account_combination_only_when_asked(tmp_path):
@@ -128,19 +128,14 @@ def _dive(external_id, when="2026-06-22T10:00:00"):
 
 def test_subsurface_cache_is_kept_per_account(tmp_path, monkeypatch):
     base = str(tmp_path)
-    # a flat cache from before accounts
-    flat = dive_cache.unified_cache_dir("subsurface", None, base)
-    os.makedirs(flat)
-    with open(os.path.join(flat, "old.json"), "w") as f:
-        json.dump(_dive("old"), f)
     adapters = {"live@s.org": _FakeCloud([_dive("same"), _dive("live-only")]),
                 "test@s.org": _FakeCloud([_dive("same")])}
     used = []
     monkeypatch.setattr(dive_cache, "_unified_adapter", lambda service, username=None: used.append(username) or adapters[username])
     assert dive_cache.download_service_dives("subsurface", base_dir=base, username="live@s.org") == 2
     assert dive_cache.download_service_dives("subsurface", base_dir=base, username="test@s.org") == 1
-    assert not os.path.exists(os.path.join(flat, "old.json"))          # discarded, re-downloaded per account
-    assert sorted(os.listdir(flat)) == ["live@s.org", "test@s.org"]
+    service_dir = os.path.join(base, "subsurface")
+    assert sorted(os.listdir(service_dir)) == ["live@s.org", "test@s.org"]
     live = dive_cache.list_dives("subsurface", "live@s.org", base)
     test = dive_cache.list_dives("subsurface", "test@s.org", base)
     assert sorted(r["filename"] for r in live) == ["live-only.json", "same.json"]
@@ -149,11 +144,11 @@ def test_subsurface_cache_is_kept_per_account(tmp_path, monkeypatch):
 
     # the same file name in two accounts: the update goes to the test account only
     path = dive_cache.update_dive_fields("subsurface", "same.json", "test@s.org", base_dir=base, buddy="Bo")
-    assert path == os.path.join(flat, "test@s.org", "same.json")
+    assert path == os.path.join(service_dir, "test@s.org", "data", "same.json")
     used.clear()
     assert dive_cache.push_remote_update("subsurface", path)            # account read from the path
     assert used == ["test@s.org"] and adapters["test@s.org"].updated == ["same"] and adapters["live@s.org"].updated == []
-    with open(os.path.join(flat, "live@s.org", "same.json")) as f:
+    with open(os.path.join(service_dir, "live@s.org", "data", "same.json")) as f:
         assert not json.load(f).get("buddy")
 
 
@@ -172,7 +167,7 @@ def test_unified_adapter_maps_a_cache_folder_back_to_its_email(monkeypatch, tmp_
 
 def test_garmin_listing_never_shows_another_accounts_dives(tmp_path):
     base = str(tmp_path)
-    live = tmp_path / "garmin" / "live@g"
+    live = tmp_path / "garmin" / "live@g" / "data"
     live.mkdir(parents=True)
     (live / "1.json").write_text(json.dumps({"summary": {"activityId": 1, "startTimeLocal": "2026-06-22 10:00:00"}}))
     assert [r["filename"] for r in dive_cache.list_dives("garmin", "live@g", base)] == ["1.json"]
@@ -184,11 +179,11 @@ def test_garmin_listing_never_shows_another_accounts_dives(tmp_path):
 
 def test_keychain_moves_the_single_subsurface_account_into_the_list(fake_keyring):
     import desktop.credentials as creds_store
-    fake_keyring.store[("DiveSync", "subsurface")] = json.dumps({"email": "me@x.org", "password": "pw"})
+    fake_keyring.store[(creds_store.SERVICE_NAME, "subsurface")] = json.dumps({"email": "me@x.org", "password": "pw"})
     model = creds_store.load_credentials_model()
     assert [(a.email, a.password) for a in model.get_subsurface_accounts()] == [("me@x.org", "pw")]
-    assert ("DiveSync", "subsurface") not in fake_keyring.store
-    assert json.loads(fake_keyring.store[("DiveSync", "subsurface_accounts")]) == [{"username": "me@x.org", "password": "pw"}]
+    assert (creds_store.SERVICE_NAME, "subsurface") not in fake_keyring.store
+    assert json.loads(fake_keyring.store[(creds_store.SERVICE_NAME, "subsurface_accounts")]) == [{"username": "me@x.org", "password": "pw"}]
     # and saving the whole model keeps every account
     creds_store.save_credentials_model(_two_of_each())
     assert [a.email for a in creds_store.load_credentials_model().get_subsurface_accounts()] == ["live@s.org", "test@s.org"]
@@ -207,25 +202,6 @@ def test_selected_account_is_remembered_per_page(fake_keyring, scratch_data_dir)
     assert accounts.accounts_for_spec("subsurface-cloud") == ["live@s.org", "test@s.org"]
     assert accounts.accounts_for_spec("subsurface:/some/checkout") == [""]
     assert accounts.accounts_for_spec("uddf:x.uddf") == [""]
-
-
-def test_legacy_state_moves_only_where_the_accounts_are_certain(fake_keyring, scratch_data_dir):
-    import desktop.credentials as creds_store
-    from desktop import accounts
-    creds_store.save_credentials_model(CredentialsModel(
-        garmin=[GarminCredentials(username="g@x", password="pw")],
-        divelogs=[DivelogsCredentials(username="d1", password="pw"), DivelogsCredentials(username="d2", password="pw")],
-        subsurface=[SubsurfaceCredentials(email="me@x.org", password="pw")]))
-    d = scratch_data_dir
-    for name in ("sync_state.json", "sync_state_garmin_subsurface.json", "conflicts_garmin_subsurface.json"):
-        (d / name).write_text("{}")
-    boards = [{"id": "garmin_divelogs", "source": "garmin", "target": "divelogs"},
-              {"id": "garmin_subsurface", "source": "garmin", "target": "subsurface-cloud"}]
-    moved = accounts.migrate_legacy_state(str(d), boards)
-    assert sorted(os.path.basename(p) for p in moved) == ["conflicts_garmin-g@x_subsurface-me@x.org.json",
-                                                          "sync_state_garmin-g@x_subsurface-me@x.org.json"]
-    # two Divelogs accounts: whose history sync_state.json is cannot be told, so it stays
-    assert (d / "sync_state.json").exists() and not (d / "sync_state_garmin_subsurface.json").exists()
 
 
 def test_dives_page_lists_and_saves_its_own_account(qapp, fake_keyring, scratch_data_dir, monkeypatch):

@@ -7,10 +7,10 @@ from src.core import dive_cache
 
 @pytest.fixture
 def cache_dirs(tmp_path):
-    garmin_dir = tmp_path / "garmin"
-    divelogs_dir = tmp_path / "divelogs"
-    garmin_dir.mkdir()
-    divelogs_dir.mkdir()
+    garmin_dir = tmp_path / "garmin" / "default" / "data"
+    divelogs_dir = tmp_path / "divelogs" / "default" / "data"
+    garmin_dir.mkdir(parents=True)
+    divelogs_dir.mkdir(parents=True)
 
     g_dive = {
         "summary": {
@@ -65,8 +65,8 @@ def test_list_garmin_dives(cache_dirs):
 
 
 def test_list_garmin_dives_formats_float_duration_and_depth(tmp_path):
-    garmin_dir = tmp_path / "garmin"
-    garmin_dir.mkdir()
+    garmin_dir = tmp_path / "garmin" / "default" / "data"
+    garmin_dir.mkdir(parents=True)
     (garmin_dir / "1.json").write_text(json.dumps({
         "summary": {
             "activityId": "1",
@@ -132,8 +132,8 @@ def test_normalize_date_time_empty():
 
 
 def test_list_garmin_dives_normalizes_iso_t_separated_date_time(tmp_path):
-    garmin_dir = tmp_path / "garmin"
-    garmin_dir.mkdir()
+    garmin_dir = tmp_path / "garmin" / "default" / "data"
+    garmin_dir.mkdir(parents=True)
     (garmin_dir / "1.json").write_text(json.dumps({
         "summary": {
             "activityId": "1",
@@ -168,8 +168,8 @@ def test_read_raw_dive_not_found(cache_dirs):
 
 
 def test_get_samples_garmin(tmp_path):
-    garmin_dir = tmp_path / "garmin"
-    garmin_dir.mkdir()
+    garmin_dir = tmp_path / "garmin" / "default" / "data"
+    garmin_dir.mkdir(parents=True)
     (garmin_dir / "1.json").write_text(json.dumps({
         "summary": {"activityId": "1"},
         "details": {},
@@ -196,16 +196,16 @@ def test_get_samples_garmin(tmp_path):
 
 
 def test_get_samples_garmin_no_activity_details(tmp_path):
-    garmin_dir = tmp_path / "garmin"
-    garmin_dir.mkdir()
+    garmin_dir = tmp_path / "garmin" / "default" / "data"
+    garmin_dir.mkdir(parents=True)
     (garmin_dir / "1.json").write_text(json.dumps({"summary": {"activityId": "1"}, "details": {}}))
 
     assert dive_cache.get_samples("garmin", "1.json", base_dir=str(tmp_path)) == []
 
 
 def test_get_samples_divelogs(tmp_path):
-    divelogs_dir = tmp_path / "divelogs"
-    divelogs_dir.mkdir()
+    divelogs_dir = tmp_path / "divelogs" / "default" / "data"
+    divelogs_dir.mkdir(parents=True)
     (divelogs_dir / "1.json").write_text(json.dumps({
         "id": "1",
         "samplerate": 30,
@@ -374,7 +374,7 @@ def test_push_remote_update_garmin(cache_dirs, monkeypatch):
     monkeypatch.setattr(GarminAdapter, "_map_to_unified", lambda self, summary, details: "unified-dive")
     monkeypatch.setattr(GarminAdapter, "update_dive", lambda self, ext_id, dive: calls.append((ext_id, dive)) or True)
 
-    filepath = os.path.join(cache_dirs, "garmin", "1.json")
+    filepath = os.path.join(cache_dirs, "garmin", "default", "data", "1.json")
     result = dive_cache.push_remote_update("garmin", filepath, username="user@example.com")
 
     assert result is True
@@ -539,7 +539,7 @@ def test_unified_cache_never_touches_the_adapters_device_state(tmp_path):
     assert any(n.startswith("hlc_") for n in os.listdir(state_dir))
 
     cache_dir = dive_cache.unified_cache_dir("submersion", base_dir=str(tmp_path))
-    assert cache_dir == os.path.join(state_dir, "dives")
+    assert cache_dir == os.path.join(state_dir, "default", "data")
 
     dive_cache.save_unified_dives("submersion", [_unified_dive()], base_dir=str(tmp_path))
     # An overwrite download clears the cache and nothing else.
@@ -603,7 +603,7 @@ def test_unified_download_prunes_but_a_plain_save_does_not(tmp_path):
 def test_list_garmin_dives_known_lists_only_files_written_since(cache_dirs):
     """What the dives page polls while a refresh runs: new and rewritten
     files only, and a half-written one is left for the next poll."""
-    garmin_dir = os.path.join(cache_dirs, "garmin")
+    garmin_dir = os.path.join(cache_dirs, "garmin", "default", "data")
     known = dive_cache.garmin_file_mtimes(base_dir=cache_dirs)
     assert list(known) == [os.path.join(garmin_dir, "1.json")]
     assert dive_cache.list_garmin_dives(base_dir=cache_dirs, known=known) == []
@@ -618,3 +618,52 @@ def test_list_garmin_dives_known_lists_only_files_written_since(cache_dirs):
     with open(os.path.join(garmin_dir, "3.json"), "w") as f:
         json.dump({"summary": {"activityId": "10003"}, "details": {}}, f)
     assert [d["id"] for d in dive_cache.list_garmin_dives(base_dir=cache_dirs, known=known)] == ["10003"]
+
+
+def _fit_with_file_id(product, serial):
+    """The smallest FIT a watch could write: header, a file_id definition
+    (manufacturer, product, serial number) and its data message."""
+    import struct
+    records = (bytes([0x40, 0, 0]) + struct.pack("<H", 0) + bytes([3, 1, 2, 0x84, 2, 2, 0x84, 3, 4, 0x8C])
+               + bytes([0x00]) + struct.pack("<HHI", 1, product, serial))
+    return bytes([14, 0x20]) + struct.pack("<HI", 2100, len(records)) + b".FIT\x00\x00" + records
+
+
+def test_list_garmin_dives_names_the_dive_computer(tmp_path, monkeypatch):
+    monkeypatch.setattr(dive_cache, "_device_products", {})
+    garmin_dir = tmp_path / "garmin" / "default" / "data"
+    fit_dir = tmp_path / "garmin" / "default" / "fit"
+    garmin_dir.mkdir(parents=True)
+    fit_dir.mkdir(parents=True)
+
+    def dive(activity_id, serial, type_pk, manual=False):
+        return {"summary": {"activityId": activity_id, "startTimeLocal": f"2026-06-2{activity_id} 10:00:00"},
+                "details": {"metadataDTO": {"manualActivity": manual,
+                                            "deviceMetaDataDTO": {"deviceId": serial, "deviceTypePk": type_pk}}}}
+
+    # A Mk2 whose Connect model id is in no table: one downloaded FIT names
+    # both of its dives, the one without a FIT too.
+    (garmin_dir / "1_2026-06-21_100000_1.json").write_text(json.dumps(dive(1, "111", 55555)))
+    (fit_dir / "1_2026-06-21_100000_1.fit").write_bytes(_fit_with_file_id(3258, 111))
+    (garmin_dir / "2_2026-06-22_100000_2.json").write_text(json.dumps(dive(2, "111", 55555)))
+    # No FIT downloaded: Connect's model id, known or not
+    (garmin_dir / "3_2026-06-23_100000_3.json").write_text(json.dumps(dive(3, "222", 37191)))
+    (garmin_dir / "4_2026-06-24_100000_4.json").write_text(json.dumps(dive(4, "333", 99999)))
+    # Typed in on Connect, and a dive with no device data at all
+    (garmin_dir / "5_2026-06-25_100000_5.json").write_text(json.dumps(dive(5, "0", 19, manual=True)))
+    (garmin_dir / "6_2026-06-26_100000_6.json").write_text(json.dumps({
+        "summary": {"activityId": 6, "startTimeLocal": "2026-06-26 10:00:00"}, "details": {}}))
+
+    devices = {r["id"]: r["device"] for r in dive_cache.list_garmin_dives(base_dir=str(tmp_path))}
+    assert devices == {"1": "Descent Mk2(i)", "2": "Descent Mk2(i)", "3": "Descent X50i",
+                       "4": "Garmin device type 99999", "5": "Hand-logged", "6": ""}
+
+
+def test_fit_device_reads_file_id(tmp_path):
+    from src.core import garmin_files
+    path = tmp_path / "x.fit"
+    path.write_bytes(_fit_with_file_id(4518, 3504700399))
+    assert garmin_files.fit_device(str(path)) == ("3504700399", 4518)
+    bad = tmp_path / "bad.fit"
+    bad.write_bytes(b"not a fit file at all")
+    assert garmin_files.fit_device(str(bad)) is None

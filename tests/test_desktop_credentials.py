@@ -48,22 +48,24 @@ def test_has_any_credentials_initially_false(fake_keyring):
     assert creds_store.has_any_credentials() is False
 
 
-def test_default_token_dir_is_anchored_to_the_app_data_dir():
-    from desktop.paths import data_dir
-
-    assert creds_store.DEFAULT_GARMIN_TOKEN_DIR == os.path.join(data_dir(), "tokens", "garmin")
-    assert os.path.isabs(creds_store.DEFAULT_GARMIN_TOKEN_DIR)
+def test_keychain_service_is_the_app_identity():
+    assert creds_store.SERVICE_NAME == "org.christersson.dive_sync"
 
 
-def test_load_credentials_model_falls_back_to_default_token_dir(fake_keyring):
-    loaded = creds_store.load_credentials_model()
-    assert loaded.get_garmin_accounts() == []
-
-    # An account saved with no explicit token_dir gets the properly-anchored
-    # default rather than a bare relative "tokens/garmin".
+def test_token_file_lands_in_the_accounts_own_folder(fake_keyring, tmp_path, monkeypatch):
+    """A blank token_dir (the default) is the account's garmin/<account>/tokens
+    folder under DATA_DIR (rework.md E21), where the token is materialized
+    for a login and removed again afterwards."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     creds_store.save_credentials_model(CredentialsModel(garmin=[GarminCredentials(username="diver1", password="pw", token_dir="")]))
     account = creds_store.load_credentials_model().get_garmin_accounts()[0]
-    assert account.token_dir == creds_store.DEFAULT_GARMIN_TOKEN_DIR
+    assert account.token_dir == ""
+    keyring.set_password(creds_store.SERVICE_NAME, creds_store._garmin_token_key("diver1"), '{"cached": true}')
+    creds_store.materialize_garmin_token("diver1", account.token_dir)
+    folder = tmp_path / "garmin" / "diver1" / "tokens"
+    assert [p.name for p in folder.iterdir()] == [safe_token_filename("diver1")]
+    creds_store.clear_garmin_token_file("diver1", account.token_dir)
+    assert list(folder.iterdir()) == []
 
 
 def test_save_and_load_round_trip(fake_keyring):

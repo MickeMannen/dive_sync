@@ -2,13 +2,13 @@
 profile export / import (rework.md D5, C11)."""
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from desktop import credentials as creds_store
 from desktop.jobs import Worker
+from src.core import layout
 
 
 class SettingsController(QObject):
@@ -113,7 +113,7 @@ class SettingsController(QObject):
         from src.core.config import GarminCredentials
         accounts = [
             GarminCredentials(username=str(r.get("username", "")).strip(), password=str(r.get("password", "")),
-                              token_dir=str(r.get("token_dir", "")).strip() or creds_store.DEFAULT_GARMIN_TOKEN_DIR)
+                              token_dir=str(r.get("token_dir", "")).strip())
             for r in rows if str(r.get("username", "")).strip()
         ]
         creds_store._save_accounts("garmin", accounts)
@@ -210,7 +210,7 @@ class SettingsController(QObject):
         password = password or (stored.password if stored else "")
         # Not user-configurable (rework.md decision 2026-09-22): the token
         # directory is internal token-staging plumbing, not a real setting.
-        token_dir = (stored.token_dir if stored else "") or creds_store.DEFAULT_GARMIN_TOKEN_DIR
+        token_dir = layout.garmin_token_dir(username, stored.token_dir if stored else "")
         if not username or not password:
             self._set("_garmin_status", "Enter a username and password first.", self.garminStatusChanged)
             return

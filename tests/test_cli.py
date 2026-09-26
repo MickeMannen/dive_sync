@@ -18,7 +18,7 @@ def _run(tmp_path, *args, stdin=""):
 
 def _write_mock(tmp_path, garmin=None, divelogs=None):
     for service, items in (("garmin", garmin or []), ("divelogs", divelogs or [])):
-        d = tmp_path / "mock" / service
+        d = tmp_path / "mock" / service / "default" / "data"
         d.mkdir(parents=True, exist_ok=True)
         for i, item in enumerate(items):
             # the mock adapters name files by dive number
@@ -99,7 +99,7 @@ def test_conflicts_list_and_resolve(tmp_path):
     res = _run(tmp_path, "--resolve", conflict_id, "source")
     assert res.returncode == 0, res.stdout + res.stderr
     assert "Resolved conflict" in res.stdout
-    updated = json.loads((tmp_path / "mock" / "divelogs" / "1.json").read_text())
+    updated = json.loads((tmp_path / "mock" / "divelogs" / "default" / "data" / "1.json").read_text())
     assert updated["notes"] == "garmin notes"
     res = _run(tmp_path, "--list-conflicts")
     assert "No conflicts waiting" in res.stdout
@@ -108,9 +108,9 @@ def test_conflicts_list_and_resolve(tmp_path):
 def test_test_mapping_is_read_only(tmp_path):
     _write_mock(tmp_path, [G1], [D1])
     (tmp_path / "settings.json").write_text(json.dumps({"api_cooldown_seconds": 0}))
-    before = (tmp_path / "mock" / "divelogs" / "1.json").read_text()
+    before = (tmp_path / "mock" / "divelogs" / "default" / "data" / "1.json").read_text()
     res = _run(tmp_path, "--test-mapping")
     assert res.returncode == 0, res.stdout + res.stderr
     assert "1 matched" in res.stdout and "kept" in res.stdout and "Read-only" in res.stdout
-    assert (tmp_path / "mock" / "divelogs" / "1.json").read_text() == before
-    assert not (tmp_path / "mock" / "sync_state.json").exists()
+    assert (tmp_path / "mock" / "divelogs" / "default" / "data" / "1.json").read_text() == before
+    assert not (tmp_path / "mock" / "sync" / "sync_state.json").exists()

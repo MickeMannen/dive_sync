@@ -71,7 +71,6 @@ def _refresh_engine(tmp_path, monkeypatch, listing, calls):
     adapter = FakeAdapter()
     monkeypatch.setattr(type(engine), "garmin", property(lambda self: adapter))
     monkeypatch.setattr(type(engine), "garmin_username", property(lambda self: "u"))
-    monkeypatch.setattr(type(engine), "garmin_dir_name", property(lambda self: os.path.join("garmin", "u")))
     return engine
 
 
@@ -82,7 +81,7 @@ def test_refresh_renames_old_cache_files_and_keeps_fits_in_step(tmp_path, monkey
     calls = []
     engine = _refresh_engine(tmp_path, monkeypatch, listing, calls)
     base = str(tmp_path / "cache")
-    garmin_dir = os.path.join(base, "garmin", "u")
+    garmin_dir = os.path.join(base, "garmin", "u", "data")
     os.makedirs(garmin_dir)
     # cached under the old "<dive number>.json" name, complete and unchanged
     with open(os.path.join(garmin_dir, "1.json"), "w") as f:
@@ -100,7 +99,7 @@ def test_refresh_renames_old_cache_files_and_keeps_fits_in_step(tmp_path, monkey
 
 
 def _cache_dive(base, account, activity_id, number, manual=False):
-    directory = os.path.join(base, "garmin", account)
+    directory = os.path.join(base, "garmin", account, "data")
     os.makedirs(directory, exist_ok=True)
     stem = garmin_files.dive_stem(number, "2026-06-22 10:00:00", activity_id)
     with open(os.path.join(directory, stem + ".json"), "w") as f:
@@ -223,7 +222,7 @@ def _garmin_adapter(tmp_path, listing, calls, telemetry_fails=False):
 
 def test_sync_fetch_reuses_an_unchanged_cached_dive(tmp_path):
     listing = [_listing_entry(1, 5)]
-    cache = str(tmp_path / "garmin" / "u")
+    cache = str(tmp_path / "garmin" / "u" / "data")
     os.makedirs(cache)
     with open(os.path.join(cache, "5.json"), "w") as f:     # old naming scheme is fine too
         json.dump({"summary": listing[0], "details": {"metadataDTO": {"diveNumber": 5},
@@ -238,7 +237,7 @@ def test_sync_fetch_reuses_an_unchanged_cached_dive(tmp_path):
 
 def test_sync_fetch_refetches_a_changed_dive_and_recaches_it(tmp_path):
     listing = [_listing_entry(1, 5)]
-    cache = str(tmp_path / "garmin" / "u")
+    cache = str(tmp_path / "garmin" / "u" / "data")
     os.makedirs(cache)
     with open(os.path.join(cache, "5.json"), "w") as f:
         json.dump({"summary": dict(listing[0], activityName="Old name"), "details": {}}, f)
@@ -253,7 +252,7 @@ def test_sync_fetch_refetches_a_changed_dive_and_recaches_it(tmp_path):
 
 def test_sync_fetch_marks_a_partial_download_so_it_is_retried(tmp_path):
     listing = [_listing_entry(1, 5)]
-    cache = str(tmp_path / "garmin" / "u")
+    cache = str(tmp_path / "garmin" / "u" / "data")
     calls = []
     adapter = _garmin_adapter(tmp_path, listing, calls, telemetry_fails=True)
     adapter.cache_dir = cache
@@ -283,7 +282,7 @@ def test_engine_points_garmin_sides_at_the_cache(tmp_path, monkeypatch):
     garmin = _garmin_adapter(tmp_path, [], [])
     monkeypatch.setattr(engine, "source", garmin)
     engine._configure_garmin_cache(True)
-    assert garmin.cache_dir == os.path.join(str(tmp_path), "garmin", "u")
+    assert garmin.cache_dir == os.path.join(str(tmp_path), "garmin", "u", "data")
     engine._configure_garmin_cache(False)
     assert garmin.cache_dir is None
 

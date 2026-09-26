@@ -340,12 +340,12 @@ def test_overwrite_only_refetches_garmin(tmp_path):
     from src.core.sync_engine import SyncEngine
     (tmp_path / "credentials.json").write_text(json.dumps({}))
     for name in ("garmin", "divelogs"):
-        (tmp_path / name).mkdir()
-        (tmp_path / name / "1.json").write_text("{}")
+        (tmp_path / name / "default" / "data").mkdir(parents=True)
+        (tmp_path / name / "default" / "data" / "1.json").write_text("{}")
     engine = SyncEngine(settings_path=str(tmp_path / "settings.json"), credentials_path=str(tmp_path / "credentials.json"))
     engine.download_and_save_raw_data(mock_data_dir=str(tmp_path), overwrite=True)
-    assert not (tmp_path / "garmin" / "1.json").exists()
-    assert (tmp_path / "divelogs" / "1.json").exists()
+    assert not (tmp_path / "garmin" / "default" / "data" / "1.json").exists()
+    assert (tmp_path / "divelogs" / "default" / "data" / "1.json").exists()
 
 
 def test_scheduled_job_with_source_and_target(monkeypatch):

@@ -39,20 +39,16 @@ from typing import List
 import keyring
 
 from desktop import preferences
-from desktop.paths import data_dir
+from desktop.paths import APP_ID
+from src.core import layout
 from src.core.services.garmin import safe_account_id, safe_token_filename
 
 logger = logging.getLogger("dive_sync.desktop.credentials")
 
-SERVICE_NAME = "DiveSync"
-
-# Anchored to the app's private data directory rather than a bare relative
-# "tokens/garmin" - a relative path resolves against whatever the process's
-# current working directory happens to be at launch (project root when run
-# via PyCharm/`python -m desktop`, something else entirely once packaged),
-# which is exactly the inconsistency this whole module exists to avoid for
-# credentials.json/settings.json.
-DEFAULT_GARMIN_TOKEN_DIR = os.path.join(data_dir(), "tokens", "garmin")
+# The keychain service every item is stored under: the app's identity
+# (rework.md E21). Items saved by versions before 0.3.0 under "DiveSync" are
+# left alone, and the logins are entered again once.
+SERVICE_NAME = APP_ID
 
 
 def _key(service: str, field: str) -> str:
@@ -194,7 +190,8 @@ def _load_accounts(service: str, cls):
     for entry in _load_raw_accounts(service):
         kwargs = {"username": entry.get("username", ""), "password": entry.get("password", "")}
         if service == "garmin":
-            kwargs["token_dir"] = preferences.get_garmin_token_dir(kwargs["username"], DEFAULT_GARMIN_TOKEN_DIR)
+            # blank = the account's own garmin/<account>/tokens folder (layout.py)
+            kwargs["token_dir"] = preferences.get_garmin_token_dir(kwargs["username"], "")
         if service == "subsurface":
             # one server for every account (rework.md E19)
             kwargs = {"email": kwargs["username"], "password": kwargs["password"],
@@ -225,7 +222,7 @@ def _save_accounts(service: str, accounts) -> None:
         password = account.password or previous.get(name, {}).get("password", "")
         saved.append({"username": name, "password": password})
         if service == "garmin":
-            preferences.set_garmin_token_dir(name, account.token_dir or DEFAULT_GARMIN_TOKEN_DIR)
+            preferences.set_garmin_token_dir(name, account.token_dir)
     kept_usernames = {a["username"] for a in saved}
     if service == "garmin":
         for username in set(previous) - kept_usernames:
@@ -341,6 +338,7 @@ def materialize_garmin_token(username: str, token_dir: str) -> None:
     been cached yet (e.g. before the very first successful login)."""
     if not username:
         return
+    token_dir = layout.garmin_token_dir(username, token_dir)
     blob = keyring.get_password(SERVICE_NAME, _garmin_token_key(username))
     if not blob:
         return
@@ -357,6 +355,7 @@ def sync_garmin_token_from_file(username: str, token_dir: str) -> None:
     isn't lost."""
     if not username:
         return
+    token_dir = layout.garmin_token_dir(username, token_dir)
     path = os.path.join(token_dir, safe_token_filename(username))
     try:
         with open(path, "r") as f:
@@ -372,6 +371,7 @@ def clear_garmin_token_file(username: str, token_dir: str) -> None:
     clear_local_cache() for credentials.json."""
     if not username:
         return
+    token_dir = layout.garmin_token_dir(username, token_dir)
     path = os.path.join(token_dir, safe_token_filename(username))
     try:
         os.remove(path)

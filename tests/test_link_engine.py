@@ -440,7 +440,7 @@ def test_pre_sync_backup_snapshots_what_was_fetched(tmp_path):
     engine = _engine(tmp_path, [g], [d])
     engine.run_sync(dry_run=False)
 
-    backups_root = os.path.join(os.path.dirname(engine.state_file), "backups")
+    backups_root = os.path.join(engine.data_home, "backups")
     runs = os.listdir(backups_root)
     assert len(runs) == 1
     with open(os.path.join(backups_root, runs[0], "garmin.json")) as f:
@@ -456,7 +456,7 @@ def test_pre_sync_backup_skipped_on_dry_run(tmp_path):
     engine = _engine(tmp_path, [g], [d])
     engine.run_sync(dry_run=True)
 
-    backups_root = os.path.join(os.path.dirname(engine.state_file), "backups")
+    backups_root = os.path.join(engine.data_home, "backups")
     assert not os.path.exists(backups_root)
 
 
@@ -466,7 +466,7 @@ def test_pre_sync_backup_prunes_to_the_retention_count(tmp_path):
     for _ in range(4):
         engine.run_sync(dry_run=False)
 
-    backups_root = os.path.join(os.path.dirname(engine.state_file), "backups")
+    backups_root = os.path.join(engine.data_home, "backups")
     assert len(os.listdir(backups_root)) == 2
 
 
@@ -969,6 +969,7 @@ def test_deletion_gone_on_both_sides_just_drops_the_stale_link(tmp_path):
 
 def test_state_file_without_links_still_loads(tmp_path):
     engine = _engine(tmp_path, [], [])
+    os.makedirs(os.path.dirname(engine.state_file), exist_ok=True)
     with open(engine.state_file, "w") as f:
         json.dump({"last_sync_time": "2026-09-01T10:00:00"}, f)
     assert engine.load_last_sync_time() == datetime(2026, 9, 1, 10) and engine.load_links() == {}

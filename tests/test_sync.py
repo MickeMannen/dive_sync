@@ -444,8 +444,9 @@ def test_multi_account_handling(tmp_path):
     
     assert engine.garmin_username == "user2@garmin"
     assert engine.divelogs_username == "user1_divelogs"
-    assert engine.garmin_dir_name == os.path.join("garmin", "user2@garmin")
-    assert engine.divelogs_dir_name == os.path.join("divelogs", "user1_divelogs")
+    from src.core import layout
+    assert layout.dives_dir("garmin", engine.garmin_username, "d") == os.path.join("d", "garmin", "user2@garmin", "data")
+    assert layout.dives_dir("divelogs", engine.divelogs_username, "d") == os.path.join("d", "divelogs", "user1_divelogs", "data")
 
 
 def test_garmin_location_overlay_does_not_duplicate():
@@ -744,7 +745,6 @@ def test_garmin_download_skips_dives_already_cached(tmp_path, monkeypatch):
     adapter = FakeAdapter()
     monkeypatch.setattr(type(engine), "garmin", property(lambda self: adapter))
     monkeypatch.setattr(type(engine), "garmin_username", property(lambda self: "u"))
-    monkeypatch.setattr(type(engine), "garmin_dir_name", property(lambda self: "garmin"))
 
     base = str(tmp_path / "cache")
     assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
@@ -814,10 +814,9 @@ def test_garmin_download_removes_dives_deleted_or_renumbered_on_garmin(tmp_path,
     adapter = FakeAdapter()
     monkeypatch.setattr(type(engine), "garmin", property(lambda self: adapter))
     monkeypatch.setattr(type(engine), "garmin_username", property(lambda self: "u"))
-    monkeypatch.setattr(type(engine), "garmin_dir_name", property(lambda self: "garmin"))
 
     base = str(tmp_path / "cache")
-    garmin_dir = _os.path.join(base, "garmin")
+    garmin_dir = _os.path.join(base, "garmin", "u", "data")
     assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
     assert sorted(_os.listdir(garmin_dir)) == ["1_2026-06-01_100000_1.json", "2_2026-06-02_100000_2.json"]
 
@@ -882,11 +881,10 @@ def test_garmin_download_retries_a_dive_whose_telemetry_failed(tmp_path, monkeyp
     adapter = FakeAdapter()
     monkeypatch.setattr(type(engine), "garmin", property(lambda self: adapter))
     monkeypatch.setattr(type(engine), "garmin_username", property(lambda self: "u"))
-    monkeypatch.setattr(type(engine), "garmin_dir_name", property(lambda self: "garmin"))
 
     base = str(tmp_path / "cache")
     assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
-    cached_file = _os.path.join(base, "garmin", "7_2026-06-07_100000_7.json")
+    cached_file = _os.path.join(base, "garmin", "u", "data", "7_2026-06-07_100000_7.json")
     payload = _json.load(open(cached_file))
     # the rest of the dive is kept, but the hole is recorded - and a 404 on
     # the tank sensor is "absent", not "failed"

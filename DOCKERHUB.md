@@ -66,10 +66,12 @@ docker compose logs -f                         # follow the log
 Map a host folder to `/app/data`. It holds:
 - `credentials.json` (plain text: passwords and store keys, keep it private)
 - `settings.json` (direction, filters, schedule, mapping board, sync pairs)
-- `sync_state.json` / `conflicts.json` (remembered pairs, last run, conflicts waiting for you)
-- `tokens/` (Garmin session tokens; grant API access without the password)
-- `subsurface_cloud/` (the clone of your Subsurface Cloud repository)
-- `garmin/` & `divelogs/` (raw dive caches when you download them)
+- `sync/` (remembered pairs, last run, conflicts waiting for you, run history)
+- `backups/` (a snapshot of both sides before each sync run)
+- `garmin/<account>/` with `data/` (dive cache), `fit/` (downloaded `.fit` files) and `tokens/` (Garmin session tokens; grant API access without the password)
+- `divelogs/<account>/data/` and `subsurface/<account>/data/` (dive caches); `subsurface/<account>/cloud/` (the clone of your Subsurface Cloud repository)
+
+**Upgrading from before 0.3.0:** the layout changed. The container starts fresh in the same volume: the dive caches are downloaded again, and the remembered dive pairs start empty, so the first sync re-matches dives by time. The old `garmin/<account>/*.json`, `garmin_fit/`, `tokens/`, `subsurface_cloud/` and root-level `sync_state*.json` / `conflicts*.json` can be deleted once the new version runs.
 
 ---
 

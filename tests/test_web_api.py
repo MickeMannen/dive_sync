@@ -568,7 +568,7 @@ def test_web_jobs_with_source_and_target_and_all_conflicts(tmp_path, monkeypatch
     job = ConfigManager.load_settings(str(tmp_path / "settings.json")).cron_jobs[0]
     assert (job.source, job.target, job.use_garmin_cache) == ("garmin", "subsurface-cloud", False)
 
-    ConflictStore(str(tmp_path / "conflicts_garmin_subsurface.json")).save([Conflict(
+    ConflictStore(str(tmp_path / "sync" / "conflicts_garmin_subsurface.json")).save([Conflict(
         id="c1", link_id="buddy", source_service="garmin", target_service="subsurface", source_key="garmin.buddy",
         target_key="subsurface.buddy", field_type="text", dive_ids={"garmin": "1", "subsurface": "x"},
         source_value="Anna", target_value="Bob", dive_time="2026-06-27 09:20:00")])

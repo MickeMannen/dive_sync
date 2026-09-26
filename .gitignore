@@ -5,6 +5,7 @@ sync_state_*.json
 conflicts.json
 conflicts_*.json
 sync_history.jsonl
+/sync/
 /credentials_real.json
 /data/
 /tests/data/garmin/

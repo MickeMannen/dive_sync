@@ -420,6 +420,10 @@ ColumnLayout {
         modal: true
         standardButtons: Dialog.Yes | Dialog.No
         anchors.centerIn: Overlay.overlay
+        // A fixed content width: the question is set just before open(), and
+        // letting the dialog size itself from wrapping text is a binding loop
+        // on implicitWidth.
+        contentWidth: 420
         property string question: ""
         property var args: []
         Text { text: splitDialog.question; color: Theme.text; wrapMode: Text.WordWrap; width: 420 }

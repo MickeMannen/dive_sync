@@ -60,6 +60,18 @@ def introduce_columns(service: str, keys: List[str]) -> List[str]:
     return new
 
 
+def take_once(key: str) -> bool:
+    """True the first time ``key`` is asked for, False ever after: for a
+    notice that should be shown once, not at every start."""
+    prefs = _load()
+    seen = prefs.setdefault("shown_once", [])
+    if key in seen:
+        return False
+    seen.append(key)
+    _save(prefs)
+    return True
+
+
 def get_sort(service: str, default_column: str) -> Tuple[str, bool]:
     """Returns (column_key, ascending)."""
     prefs = _load()

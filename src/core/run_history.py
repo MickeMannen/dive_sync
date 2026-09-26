@@ -2,7 +2,7 @@
 
 ``scheduler.last_sync_results`` only holds the latest result per job and is
 lost on restart; this keeps the last ``MAX_RUNS`` runs (any job) as one JSON
-object per line in ``DATA_DIR/sync_history.jsonl``, next to settings.json,
+object per line in ``sync/sync_history.jsonl`` beside settings.json (layout.py),
 each with the run's full result and the log lines it wrote."""
 import json
 import logging
@@ -12,13 +12,15 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from src.core import layout
+
 logger = logging.getLogger("dive_sync.run_history")
 
 HISTORY_FILENAME = "sync_history.jsonl"
 MAX_RUNS = 200
 MAX_LOG_LINES = 2000
 
-# Tests point this at a temporary file; None = DATA_DIR/sync_history.jsonl
+# Tests point this at a temporary file; None = <DATA_DIR>/sync/sync_history.jsonl
 HISTORY_FILE: Optional[str] = None
 
 _lock = threading.Lock()
@@ -30,7 +32,7 @@ _SUMMARY_KEYS = ("id", "job", "trigger", "started_at", "finished_at", "duration_
 
 
 def history_path() -> str:
-    return HISTORY_FILE or os.path.join(os.environ.get("DATA_DIR", "."), HISTORY_FILENAME)
+    return HISTORY_FILE or os.path.join(layout.sync_dir(os.environ.get("DATA_DIR", ".")), HISTORY_FILENAME)
 
 
 def count_results(results: Optional[Dict[str, Any]]) -> Dict[str, int]:

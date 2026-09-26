@@ -458,6 +458,9 @@ ColumnLayout {
                     LabeledField { id: fWeight; label: "Weight"; fieldWidth: 150; text: detailCard.sel.weight || ""; onEditingFinished: page.stageCurrent() }
                     LabeledField { id: fLat; label: "Latitude"; fieldWidth: 150; text: page.coordText(detailCard.sel.lat); onEditingFinished: page.stageCurrent() }
                     LabeledField { id: fLng; label: "Longitude"; fieldWidth: 150; text: page.coordText(detailCard.sel.lng); onEditingFinished: page.stageCurrent() }
+
+                    // Set by the device that uploaded the dive, not by the diver
+                    LabeledField { objectName: "field-device"; Layout.columnSpan: 2; label: "Dive computer"; fieldWidth: 316; readOnly: true; visible: controller.showsDevice; text: detailCard.sel.device || "" }
                 }
                 ColumnLayout {
                     spacing: 2

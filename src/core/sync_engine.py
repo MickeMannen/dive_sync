@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Tuple, Dict, Any, Optional, Set
 
 from src.core.config import ConfigManager, SyncPairModel, SettingsModel, CredentialsModel, GarminCredentials, DivelogsCredentials
-from src.core import dive_cache, garmin_files, progress
+from src.core import dive_cache, garmin_files, layout, progress
 from src.core.adapter import BaseDiveAdapter
 from src.core.fields import (
     MATCH_KEY_MAX_HOURS,
@@ -151,7 +151,11 @@ class SyncEngine:
         self._garmin_username_override = garmin_username
         self._divelogs_username_override = divelogs_username
 
+        # settings.json's folder; the engine's own files go in its sync/
+        # folder (layout.py), backups beside it (see _write_pre_sync_backup)
         state_dir = os.path.dirname(self.settings_path) or "."
+        self.data_home = mock_data_dir or state_dir
+        sync_dir = layout.sync_dir(state_dir)
 
         if source_adapter is not None or target_adapter is not None:
             if source_adapter is None or target_adapter is None:
@@ -161,16 +165,17 @@ class SyncEngine:
             self.source_id = self._require_service_id(self.source)
             self.target_id = self._require_service_id(self.target)
             if (self.source_id, self.target_id) == ("garmin", "divelogs"):
-                self.state_file = os.path.join(state_dir, STATE_FILE)
+                self.state_file = os.path.join(sync_dir, STATE_FILE)
             else:
-                self.state_file = os.path.join(state_dir, f"sync_state_{self.source_id}_{self.target_id}.json")
+                self.state_file = os.path.join(sync_dir, f"sync_state_{self.source_id}_{self.target_id}.json")
         elif mock_data_dir:
             # If subdirectories with username exist under mock_data_dir, use segmented state file
-            g_path = os.path.join(mock_data_dir, "garmin", self.garmin_username) if self.garmin_username else None
+            mock_sync_dir = layout.sync_dir(mock_data_dir)
+            g_path = layout.dives_dir("garmin", self.garmin_username, mock_data_dir) if self.garmin_username else None
             if g_path and os.path.exists(g_path):
-                self.state_file = os.path.join(mock_data_dir, f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
+                self.state_file = os.path.join(mock_sync_dir, f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
             else:
-                self.state_file = os.path.join(mock_data_dir, STATE_FILE)
+                self.state_file = os.path.join(mock_sync_dir, STATE_FILE)
 
             from src.core.services.mock_adapters import LocalMockGarminAdapter, LocalMockDivelogsAdapter
             logger.info("Initializing SyncEngine in OFFLINE/MOCK mode using data from: %s", mock_data_dir)
@@ -182,13 +187,11 @@ class SyncEngine:
             from src.core.services.garmin import GarminAdapter
             from src.core.services.divelogs import DivelogsAdapter
             if self.garmin_username and self.divelogs_username and (len(self.credentials.get_garmin_accounts()) > 1 or len(self.credentials.get_divelogs_accounts()) > 1):
-                self.state_file = os.path.join(state_dir, f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
+                self.state_file = os.path.join(sync_dir, f"sync_state_{self.garmin_username}_{self.divelogs_username}.json")
             else:
-                self.state_file = os.path.join(state_dir, STATE_FILE)
+                self.state_file = os.path.join(sync_dir, STATE_FILE)
 
-            token_dir = self.garmin_creds.token_dir
-            if not os.path.isabs(token_dir):
-                token_dir = os.path.join(os.environ.get("DATA_DIR", "."), token_dir)
+            token_dir = layout.garmin_token_dir(self.garmin_creds.username, self.garmin_creds.token_dir)
 
             self.source = GarminAdapter(
                 username=self.garmin_creds.username,
@@ -303,18 +306,6 @@ class SyncEngine:
     def divelogs_username(self) -> str:
         return self.divelogs_creds.username
 
-    @property
-    def garmin_dir_name(self) -> str:
-        if self.garmin_username:
-            return os.path.join("garmin", self.garmin_username)
-        return "garmin"
-
-    @property
-    def divelogs_dir_name(self) -> str:
-        if self.divelogs_username:
-            return os.path.join("divelogs", self.divelogs_username)
-        return "divelogs"
-
     # ------------------------------------------------------------------
     # Sync state
     # ------------------------------------------------------------------
@@ -368,6 +359,7 @@ class SyncEngine:
         else:
             state.pop("full_compare_once", None)
         try:
+            os.makedirs(os.path.dirname(self.state_file) or ".", exist_ok=True)
             with open(self.state_file, "w") as f:
                 json.dump(state, f, indent=2)
         except Exception as e:
@@ -383,6 +375,7 @@ class SyncEngine:
         if clear_full_compare:
             state.pop("full_compare_once", None)
         try:
+            os.makedirs(os.path.dirname(self.state_file) or ".", exist_ok=True)
             with open(self.state_file, "w") as f:
                 json.dump(state, f, indent=2)
             logger.info("Saved sync state (%s, %d known pairs)", state.get("last_sync_time"), len(state.get("links", {})))
@@ -454,13 +447,10 @@ class SyncEngine:
         run. Reuses the same ``UnifiedDive`` JSON shape. Best-effort: a
         failure here must never abort the sync it's protecting."""
         try:
-            # Anchored to the state file's own directory rather than reading
-            # DATA_DIR directly - self.state_file is already resolved
-            # correctly for every construction path (settings_path-relative,
-            # mock_data_dir, or DATA_DIR for a real deployment), so this
-            # follows wherever this particular engine instance's data
-            # actually lives instead of assuming the process-wide default.
-            backups_root = os.path.join(os.path.dirname(self.state_file) or ".", "backups")
+            # Anchored to this engine's own data folder (settings.json's, or
+            # mock_data_dir) rather than reading DATA_DIR directly, so it
+            # follows wherever this engine instance's data actually lives.
+            backups_root = os.path.join(self.data_home, "backups")
             backup_dir = os.path.join(backups_root, datetime.now().strftime("%Y%m%dT%H%M%S%f"))
             os.makedirs(backup_dir, exist_ok=True)
             for service_id, dives in ((self.source_id, source_dives), (self.target_id, target_dives)):
@@ -1498,8 +1488,8 @@ class SyncEngine:
         log, written in full and pruned on every download anyway."""
         logger.info("Starting raw data download (garmin=%s, divelogs=%s)...", include_garmin, include_divelogs)
 
-        garmin_dir = os.path.join(mock_data_dir, self.garmin_dir_name)
-        divelogs_dir = os.path.join(mock_data_dir, self.divelogs_dir_name)
+        garmin_dir = layout.dives_dir("garmin", self.garmin_username, mock_data_dir)
+        divelogs_dir = layout.dives_dir("divelogs", self.divelogs_username, mock_data_dir)
 
         if overwrite and include_garmin and os.path.exists(garmin_dir):
             logger.info("Re-fetching every Garmin dive. Clearing directory: %s", garmin_dir)

@@ -414,7 +414,7 @@ function connectLogStream() {
 
 function accountRowHtml(service, account) {
   const tokenDirField = service === "garmin"
-    ? `<label>Token dir <input class="a-token-dir" type="text" value="${escapeHtml(account.token_dir || "tokens/garmin")}"></label>`
+    ? `<label>Token dir <input class="a-token-dir" type="text" placeholder="garmin/&lt;account&gt;/tokens" value="${escapeHtml(account.token_dir || "")}"></label>`
     : "";
   // A stored username with no stored password cannot log in; saying so here
   // beats letting the next sync be the one to discover it.
@@ -448,7 +448,7 @@ function readAccountRows(service) {
     .map((row) => {
       const account = { username: row.querySelector(".a-username").value.trim(), password: row.querySelector(".a-password").value };
       const tokenDir = row.querySelector(".a-token-dir");
-      if (tokenDir) account.token_dir = tokenDir.value.trim() || "tokens/garmin";
+      if (tokenDir) account.token_dir = tokenDir.value.trim();   // blank: the account's own tokens folder
       return account;
     })
     .filter((account) => account.username);

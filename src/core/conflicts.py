@@ -2,7 +2,7 @@
 
 A link with conflict policy ``manual`` never overwrites: when both sides hold
 a non-empty, different value the engine records a ``Conflict`` here instead.
-Entries live in ``conflicts.json`` next to ``sync_state.json``. Every run
+Entries live in ``conflicts.json`` next to ``sync_state.json`` (in ``sync/``, layout.py). Every run
 re-checks the matched pairs it saw and replaces their entries, so a conflict
 that no longer exists disappears on the next run. Resolving one (from the
 CLI or a UI) writes the chosen value to the losing side through the normal
@@ -99,6 +99,7 @@ class ConflictStore:
 
     def save(self, conflicts: Iterable[Conflict]) -> None:
         payload = {"conflicts": [c.model_dump(mode="json") for c in conflicts]}
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         with open(self.path, "w") as f:
             json.dump(payload, f, indent=2)
 

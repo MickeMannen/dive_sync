@@ -2,8 +2,8 @@
 
 Every Garmin dive is stored under one stem,
 ``<dive number>_<YYYY-MM-DD>_<HHMMSS>_<activity id>`` (local start time), for
-both its cached JSON (``DATA_DIR/garmin/<account>/<stem>.json``) and its
-original FIT file (``DATA_DIR/garmin_fit/<account>/<stem>.fit``). The name
+both its cached JSON (``garmin/<account>/data/<stem>.json``) and its
+original FIT file (``garmin/<account>/fit/<stem>.fit``; see layout.py). The name
 sorts by dive number, reads as the dive at a glance and, when the file is
 handed to another app (Submersion's FIT import), says which dive it is.
 
@@ -12,9 +12,9 @@ found by; the number and time in front of it can go stale when the dive is
 renumbered or retimed on Garmin, and ``rename_fit_files`` brings the FIT
 names back in line with the JSON ones after a refresh.
 
-The FIT files live outside the JSON cache directory on purpose: a Full
-refresh clears that directory, and a FIT download is not something to lose
-along with it.
+The FIT files live beside the JSON cache directory, not in it, on purpose:
+a Full refresh clears that directory, and a FIT download is not something to
+lose along with it.
 """
 from __future__ import annotations
 
@@ -23,12 +23,14 @@ import json
 import logging
 import os
 import re
+import struct
 import zipfile
 from typing import Any, Dict, List, Optional
 
+from src.core import layout
+
 logger = logging.getLogger("dive_sync.garmin_files")
 
-FIT_SUBDIR = "garmin_fit"
 # Stands in for the dive number of a dive Garmin has not numbered, so the
 # activity id stays the last of exactly four parts.
 NO_NUMBER = "nonum"
@@ -73,21 +75,25 @@ def activity_id_of(filename: str) -> Optional[str]:
 
 
 def fit_dir(username: Optional[str] = None, base_dir: Optional[str] = None) -> str:
-    parts = [base_dir or os.environ.get("DATA_DIR", "./data"), FIT_SUBDIR]
-    if username:
-        parts.append(username)
-    return os.path.join(*parts)
+    return layout.garmin_fit_dir(username, base_dir)
 
 
 def find_fit(activity_id: Any, username: Optional[str] = None, base_dir: Optional[str] = None) -> Optional[str]:
-    """Path of the downloaded FIT for an activity, whatever its current name."""
-    directory = fit_dir(username, base_dir)
-    if not activity_id or not os.path.isdir(directory):
+    """Path of the downloaded FIT for an activity, whatever its current name;
+    without ``username``, in whichever account has it."""
+    if not activity_id:
         return None
+    if username:
+        directories = [fit_dir(username, base_dir)]
+    else:
+        directories = [os.path.join(os.path.dirname(d), layout.FIT_SUBDIR) for _, d in layout.all_dives_dirs("garmin", base_dir)]
     wanted = str(activity_id)
-    for name in os.listdir(directory):
-        if name.endswith(".fit") and activity_id_of(name) == wanted:
-            return os.path.join(directory, name)
+    for directory in directories:
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            if name.endswith(".fit") and activity_id_of(name) == wanted:
+                return os.path.join(directory, name)
     return None
 
 
@@ -154,7 +160,7 @@ def rename_fit_files(json_dir: str, username: Optional[str] = None, base_dir: Op
     return renamed
 
 
-# -- the cached JSON (DATA_DIR/garmin/<account>/<stem>.json) ------------------
+# -- the cached JSON (garmin/<account>/data/<stem>.json) ----------------------
 
 # Fields of a Garmin activity-listing entry that reflect the dive itself. A
 # cached dive whose stored listing entry still matches on all of these is not
@@ -181,16 +187,168 @@ def is_manual_dive(payload: Dict[str, Any]) -> bool:
     return False
 
 
+# The dive computer a dive was recorded on. Connect's activity JSON names it
+# only by numbers - the watch's serial (``deviceMetaDataDTO.deviceId``) and
+# Connect's own model id (``deviceTypePk``), which nobody publishes a list of
+# - but the watch's FIT file carries its FIT product number, and that one is
+# listed: FIT_PRODUCT_NAMES is libdivecomputer's table
+# (subsurface/libdc src/garmin-models.h), which has the models Garmin's FIT
+# SDK does not know yet (the X50i, 4518). A serial is one watch, so one
+# downloaded FIT names every dive recorded on it (``device_products``).
+FIT_PRODUCT_NAMES = {
+    2859: "Descent Mk1",
+    2991: "Descent Mk1 APAC",
+    3258: "Descent Mk2(i)",
+    3702: "Descent Mk2(i) APAC",
+    3542: "Descent Mk2 S",
+    3930: "Descent Mk2 S APAC",
+    4005: "Descent G1",
+    4222: "Descent Mk3(i) 43mm",
+    4223: "Descent Mk3(i) 51mm",
+    4518: "Descent X50i",
+    4588: "Descent G2",
+    4534: "fēnix 8 43mm",
+    4532: "fēnix 8 Solar 47mm",
+    4533: "fēnix 8 Solar 51mm APAC",
+    4776: "fēnix 8 Solar 51mm",
+    4536: "fēnix 8 47/51mm APAC",
+    4775: "fēnix 8 47/51mm",
+    4631: "fēnix 8 Pro",
+}
+# Connect's model id -> name, for a watch none of whose FIT files has been
+# downloaded yet. Only ids seen next to a FIT product can go in here.
+DEVICE_TYPE_NAMES = {
+    37090: FIT_PRODUCT_NAMES[4223],
+    37191: FIT_PRODUCT_NAMES[4518],
+}
+_FIT_FILE_ID = 0                    # global message number of file_id
+# path -> (mtime, (serial, product)); a FIT file never changes once
+# downloaded, so each is read once per process however often the list reloads.
+_fit_device_cache: Dict[str, Any] = {}
+
+
+def fit_device(path: str) -> Optional[tuple]:
+    """``(serial, product)`` from a FIT file's file_id message, or None when
+    it cannot be read. Only file_id is needed - it is the first data message
+    of a FIT file - so this reads its few fields directly rather than
+    decoding the whole file."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _fit_device_cache.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        with open(path, "rb") as f:
+            result = _parse_file_id(f.read(64 * 1024))
+    except (OSError, ValueError, KeyError, struct.error, IndexError):
+        result = None
+    _fit_device_cache[path] = (mtime, result)
+    return result
+
+
+def _parse_file_id(data: bytes) -> Optional[tuple]:
+    """Walk the records up to the first file_id data message; fields 2
+    (product) and 3 (serial number) are what is kept."""
+    header_size = data[0]
+    if data[8:12] != b".FIT":
+        raise ValueError("not a FIT file")
+    pos = header_size
+    definitions: Dict[int, tuple] = {}         # local type -> (global, endian, fields, dev size)
+    while pos < len(data):
+        header = data[pos]
+        pos += 1
+        if header & 0x80:                   # compressed timestamp: a data message
+            local, is_definition, has_dev = (header >> 5) & 0x03, False, False
+        else:
+            local, is_definition, has_dev = header & 0x0F, bool(header & 0x40), bool(header & 0x20)
+        if is_definition:
+            endian = "<" if data[pos + 1] == 0 else ">"
+            global_num = struct.unpack(endian + "H", data[pos + 2:pos + 4])[0]
+            count = data[pos + 4]
+            pos += 5
+            fields = [(data[pos + i * 3], data[pos + i * 3 + 1]) for i in range(count)]
+            pos += count * 3
+            dev_size = 0
+            if has_dev:
+                dev_count = data[pos]
+                dev_size = sum(data[pos + 1 + i * 3 + 1] for i in range(dev_count))
+                pos += 1 + dev_count * 3
+            definitions[local] = (global_num, endian, fields, dev_size)
+            continue
+        global_num, endian, fields, dev_size = definitions[local]
+        if global_num != _FIT_FILE_ID:
+            pos += sum(size for _, size in fields) + dev_size
+            continue
+        values: Dict[int, int] = {}
+        for number, size in fields:
+            raw = data[pos:pos + size]
+            pos += size
+            if size in (2, 4):
+                values[number] = struct.unpack(endian + ("H" if size == 2 else "I"), raw)[0]
+        serial = values.get(3)
+        product = values.get(2)
+        return (str(serial) if serial not in (None, 0, 0xFFFFFFFF) else "",
+                product if product not in (None, 0xFFFF) else None)
+    return None
+
+
+def device_ids(payload: Dict[str, Any]) -> tuple:
+    """``(serial, model id)`` of the watch that recorded a cached Garmin
+    dive: Connect's ``deviceId`` ("" for none, as on a hand-logged dive)
+    and ``deviceTypePk`` (None when missing)."""
+    details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+    summary = payload.get("summary") or {}
+    metadata = details.get("metadataDTO") or summary.get("metadataDTO") or {}
+    device = metadata.get("deviceMetaDataDTO") or {}
+    serial = device.get("deviceId") or summary.get("deviceId")
+    try:
+        type_pk = int(device.get("deviceTypePk"))
+    except (TypeError, ValueError):
+        type_pk = None
+    return ("" if serial in (None, "", 0, "0") else str(serial)), type_pk
+
+
+def device_products(fit_paths: List[str], known: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+    """serial -> FIT product, from downloaded FIT files. ``known`` (updated
+    in place) is what earlier calls found; a serial already in it is kept,
+    so callers pass one FIT per watch not yet named rather than every dive's."""
+    products = known if known is not None else {}
+    for path in fit_paths:
+        found = fit_device(path)
+        if found and found[0] and found[1] is not None and found[0] not in products:
+            products[found[0]] = found[1]
+    return products
+
+
+def device_name(manual: bool, serial: str, type_pk: Optional[int],
+                products: Optional[Dict[str, int]] = None) -> str:
+    """The dive computer a Garmin dive was recorded on, for display.
+    "Hand-logged" for a dive typed in on Connect (it has no device); else
+    the model its watch's FIT product number names (``products``: serial ->
+    FIT product, from ``device_products``), else the one Connect's model id
+    names, else the number itself, so an unknown model can still be told
+    apart and added to the tables."""
+    if manual:
+        return "Hand-logged"
+    product = (products or {}).get(serial)
+    if product in FIT_PRODUCT_NAMES:
+        return FIT_PRODUCT_NAMES[product]
+    if type_pk in DEVICE_TYPE_NAMES:
+        return DEVICE_TYPE_NAMES[type_pk]
+    if product is not None:
+        return f"Garmin product {product}"
+    return f"Garmin device type {type_pk}" if type_pk is not None else ""
+
+
 def listing_fingerprint(entry: Dict[str, Any]) -> Dict[str, Any]:
     return {k: entry.get(k) for k in LISTING_KEYS}
 
 
 def cache_dir(username: Optional[str], base_dir: Optional[str] = None) -> str:
     """Where a Garmin refresh caches this account's dives."""
-    parts = [base_dir or os.environ.get("DATA_DIR", "./data"), "garmin"]
-    if username:
-        parts.append(username)
-    return os.path.join(*parts)
+    return layout.dives_dir("garmin", username, base_dir)
 
 
 def cached_listings(garmin_dir: str) -> Dict[str, Dict[str, Any]]:

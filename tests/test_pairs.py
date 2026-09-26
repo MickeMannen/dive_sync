@@ -47,7 +47,7 @@ def test_build_adapter_from_specs(tmp_path, monkeypatch):
         {"username": "a", "password": "p"}, {"username": "b", "password": "p"}]}))
     monkeypatch.setattr("src.core.services.garmin.Garmin", lambda *a, **k: object())
     real = build_adapter("garmin", settings, credentials_path=str(creds))
-    assert real.username == "u" and real.token_dir == str(tmp_path / "tokens" / "garmin")
+    assert real.username == "u" and real.token_dir == str(tmp_path / "garmin" / "u" / "tokens")
     with pytest.raises(ValueError, match="Multiple Divelogs"):
         build_adapter("divelogs", settings, credentials_path=str(creds))
     assert build_adapter("divelogs", settings, credentials_path=str(creds), divelogs_username="b").username == "b"
@@ -112,8 +112,8 @@ def test_cli_source_target_offline(tmp_path):
     """garmin (mock) -> subsurface:<fixture copy> and -> uddf:<file> through sync.py."""
     data_dir = tmp_path / "data"
     mock = tmp_path / "mock"
-    (mock / "garmin").mkdir(parents=True)
-    (mock / "garmin" / "1.json").write_text(json.dumps({"summary": {
+    (mock / "garmin" / "default" / "data").mkdir(parents=True)
+    (mock / "garmin" / "default" / "data" / "1.json").write_text(json.dumps({"summary": {
         "activityId": "10001", "activityName": "Zenobia", "startTimeLocal": "2026-06-22 10:00:00",
         "metadataDTO": {"diveNumber": 1}, "summaryDTO": {"duration": 2700, "maxDepth": 18.2, "startLatitude": 34.887, "startLongitude": 33.657},
         "description": "garmin notes"}, "details": {}}))
@@ -139,7 +139,7 @@ def test_cli_source_target_offline(tmp_path):
     assert res.returncode == 2 and "to_<service>" in res.stderr
     assert os.path.isdir(repo / "2026" / "06" / "22-Mon-10=00=00")
     assert "garmin notes" in open(repo / "2026" / "06" / "22-Mon-10=00=00" / "Dive-1").read()
-    state = json.load(open(data_dir / "sync_state_garmin_subsurface.json"))
+    state = json.load(open(data_dir / "sync" / "sync_state_garmin_subsurface.json"))
     # the link keeps the dive's directory: it survives a renumbering (Dive-N changes)
     assert state["links"]["10001"] == "2026/06/22-Mon-10=00=00"
 

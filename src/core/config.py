@@ -337,7 +337,9 @@ class SettingsModel(BaseModel):
 class GarminCredentials(BaseModel):
     username: str = ""
     password: str = ""
-    token_dir: str = "tokens/garmin"
+    # Blank: the account's own garmin/<account>/tokens folder (layout.py).
+    # A relative folder is under DATA_DIR, an absolute one used as is.
+    token_dir: str = ""
 
 class DivelogsCredentials(BaseModel):
     username: str = ""
