@@ -13,6 +13,10 @@ QtObject {
     readonly property color sidebar: "#1f2937"
     readonly property color sidebarText: "#e5e7eb"
     readonly property color navActive: "#0ea5a4"
+    // Tooltips (Tip.qml): solid and high-contrast in both schemes
+    readonly property color tipBg: dark ? "#2d3239" : "#1f2937"
+    readonly property color tipText: dark ? "#f3f4f6" : "#f9fafb"
+    readonly property color tipBorder: dark ? "#4b5563" : "#1f2937"
     readonly property int radius: 8
     readonly property int pad: 14
 }

@@ -43,18 +43,24 @@ class SettingsController(QObject):
     # the rest of the page down. With no test result to show, each one says
     # what is stored for that service.
 
+    def _stored_accounts(self, service: str):
+        return {"garmin": self._model.get_garmin_accounts, "divelogs": self._model.get_divelogs_accounts,
+                "subsurface": self._model.get_subsurface_accounts}[service]()
+
+    def _stored_account(self, service: str, name: str):
+        return next((a for a in self._stored_accounts(service) if creds_store.account_name(a) == name), None)
+
     def _accounts_status(self, service: str) -> str:
-        accounts = (self._model.get_garmin_accounts() if service == "garmin"
-                    else self._model.get_divelogs_accounts())
-        accounts = [a for a in accounts if a.username]
-        if not accounts:
+        names = [creds_store.account_name(a) for a in self._stored_accounts(service)]
+        names = [n for n in names if n]
+        if not names:
             return "No account saved yet."
-        missing = [a.username for a in accounts if not a.password]
+        missing = [n for n in names if not self._stored_account(service, n).password]
         if missing:
             return f"No password stored for {', '.join(missing)} - enter it and save."
-        if len(accounts) == 1:
-            return f"Saved: {accounts[0].username}. Press Test to check the login."
-        return f"{len(accounts)} accounts saved. Press Test to check a login."
+        if len(names) == 1:
+            return f"Saved: {names[0]}. Press Test to check the login."
+        return f"{len(names)} accounts saved. Press Test to check a login."
 
     @Property(str, notify=garminStatusChanged)
     def garminStatus(self) -> str:
@@ -66,13 +72,7 @@ class SettingsController(QObject):
 
     @Property(str, notify=subsurfaceStatusChanged)
     def subsurfaceStatus(self) -> str:
-        if self._subsurface_status:
-            return self._subsurface_status
-        if not self._model.subsurface.email:
-            return "No account saved yet."
-        if not self._model.subsurface.password:
-            return f"No password stored for {self._model.subsurface.email} - enter it and save."
-        return f"Saved: {self._model.subsurface.email}. Press Test to check the login."
+        return self._subsurface_status or self._accounts_status("subsurface")
 
     @Property(str, notify=submersionStatusChanged)
     def submersionStatus(self) -> str:
@@ -122,6 +122,26 @@ class SettingsController(QObject):
         # what is now stored, which is what the user just changed.
         self._set("_garmin_status", "", self.garminStatusChanged)
 
+    @Property("QVariantList", notify=credentialsChanged)
+    def subsurfaceAccounts(self):
+        """Emails only, like garminAccounts (``username`` so the settings
+        page's account rows need no per-service case)."""
+        return [{"username": a.email, "has_password": bool(a.password)}
+                for a in self._model.get_subsurface_accounts()]
+
+    @Slot("QVariantList")
+    def saveSubsurfaceAccounts(self, rows) -> None:
+        from src.core.config import SubsurfaceCredentials
+        base_url = self._model.first_subsurface_account().base_url
+        accounts = [
+            SubsurfaceCredentials(email=str(r.get("username", "")).strip(), password=str(r.get("password", "")),
+                                  base_url=base_url)
+            for r in rows if str(r.get("username", "")).strip()
+        ]
+        creds_store._save_accounts("subsurface", accounts)
+        self._saved()
+        self._set("_subsurface_status", "", self.subsurfaceStatusChanged)
+
     @Slot("QVariantList")
     def saveDivelogsAccounts(self, rows) -> None:
         from src.core.config import DivelogsCredentials
@@ -132,10 +152,6 @@ class SettingsController(QObject):
         creds_store._save_accounts("divelogs", accounts)
         self._saved()
         self._set("_divelogs_status", "", self.divelogsStatusChanged)
-
-    @Property(str, notify=credentialsChanged)
-    def subsurfaceEmail(self) -> str:
-        return self._model.subsurface.email
 
     @Property(str, notify=credentialsChanged)
     def submersionStoreType(self) -> str:
@@ -221,7 +237,9 @@ class SettingsController(QObject):
 
     @Slot(str, str)
     def testSubsurface(self, email: str, password: str) -> None:
-        password = password or self._model.subsurface.password
+        stored = self._stored_account("subsurface", email)
+        password = password or (stored.password if stored else "")
+        base_url = self._model.first_subsurface_account().base_url
         if not email or not password:
             self._set("_subsurface_status", "Enter an email and password first.", self.subsurfaceStatusChanged)
             return
@@ -229,7 +247,7 @@ class SettingsController(QObject):
 
         def work():
             from src.core.services.subsurface_cloud import check_cloud_login
-            ok, message = check_cloud_login(email, password, self._model.subsurface.base_url)
+            ok, message = check_cloud_login(email, password, base_url)
             return message
         self._run(work, lambda text: self._set("_subsurface_status", str(text), self.subsurfaceStatusChanged))
 
@@ -281,14 +299,16 @@ class SettingsController(QObject):
 
     @Slot(str, str)
     def saveSubsurface(self, email: str, password: str) -> None:
-        from src.core.config import SubsurfaceCredentials
-        creds_store.save_subsurface_credentials(SubsurfaceCredentials(
-            email=email,
-            password=password or self._model.subsurface.password,
-            base_url=self._model.subsurface.base_url,
-        ) if email else None)
-        self._saved()
-        self._set("_subsurface_status", "", self.subsurfaceStatusChanged)
+        """Add or update one Subsurface Cloud account, keeping the others."""
+        rows = [{"username": a.email, "password": ""} for a in self._model.get_subsurface_accounts()]
+        email = email.strip()
+        if email:
+            row = next((r for r in rows if r["username"] == email), None)
+            if row is None:
+                rows.append({"username": email, "password": password})
+            else:
+                row["password"] = password
+        self.saveSubsurfaceAccounts(rows)
 
     @Slot(str, str, str, str, str, str, str, bool, str, str)
     def saveSubmersion(self, store_type: str, endpoint_url: str, region: str, bucket: str, prefix: str,

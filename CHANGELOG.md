@@ -17,6 +17,11 @@ First packaged release.
   are stored per pair (`settings_version` 2); the Garmin <-> Divelogs pair
   is the explicit `garmin_divelogs` entry of `sync_pairs`. Older settings
   files and version-1 sync profiles are upgraded on load.
+- Desktop app: several accounts per service for Garmin Connect,
+  Divelogs.org and Subsurface Cloud (e.g. a live and a test account on one
+  computer). Each dives page and the Sync page pick their account, and
+  remember it; cached dives and each pair's sync history are kept per
+  account. The web UI and Docker still use one Subsurface Cloud account.
 - Additional sync targets: UDDF files, Subsurface (local git checkout and
   Subsurface Cloud), and Submersion (including end-to-end encrypted
   libraries). Submersion syncs metadata only - dive site, dive name, buddy,

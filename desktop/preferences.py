@@ -127,3 +127,20 @@ def set_submersion_config(**fields) -> None:
     for key, value in fields.items():
         config[key] = value
     _save(prefs)
+
+
+# -- the account each page works with (rework.md E19) ------------------------
+#
+# ``page`` is "dives" (the service's own dives page) or "sync" (the Sync
+# page, which the Mapping and Conflicts pages follow); each remembers its own
+# pick per service.
+
+def get_selected_account(page: str, service: str) -> str:
+    prefs = _load()
+    return prefs.get("selected_accounts", {}).get(page, {}).get(service, "")
+
+
+def set_selected_account(page: str, service: str, account: str) -> None:
+    prefs = _load()
+    prefs.setdefault("selected_accounts", {}).setdefault(page, {})[service] = account
+    _save(prefs)

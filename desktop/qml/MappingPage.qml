@@ -76,8 +76,10 @@ ColumnLayout {
                 text: "⇄"
                 flat: true
                 Layout.alignment: Qt.AlignBottom
-                ToolTip.text: "Swap source and target: the rules for the other direction"
-                ToolTip.visible: hovered
+                Tip {
+                    text: "Swap source and target: the rules for the other direction"
+                    visible: parent.hovered
+                }
                 onClicked: page.showView(mappingController.viewTarget, mappingController.viewSource)
             }
             Connections {
@@ -355,8 +357,10 @@ ColumnLayout {
                     model: mappingController.directions
                     textRole: "label"
                     valueRole: "value"
-                    ToolTip.text: "The direction this pair's scheduled and default runs write (saved with the pair options). Independent of the source and target on view."
-                    ToolTip.visible: hovered
+                    Tip {
+                        text: "The direction this pair's scheduled and default runs write (saved with the pair options). Independent of the source and target on view."
+                        visible: parent.hovered
+                    }
                     Component.onCompleted: currentIndex = Math.max(0, indexOfValue(mappingController.savedDirection))
                 }
             }
@@ -580,8 +584,10 @@ ColumnLayout {
                 color: modelData.selected ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.15) : Theme.card
                 border.color: dropArea.containsDrag ? (page.dragKey && page.dragRole === "sender" && mappingController.canDrop(page.dragKey, col.receiver, fieldKey) === "" ? Theme.accent : Theme.danger) : (modelData.linked ? Theme.accent : Theme.border)
                 opacity: modelData.writable ? 1 : 0.75
-                ToolTip.text: modelData.key + (modelData.rule_id ? "\nrule " + modelData.rule_id : "")
-                ToolTip.visible: hover.hovered
+                Tip {
+                    text: modelData.key + (modelData.rule_id ? "\nrule " + modelData.rule_id : "")
+                    visible: hover.hovered
+                }
                 HoverHandler { id: hover }
                 onXChanged: page.layoutGen++
                 onYChanged: page.layoutGen++
@@ -689,8 +695,10 @@ ColumnLayout {
                 color: modelData.armed ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.2) : Theme.card
                 border.color: senderDrop.containsDrag ? (page.dragKey && page.dragRole === "receiver" && mappingController.canDrop(fieldKey, col.receiver, page.dragKey) === "" ? Theme.accent : Theme.danger) : ((modelData.linked || modelData.armed) ? Theme.accent : Theme.border)
                 border.width: modelData.armed ? 2 : 1
-                ToolTip.text: modelData.key
-                ToolTip.visible: hover.hovered
+                Tip {
+                    text: modelData.key
+                    visible: hover.hovered
+                }
                 HoverHandler { id: hover }
                 onXChanged: page.layoutGen++
                 onYChanged: page.layoutGen++

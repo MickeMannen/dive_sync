@@ -184,7 +184,7 @@ def test_dives_controller_loads_cache_and_persists_prefs(qapp, scratch_data_dir,
     # save goes through dive_cache with parsed fields, in a worker thread
     calls = {}
     monkeypatch.setattr(dive_cache, "update_dive_fields", lambda service, filename, **kw: calls.update(service=service, filename=filename, **kw) or "/tmp/x.json")
-    monkeypatch.setattr(dive_cache, "push_remote_update", lambda service, filepath: True)
+    monkeypatch.setattr(dive_cache, "push_remote_update", lambda service, filepath, *a, **k: True)
     c.select(0)
     c.save({"dive_number": "7", "date": "2026-06-24", "time": "09:00:00", "duration": "45", "max_depth": "18.5",
             "location": "New", "notes": "n", "weight": "6 kg", "visibility": "10 m", "buddy": "B"})
@@ -201,6 +201,76 @@ def test_dives_controller_loads_cache_and_persists_prefs(qapp, scratch_data_dir,
     assert c.diveNumberEditable is True   # Garmin's dive number is ours to set
 
 
+def test_dive_table_merge_rows_inserts_in_sort_order_without_a_reset(qapp):
+    from desktop.controllers.dives import DiveTableModel
+    model = DiveTableModel(service="garmin")
+    model.set_rows([{"id": "1", "date": "2026-06-23", "filename": "a.json"},
+                    {"id": "2", "date": "2026-06-21", "filename": "b.json"}])
+    resets, inserts = [], []
+    model.modelReset.connect(lambda: resets.append(1))
+    model.rowsInserted.connect(lambda parent, first, last: inserts.append(first))
+    model.merge_rows([{"id": "3", "date": "2026-06-22", "filename": "c.json"},
+                      {"id": "4", "date": "", "filename": "d.json"}], "date", False)
+    assert [model.row(i)["filename"] for i in range(4)] == ["a.json", "c.json", "b.json", "d.json"]
+    # a dive already listed - here under an older file name - is replaced, not doubled
+    model.merge_rows([{"id": "2", "date": "2026-06-24", "filename": "b2.json"}], "date", False)
+    assert [model.row(i)["filename"] for i in range(4)] == ["b2.json", "a.json", "c.json", "d.json"]
+    assert resets == [] and inserts == [1, 3, 0]
+
+
+def test_dives_refresh_lists_garmin_dives_as_they_arrive(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    import threading
+    from desktop.controllers.dives import DivesController
+    from src.core import scheduler
+    garmin_dir = scratch_data_dir / "garmin"
+    garmin_dir.mkdir()
+    halfway, finish = threading.Event(), threading.Event()
+
+    def download(*args, **kwargs):
+        for n in (1, 2):
+            dive = {"summary": {"activityId": str(n), "startTimeLocal": f"2026-06-2{n} 10:00:00"}, "details": {}}
+            (garmin_dir / f"{n}.json").write_text(json.dumps(dive))
+            if n == 1:
+                halfway.set()
+                finish.wait(5)
+        scheduler.last_download_results = {"success": True}
+
+    monkeypatch.setattr(scheduler, "run_download_thread", download)
+    c = DivesController("garmin")
+    c._live_timer.setInterval(20)
+    c.refresh()
+    assert halfway.wait(5)
+    assert wait_until(qapp, lambda: c.diveCount == 1) and c.busy     # listed before the refresh is done
+    finish.set()
+    assert wait_until(qapp, lambda: not c.busy) and c.diveCount == 2 and c.listStatus == "Refreshed."
+
+
+def test_dives_refresh_stop_button(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    import threading
+    from desktop.controllers.dives import DivesController
+    from src.core import progress
+    from src.core.sync_engine import SyncEngine
+    started = threading.Event()
+
+    def download(self, mock_data_dir, overwrite, include_garmin, include_divelogs):
+        for n in range(1, 500):
+            progress.report(n, 500, f"dive {n}", "garmin")
+            started.set()
+            threading.Event().wait(0.01)
+        return True
+
+    monkeypatch.setattr(SyncEngine, "download_and_save_raw_data", download)
+    c = DivesController("garmin")
+    assert not c.stoppable
+    c.refresh()
+    assert started.wait(5) and wait_until(qapp, lambda: c.stoppable)
+    c.stop()
+    assert c.listStatus == "Stopping after the current dive…"
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.listStatus == "Stopped. The dives downloaded so far are listed." and not c.stoppable
+    assert not progress.stop_requested()
+
+
 def test_dives_controller_save_passes_gps_water_temp_and_tanks(qapp, scratch_data_dir, fake_keyring, monkeypatch):
     from desktop.controllers.dives import DivesController
     from src.core import dive_cache
@@ -209,7 +279,7 @@ def test_dives_controller_save_passes_gps_water_temp_and_tanks(qapp, scratch_dat
     monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: rows)
     calls = {}
     monkeypatch.setattr(dive_cache, "update_dive_fields", lambda service, filename, **kw: calls.update(service=service, filename=filename, **kw) or "/tmp/x.json")
-    monkeypatch.setattr(dive_cache, "push_remote_update", lambda service, filepath: True)
+    monkeypatch.setattr(dive_cache, "push_remote_update", lambda service, filepath, *a, **k: True)
 
     c = DivesController("divelogs")
     assert c.tanksEditable is True
@@ -313,7 +383,8 @@ def test_sync_controller_offers_every_configured_service(qapp, scratch_data_dir,
     downloads = {}
     monkeypatch.setattr(scheduler, "run_download_thread",
                         lambda overwrite, base_dir=None, include_garmin=True, include_divelogs=True,
-                        services=None: downloads.update(services=services, overwrite=overwrite))
+                        services=None, refresh_fits=False, accounts=None:
+                        downloads.update(services=services, overwrite=overwrite, accounts=accounts))
     monkeypatch.setattr(scheduler, "is_download_running", False)
     c.download(False, "")
     assert wait_until(qapp, lambda: not c.running)
@@ -423,8 +494,10 @@ def test_mapping_controller_board_operations(qapp, scratch_data_dir, fake_keyrin
     assert m.pairPropagateDeletes is True and m.pairCreateOnGarmin is True
     assert [p["receiver"] for p in m.receivers] == ["garmin", "divelogs"]
     m.applyToAll()
-    state = json.load(open(scratch_data_dir / "sync_state.json"))
-    assert state["full_compare_once"] is True
+    # the board is shared by every account combination; the desktop keeps
+    # each combination's state apart (rework.md E19)
+    state_files = sorted(p.name for p in scratch_data_dir.glob("sync_state*.json"))
+    assert state_files and all(json.load(open(scratch_data_dir / n))["full_compare_once"] is True for n in state_files)
 
 
 def test_mapping_controller_click_to_connect(qapp, scratch_data_dir, fake_keyring):
@@ -489,7 +562,7 @@ def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratc
     assert s.hasCredentials and s.garminAccounts == [
         {"username": "g@x", "token_dir": creds_store.DEFAULT_GARMIN_TOKEN_DIR, "has_password": True}]
     assert s.divelogsAccounts == [{"username": "d", "has_password": True}]
-    assert s.subsurfaceEmail == "me@x.org" and s.message == "Saved to keychain."
+    assert s.subsurfaceAccounts == [{"username": "me@x.org", "has_password": True}] and s.message == "Saved to keychain."
     assert s.submersionBucket == "my-bucket"
     assert json.loads(fake_keyring.store[("DiveSync", "submersion_secret")])["secret_access_key"] == "secret"
     assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
@@ -499,10 +572,16 @@ def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratc
     assert creds_store.load_credentials_model().get_garmin_accounts()[0].password == "pw"
     assert json.loads(fake_keyring.store[("DiveSync", "submersion_secret")])["secret_access_key"] == "secret"
     assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
-    # Each card saves on its own, the way the account lists always have.
+    # Subsurface Cloud holds several accounts too (rework.md E19): a saved
+    # list replaces the stored one, a blank password keeps the stored one.
     s.saveSubsurface("other@x.org", "")
-    assert s.subsurfaceEmail == "other@x.org"
-    assert creds_store.load_credentials_model().subsurface.password == "pw3"
+    assert s.subsurfaceAccounts == [{"username": "me@x.org", "has_password": True},
+                                    {"username": "other@x.org", "has_password": False}]
+    assert s.subsurfaceStatus == "No password stored for other@x.org - enter it and save."
+    s.saveSubsurfaceAccounts([{"username": "other@x.org", "password": "pw4"}, {"username": "me@x.org", "password": ""}])
+    stored = {a.email: a.password for a in creds_store.load_credentials_model().get_subsurface_accounts()}
+    assert stored == {"other@x.org": "pw4", "me@x.org": "pw3"}
+    assert s.subsurfaceStatus == "2 accounts saved. Press Test to check a login."
     s.saveSubmersion("s3", "s3.eu-central-003.backblazeb2.com", "", "other-bucket", "", "keyid", "", False, "", "")
     assert s.submersionBucket == "other-bucket" and s.submersionEndpointUrl == "https://s3.eu-central-003.backblazeb2.com"
     assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
@@ -666,7 +745,7 @@ def test_dives_controller_fit_marks_and_unchanged_coordinates(qapp, scratch_data
     rows = [{"filename": "1.json", "fit_file": "1.fit", "manual": False},
             {"filename": "2.json", "fit_file": "", "manual": False},
             {"filename": "3.json", "fit_file": "", "manual": True}]
-    monkeypatch.setattr(dive_cache, "list_dives", lambda service: [dict(r) for r in rows])
+    monkeypatch.setattr(dive_cache, "list_dives", lambda service, *a, **k: [dict(r) for r in rows])
     c = DivesController("garmin")
     assert [r["fit"] for r in c._list_dives()] == ["✓", "✗", "M"]      # M: a hand-logged dive
     assert c.splitSiteNames and not DivesController("divelogs").splitSiteNames
@@ -688,7 +767,7 @@ def test_dives_controller_stages_edits_and_saves_them_together(qapp, scratch_dat
     monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [dict(r) for r in rows])
     written, pushed = [], []
     monkeypatch.setattr(dive_cache, "update_dive_fields", lambda service, filename, **kw: written.append((filename, kw)) or filename)
-    monkeypatch.setattr(dive_cache, "push_remote_update", lambda service, filepath: pushed.append(filepath) or filepath != "2.json")
+    monkeypatch.setattr(dive_cache, "push_remote_update", lambda service, filepath, *a, **k: pushed.append(filepath) or filepath != "2.json")
     form = lambda **kw: dict({"date": "2026-06-22", "time": "10:00:00", "duration": "", "max_depth": "", "notes": "",
                               "weight": "", "visibility": "", "buddy": "", "lat": "", "lng": "", "water_temp": ""}, **kw)
     c = DivesController("garmin")
@@ -865,13 +944,13 @@ def test_dives_controller_stages_deletions_until_save_all(qapp, scratch_data_dir
     rows = [{"date": "2026-06-22", "time": "10:00:00", "date_time": "2026-06-22 10:00:00", "filename": "a.json", "location": "Reef"},
             {"date": "2026-06-23", "time": "10:00:00", "date_time": "2026-06-23 10:00:00", "filename": "b.json", "location": "Wreck"}]
     listed = [dict(r) for r in rows]
-    monkeypatch.setattr(dive_cache, "list_dives", lambda service: [dict(r) for r in listed])
+    monkeypatch.setattr(dive_cache, "list_dives", lambda service, *a, **k: [dict(r) for r in listed])
     calls = []
     remote_ok = {"value": False}
-    monkeypatch.setattr(dive_cache, "dive_external_id", lambda service, filename: (f"/x/{filename}", "id-" + filename))
+    monkeypatch.setattr(dive_cache, "dive_external_id", lambda service, filename, *a, **k: (f"/x/{filename}", "id-" + filename))
     monkeypatch.setattr(dive_cache, "push_remote_delete",
-                        lambda service, external_id, filepath=None: calls.append(("remote", external_id)) or remote_ok["value"])
-    def local_delete(service, filename):
+                        lambda service, external_id, username=None, filepath=None: calls.append(("remote", external_id)) or remote_ok["value"])
+    def local_delete(service, filename, *a):
         calls.append(("local", filename))
         listed[:] = [r for r in listed if r["filename"] != filename]
         return f"/x/{filename}", "id-" + filename
@@ -904,7 +983,7 @@ def test_dives_controller_counts_its_dives(qapp, scratch_data_dir, fake_keyring,
     from src.core import dive_cache
     listed = [{"date": "2026-06-22", "time": "10:00:00", "date_time": "2026-06-22 10:00:00", "filename": f"{i}.json"}
               for i in range(3)]
-    monkeypatch.setattr(dive_cache, "list_dives", lambda service: [dict(r) for r in listed])
+    monkeypatch.setattr(dive_cache, "list_dives", lambda service, *a, **k: [dict(r) for r in listed])
     c = DivesController("subsurface")
     counts = []
     c.diveCountChanged.connect(lambda: counts.append(c.diveCount))
@@ -962,18 +1041,20 @@ def test_conflicts_controller_lists_every_pair(qapp, scratch_data_dir, fake_keyr
     import os
     from src.core import config
     base = os.path.dirname(config.SETTINGS_FILE)
-    record(Pair("garmin", "divelogs", os.path.join(base, "conflicts.json")), "buddy", "garmin.buddy", "divelogs.buddy", "Anna", "Bob")
-    record(Pair("garmin", "subsurface", os.path.join(base, "conflicts_garmin_subsurface.json")),
+    # kept per account combination (rework.md E19)
+    record(Pair("garmin", "divelogs", os.path.join(base, "conflicts_g@x_d.json")), "buddy", "garmin.buddy", "divelogs.buddy", "Anna", "Bob")
+    record(Pair("garmin", "subsurface", os.path.join(base, "conflicts_garmin-g@x_subsurface-me@x.org.json")),
            "gps", "garmin.gps", "subsurface.gps", [4.7948, 103.683518], [4.805835, 103.686585])
     c = ConflictsController()
     c.load()
-    assert [g["label"] for g in c.groups] == ["Garmin Connect ↔ Divelogs.org", "Garmin Connect ↔ Subsurface Cloud"]
+    assert [g["label"] for g in c.groups] == ["Garmin Connect (g@x) ↔ Divelogs.org (d)",
+                                              "Garmin Connect (g@x) ↔ Subsurface Cloud (me@x.org)"]
     assert c.count == 2
     buddy = c.groups[0]["conflicts"][0]
     assert (buddy["target_label"], buddy["source_text"], buddy["target_text"]) == ("Buddy", "Anna", "Bob")
     assert (buddy["source_name"], buddy["target_name"]) == ("Garmin Connect", "Divelogs.org")
     gps = c.groups[1]["conflicts"][0]
-    assert gps["pair_id"] == "garmin_subsurface" and gps["source_text"] == "4.7948, 103.684"
+    assert gps["pair_id"] == "garmin_subsurface::g@x::me@x.org" and gps["source_text"] == "4.7948, 103.684"
     assert brief(None) == "(empty)" and brief([{"o2": 21}]) == "1 item(s)" and brief(18.2) == "18.2"
 
 
@@ -1005,7 +1086,7 @@ def test_subsurface_dives_page_specifics(qapp, scratch_data_dir, fake_keyring, m
              "location": "Blue Hole", "has_profile": True},
             {"date": "1993-10-10", "time": "11:30:00", "date_time": "1993-10-10 11:30:00", "filename": "b.json",
              "location": "Kullen", "has_profile": False}]
-    monkeypatch.setattr(dive_cache, "list_dives", lambda service: [dict(r) for r in rows])
+    monkeypatch.setattr(dive_cache, "list_dives", lambda service, *a, **k: [dict(r) for r in rows])
     s = DivesController("subsurface")
     s.load()
     assert "visibility" not in [c["key"] for c in s.allColumns] and "visibility" not in s.visibleColumns
@@ -1015,3 +1096,14 @@ def test_subsurface_dives_page_specifics(qapp, scratch_data_dir, fake_keyring, m
     g = DivesController("garmin")
     assert g.hasVisibility and not g.profileLocksDepths
     assert next(c["label"] for c in DivesController("divelogs").allColumns if c["key"] == "location") == "Location, dive site"
+
+
+def test_tooltips_use_the_themed_tip():
+    """The attached ToolTip takes the platform style (faint on macOS) and
+    shows instantly over its neighbours; every tooltip goes through Tip.qml."""
+    import glob
+    import re
+    qml_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "desktop", "qml")
+    offenders = [f"{os.path.basename(p)}:{n}" for p in glob.glob(os.path.join(qml_dir, "*.qml"))
+                 for n, line in enumerate(open(p, encoding="utf-8"), 1) if re.search(r"\bToolTip\.\w+\s*:", line)]
+    assert offenders == []

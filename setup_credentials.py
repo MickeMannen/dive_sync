@@ -107,7 +107,7 @@ def setup_divelogs(current: CredentialsModel) -> Tuple[Optional[DivelogsCredenti
 
 
 def setup_subsurface(current: CredentialsModel) -> Tuple[Optional[SubsurfaceCredentials], Optional[bool]]:
-    existing = current.subsurface
+    existing = current.first_subsurface_account()
     print("\n--- Subsurface Cloud ---")
     print("The email and password you use for cloud storage in Subsurface (Preferences > Cloud).")
     email = _ask("Email", existing.email)

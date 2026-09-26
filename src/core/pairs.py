@@ -16,6 +16,7 @@ as ``garmin -> uddf:out.uddf`` can be exercised without credentials.
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Optional, Tuple
 
 from src.core.adapter import BaseDiveAdapter
@@ -105,7 +106,8 @@ def _resolve_path(arg: str) -> str:
 
 def build_adapter(spec: str, settings: SettingsModel, credentials_path: Optional[str] = None,
                   mock_data_dir: Optional[str] = None, garmin_username: Optional[str] = None,
-                  divelogs_username: Optional[str] = None) -> BaseDiveAdapter:
+                  divelogs_username: Optional[str] = None,
+                  subsurface_username: Optional[str] = None) -> BaseDiveAdapter:
     service, arg = parse_service_spec(spec)
     if service == "uddf":
         from src.core.services.uddf import UddfAdapter
@@ -116,9 +118,12 @@ def build_adapter(spec: str, settings: SettingsModel, credentials_path: Optional
     if service == "subsurface-cloud":
         from src.core.config import CREDENTIALS_FILE
         from src.core.services.subsurface_cloud import SubsurfaceCloudAdapter
-        creds = ConfigManager.load_credentials(credentials_path or CREDENTIALS_FILE).subsurface
-        if not creds.configured:
+        accounts = ConfigManager.load_credentials(credentials_path or CREDENTIALS_FILE).get_subsurface_accounts()
+        if not accounts:
             raise ValueError("Subsurface Cloud is not configured; run setup_credentials.py --services subsurface")
+        creds = _pick(accounts, subsurface_username, "Subsurface Cloud", "--subsurface", key=lambda a: a.email)
+        if not creds.configured:
+            raise ValueError(f"No Subsurface Cloud password stored for {creds.email}.")
         return SubsurfaceCloudAdapter(creds.email, creds.password, creds.base_url)
     if service == "submersion":
         from src.core.config import CREDENTIALS_FILE
@@ -150,7 +155,7 @@ def build_adapter(spec: str, settings: SettingsModel, credentials_path: Optional
                            cooldown_seconds=settings.api_cooldown_seconds)
 
 
-def _pick(accounts, username: Optional[str], label: str, flag: str):
+def _pick(accounts, username: Optional[str], label: str, flag: str, key=lambda a: a.username):
     if not accounts:
         raise ValueError(f"No {label} account configured.")
     if len(accounts) == 1 and not username:
@@ -158,7 +163,7 @@ def _pick(accounts, username: Optional[str], label: str, flag: str):
     if not username:
         raise ValueError(f"Multiple {label} accounts configured. Please specify {flag} username.")
     for account in accounts:
-        if account.username == username:
+        if key(account) == username:
             return account
     raise ValueError(f"No {label} account configured matching username: {username}")
 
@@ -233,9 +238,41 @@ def conflicts_file_for(board: dict, state_dir: str) -> str:
     """Where a board's engine keeps its conflicts (beside its state file,
     SyncEngine), so they can be listed without building an engine."""
     from src.core.conflicts import conflicts_path_for
-    s, t = service_id_of(board["source"]), service_id_of(board["target"])
-    name = "sync_state.json" if (s, t) == ("garmin", "divelogs") else f"sync_state_{s}_{t}.json"
-    return conflicts_path_for(os.path.join(state_dir or ".", name))
+    return conflicts_path_for(legacy_state_file(state_dir, service_id_of(board["source"]), service_id_of(board["target"])))
+
+
+# -- per-account sync state (rework.md E19, desktop app) ---------------------
+
+def adapter_account(adapter) -> str:
+    """The account an adapter logs in as ("" for a file, a store or a local
+    checkout): Garmin/Divelogs' username, Subsurface Cloud's email."""
+    return str(getattr(adapter, "email", None) or getattr(adapter, "username", None) or "")
+
+
+def _safe_state_part(account: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.@-]", "_", account)
+
+
+def legacy_state_file(state_dir: str, source_id: str, target_id: str) -> str:
+    """The state file a pair had before it was kept per account."""
+    name = "sync_state.json" if (source_id, target_id) == ("garmin", "divelogs") \
+        else f"sync_state_{source_id}_{target_id}.json"
+    return os.path.join(state_dir or ".", name)
+
+
+def account_state_file(state_dir: str, source_id: str, source_account: str,
+                       target_id: str, target_account: str) -> str:
+    """The state file of one account combination of a pair. Garmin ->
+    Divelogs keeps the name it already had with several accounts
+    (``sync_state_<garmin user>_<divelogs user>.json``); every other pair
+    names each side as ``<service>-<account>`` (just ``<service>`` for a side
+    without accounts)."""
+    if (source_id, target_id) == ("garmin", "divelogs") and source_account and target_account:
+        return os.path.join(state_dir or ".", f"sync_state_{source_account}_{target_account}.json")
+
+    def part(service_id: str, account: str) -> str:
+        return f"{service_id}-{_safe_state_part(account)}" if account else service_id
+    return os.path.join(state_dir or ".", f"sync_state_{part(source_id, source_account)}_{part(target_id, target_account)}.json")
 
 
 def find_pair(settings: SettingsModel, pair_id: str) -> SyncPairModel:
@@ -249,14 +286,17 @@ def find_pair(settings: SettingsModel, pair_id: str) -> SyncPairModel:
 def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] = None,
                credentials_path: Optional[str] = None, mock_data_dir: Optional[str] = None,
                garmin_username: Optional[str] = None, divelogs_username: Optional[str] = None,
-               pair: Optional[SyncPairModel] = None):
+               pair: Optional[SyncPairModel] = None, subsurface_username: Optional[str] = None,
+               account_scoped_state: bool = False):
     """A ``SyncEngine`` for two service specs. When the specs are exactly
     ``garmin`` and ``divelogs`` the classic constructor is used so account
     selection, state files and cache directories behave as before. With
     ``pair`` the engine runs that saved pair (its direction, board and
     options come from settings on every run, rework.md G1); without one it
     runs the saved pair with these service ids if there is one, else a
-    transient pair with the shipped defaults that writes its target."""
+    transient pair with the shipped defaults that writes its target.
+    ``account_scoped_state`` (the desktop app) keeps the pair's state and
+    conflicts per account combination (account_state_file)."""
     from src.core.config import CREDENTIALS_FILE, SETTINGS_FILE
     from src.core.sync_engine import SyncEngine
     settings_path = settings_path or SETTINGS_FILE
@@ -269,12 +309,15 @@ def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] 
 
     if (source_id, target_id) == ("garmin", "divelogs"):
         engine = SyncEngine(settings_path=settings_path, credentials_path=credentials_path, mock_data_dir=mock_data_dir,
-                            garmin_username=garmin_username, divelogs_username=divelogs_username)
+                            garmin_username=garmin_username, divelogs_username=divelogs_username,
+                            account_scoped_state=account_scoped_state)
     else:
-        source = build_adapter(source_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username)
-        target = build_adapter(target_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username)
+        source = build_adapter(source_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username,
+                               subsurface_username)
+        target = build_adapter(target_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username,
+                               subsurface_username)
         engine = SyncEngine(settings_path=settings_path, credentials_path=credentials_path,
-                            source_adapter=source, target_adapter=target)
+                            source_adapter=source, target_adapter=target, account_scoped_state=account_scoped_state)
     if pair is not None:
         engine.pair_id = pair.id
         engine.refresh_pair()

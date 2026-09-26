@@ -152,15 +152,38 @@ def _migrate_from_legacy_single_account_scheme(service: str) -> List[dict]:
     return [account]
 
 
+def _migrate_from_single_subsurface_account() -> List[dict]:
+    """Before rework.md E19 (2026-09-26) Subsurface Cloud had one account:
+    a ``subsurface`` item holding ``{"email", "password"}``, or - older
+    still - one item per field."""
+    old = _get_json("subsurface")
+    if old is None:
+        email = _get("subsurface", "email")
+        if not email:
+            return []
+        old = {"email": email, "password": _get("subsurface", "password")}
+        base_url = _get("subsurface", "base_url")
+        if base_url:
+            preferences.set_subsurface_base_url(base_url)
+        for field in ("email", "password", "base_url"):
+            _set("subsurface", field, "")
+    _set_json("subsurface", None)
+    return [{"username": old["email"], "password": old.get("password", "")}] if old.get("email") else []
+
+
 def _load_raw_accounts(service: str) -> List[dict]:
-    """A list of ``{"username", "password"}`` dicts, from whichever
-    generation of storage this keychain happens to have - self-healing: a
-    migration is immediately written back in the new scheme and the old
-    keys are cleared, so this only runs once per keychain."""
+    """A list of ``{"username", "password"}`` dicts (Subsurface Cloud: the
+    email as username), from whichever generation of storage this keychain
+    happens to have - self-healing: a migration is immediately written back
+    in the new scheme and the old keys are cleared, so this only runs once
+    per keychain."""
     accounts = _get_json(f"{service}_accounts")
     if accounts:
         return accounts
-    migrated = _migrate_from_pre_consolidation_scheme(service) or _migrate_from_legacy_single_account_scheme(service)
+    if service == "subsurface":
+        migrated = _migrate_from_single_subsurface_account()
+    else:
+        migrated = _migrate_from_pre_consolidation_scheme(service) or _migrate_from_legacy_single_account_scheme(service)
     if migrated:
         _set_json(f"{service}_accounts", migrated)
     return migrated
@@ -172,8 +195,17 @@ def _load_accounts(service: str, cls):
         kwargs = {"username": entry.get("username", ""), "password": entry.get("password", "")}
         if service == "garmin":
             kwargs["token_dir"] = preferences.get_garmin_token_dir(kwargs["username"], DEFAULT_GARMIN_TOKEN_DIR)
+        if service == "subsurface":
+            # one server for every account (rework.md E19)
+            kwargs = {"email": kwargs["username"], "password": kwargs["password"],
+                      "base_url": preferences.get_subsurface_base_url(cls().base_url)}
         accounts.append(cls(**kwargs))
     return accounts
+
+
+def account_name(account) -> str:
+    """Garmin/Divelogs' username, Subsurface Cloud's email."""
+    return getattr(account, "username", None) or getattr(account, "email", None) or ""
 
 
 def _save_accounts(service: str, accounts) -> None:
@@ -187,12 +219,13 @@ def _save_accounts(service: str, accounts) -> None:
     previous = {a.get("username"): a for a in _load_raw_accounts(service)}
     saved = []
     for account in accounts:
-        if not account.username:
+        name = account_name(account)
+        if not name or any(a["username"] == name for a in saved):
             continue
-        password = account.password or previous.get(account.username, {}).get("password", "")
-        saved.append({"username": account.username, "password": password})
+        password = account.password or previous.get(name, {}).get("password", "")
+        saved.append({"username": name, "password": password})
         if service == "garmin":
-            preferences.set_garmin_token_dir(account.username, account.token_dir or DEFAULT_GARMIN_TOKEN_DIR)
+            preferences.set_garmin_token_dir(name, account.token_dir or DEFAULT_GARMIN_TOKEN_DIR)
     kept_usernames = {a["username"] for a in saved}
     if service == "garmin":
         for username in set(previous) - kept_usernames:
@@ -202,20 +235,6 @@ def _save_accounts(service: str, accounts) -> None:
 
 def load_credentials_model():
     from src.core.config import CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials
-
-    subsurface = _get_json("subsurface")
-    if subsurface is None:
-        subsurface = {}
-        email = _get("subsurface", "email")
-        if email:
-            subsurface = {"email": email, "password": _get("subsurface", "password")}
-            base_url = _get("subsurface", "base_url")
-            if base_url:
-                preferences.set_subsurface_base_url(base_url)
-            _set("subsurface", "email", "")
-            _set("subsurface", "password", "")
-            _set("subsurface", "base_url", "")
-            _set_json("subsurface", subsurface)
 
     submersion_secret = _get_json("submersion_secret")
     submersion_config = preferences.get_submersion_config()
@@ -236,11 +255,7 @@ def load_credentials_model():
     return CredentialsModel(
         garmin=_load_accounts("garmin", GarminCredentials),
         divelogs=_load_accounts("divelogs", DivelogsCredentials),
-        subsurface=SubsurfaceCredentials(
-            email=subsurface.get("email", ""),
-            password=subsurface.get("password", ""),
-            base_url=preferences.get_subsurface_base_url(SubsurfaceCredentials().base_url),
-        ),
+        subsurface=_load_accounts("subsurface", SubsurfaceCredentials),
         submersion=SubmersionCredentials(
             store_type=submersion_config.get("store_type") or SubmersionCredentials().store_type,
             endpoint_url=submersion_config.get("endpoint_url", ""),
@@ -254,15 +269,6 @@ def load_credentials_model():
             passphrase=submersion_secret.get("passphrase", ""),
         ),
     )
-
-
-def save_subsurface_credentials(subsurface) -> None:
-    """``subsurface`` is a ``SubsurfaceCredentials`` (or None to clear)."""
-    if subsurface and subsurface.email:
-        _set_json("subsurface", {"email": subsurface.email, "password": subsurface.password})
-        preferences.set_subsurface_base_url(subsurface.base_url)
-    else:
-        _set_json("subsurface", None)
 
 
 def save_submersion_credentials(submersion) -> None:
@@ -285,7 +291,7 @@ def save_submersion_credentials(submersion) -> None:
 def save_credentials_model(model) -> None:
     _save_accounts("garmin", model.get_garmin_accounts())
     _save_accounts("divelogs", model.get_divelogs_accounts())
-    save_subsurface_credentials(getattr(model, "subsurface", None))
+    _save_accounts("subsurface", model.get_subsurface_accounts())
     save_submersion_credentials(getattr(model, "submersion", None))
     logger.info("Credentials saved to OS keychain.")
 
@@ -295,7 +301,7 @@ def has_any_credentials() -> bool:
     return bool(
         model.get_garmin_accounts()
         or model.get_divelogs_accounts()
-        or model.subsurface.configured
+        or model.get_subsurface_accounts()
         or model.submersion.configured
     )
 

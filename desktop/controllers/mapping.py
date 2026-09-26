@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
-from desktop import credentials
+from desktop import accounts, credentials
 from desktop.jobs import Worker
 from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncPairModel
 from src.core.fields import FieldLink, SyncRule, build_catalog, links_to_rules, rules_to_links
@@ -905,10 +905,17 @@ class MappingController(QObject):
 
     @Slot()
     def applyToAll(self) -> None:
-        from src.core.pairs import engine_for_pair, find_pair
+        from src.core.pairs import engine_for_pair, find_pair, service_id_of
         try:
-            engine = engine_for_pair(find_pair(self._settings, self._pair_id))
-            engine.request_full_compare(True)
+            # The board is shared by every account combination (rework.md
+            # E19), so each combination's next run compares every dive.
+            pair = find_pair(self._settings, self._pair_id)
+            model = credentials.load_credentials_model()
+            for source_account in accounts.accounts_for_spec(pair.source, model):
+                for target_account in accounts.accounts_for_spec(pair.target, model):
+                    selection = {service_id_of(pair.source): source_account, service_id_of(pair.target): target_account}
+                    engine = engine_for_pair(pair, **accounts.engine_kwargs({k: v for k, v in selection.items() if v}))
+                    engine.request_full_compare(True)
             self._set_message("Saved. The next run will compare every matched dive.")
         except Exception as e:
             self._set_message(f"Saved, but the full-compare flag could not be set: {e}")
@@ -949,7 +956,7 @@ class MappingController(QObject):
             from src.core.pairs import engine_for_pair, find_pair
             credentials.begin_operation()
             try:
-                engine = engine_for_pair(find_pair(ConfigManager.load_settings(), pair_id))
+                engine = engine_for_pair(find_pair(ConfigManager.load_settings(), pair_id), **accounts.engine_kwargs())
                 return engine.test_mapping(limit=10, rules=rules, match_keys=match_keys)
             finally:
                 credentials.end_operation()

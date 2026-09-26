@@ -32,7 +32,7 @@ logger = logging.getLogger("dive_sync.desktop.app")
 
 
 def build_controllers(log_queue) -> Dict[str, object]:
-    return {
+    controllers = {
         "syncController": SyncController(log_queue),
         "garminDives": DivesController("garmin", log_queue),
         "divelogsDives": DivesController("divelogs", log_queue),
@@ -42,6 +42,11 @@ def build_controllers(log_queue) -> Dict[str, object]:
         "conflictsController": ConflictsController(),
         "aboutController": AboutController(),
     }
+    # An account added or removed in Settings shows up in every picker at once.
+    settings = controllers["settingsController"]
+    for name in ("syncController", "garminDives", "divelogsDives", "subsurfaceDives"):
+        settings.credentialsChanged.connect(controllers[name].reloadAccounts)
+    return controllers
 
 
 def available_screen_size() -> Dict[str, int]:
@@ -113,6 +118,20 @@ def cleanup_on_quit() -> None:
         logger.warning("Failed to remove the materialized credentials file on quit: %s", e)
 
 
+def migrate_sync_history() -> None:
+    """Give each pair's pre-E19 sync history to the accounts it was made
+    with (desktop/accounts.py). Never stops the app from starting."""
+    try:
+        from desktop import accounts
+        from src.core import config
+        from src.core.pairs import board_pairs
+        model = creds_store.load_credentials_model()
+        boards = board_pairs(config.ConfigManager.load_settings(), model.configured_services())
+        accounts.migrate_legacy_state(os.path.dirname(config.SETTINGS_FILE) or ".", boards, model)
+    except Exception as e:
+        logger.warning("Could not move the sync history to per-account files: %s", e)
+
+
 def main() -> int:
     QCoreApplication.setApplicationName(APP_NAME)
     QCoreApplication.setOrganizationName("Mikael Christersson")
@@ -120,6 +139,7 @@ def main() -> int:
     # The window and taskbar icon (the bundle icon is set by Briefcase)
     app.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "icon.png")))
     log_queue = logging_bridge.install()
+    migrate_sync_history()
     controllers = build_controllers(log_queue)
     initial = "Sync" if creds_store.has_any_credentials() else "Settings"
     engine = create_engine(controllers, initial)

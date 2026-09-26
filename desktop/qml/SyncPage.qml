@@ -9,9 +9,8 @@ ColumnLayout {
     function startSync() {
         syncController.runSyncBetween(dryRun.checked, sourceBox.currentValue || "", targetBox.currentValue || "",
                                       onlyNew.checked, gases.checked,
-                                      garminAccountBox.currentIndex > 0 ? garminAccountBox.currentText : "",
-                                      divelogsAccountBox.currentIndex > 0 ? divelogsAccountBox.currentText : "",
-                                      garminCache.checked, mirror.checked)
+                                      // blank: the accounts picked below, which the controller remembers
+                                      "", "", garminCache.checked, mirror.checked)
     }
 
     Dialog {
@@ -74,8 +73,10 @@ ColumnLayout {
                 text: "⇄"
                 flat: true
                 Layout.alignment: Qt.AlignBottom
-                ToolTip.text: "Swap source and target"
-                ToolTip.visible: hovered
+                Tip {
+                    text: "Swap source and target"
+                    visible: parent.hovered
+                }
                 onClicked: {
                     var s = sourceBox.currentValue, t = targetBox.currentValue
                     sourceBox.currentIndex = Math.max(0, sourceBox.indexOfValue(t))
@@ -83,28 +84,35 @@ ColumnLayout {
                     targetBox.currentIndex = Math.max(0, targetBox.indexOfValue(s))
                 }
             }
-            // Only Garmin and Divelogs have a list of accounts to choose
-            // between; Submersion is one store and Subsurface Cloud one
-            // account, so they have nothing to pick and no selector here.
-            ColumnLayout {
-                spacing: 2
-                visible: syncController.garminAccounts.length > 1
-                Text { text: "Garmin account"; color: Theme.muted; font.pixelSize: 11 }
-                ComboBox {
-                    id: garminAccountBox
-                    Layout.preferredWidth: 180
-                    model: ["Default account"].concat(syncController.garminAccounts)
-                }
+        }
+        // The account each service syncs and downloads with (rework.md E19),
+        // on a row of its own; Submersion is one store, so it has nothing to
+        // pick. A picker shows only with a choice to make, and the row only
+        // with a picker on it.
+        RowLayout {
+            spacing: 16
+            visible: syncController.garminAccounts.length > 1 || syncController.divelogsAccounts.length > 1
+                     || syncController.subsurfaceAccounts.length > 1
+            AccountPicker {
+                objectName: "syncGarminAccount"
+                label: "Garmin account"
+                accounts: syncController.garminAccounts
+                current: syncController.selectedAccounts.garmin || ""
+                onPicked: (account) => syncController.setSelectedAccount("garmin", account)
             }
-            ColumnLayout {
-                spacing: 2
-                visible: syncController.divelogsAccounts.length > 1
-                Text { text: "Divelogs account"; color: Theme.muted; font.pixelSize: 11 }
-                ComboBox {
-                    id: divelogsAccountBox
-                    Layout.preferredWidth: 180
-                    model: ["Default account"].concat(syncController.divelogsAccounts)
-                }
+            AccountPicker {
+                objectName: "syncDivelogsAccount"
+                label: "Divelogs account"
+                accounts: syncController.divelogsAccounts
+                current: syncController.selectedAccounts.divelogs || ""
+                onPicked: (account) => syncController.setSelectedAccount("divelogs", account)
+            }
+            AccountPicker {
+                objectName: "syncSubsurfaceAccount"
+                label: "Subsurface account"
+                accounts: syncController.subsurfaceAccounts
+                current: syncController.selectedAccounts.subsurface || ""
+                onPicked: (account) => syncController.setSelectedAccount("subsurface", account)
             }
         }
         RowLayout {
@@ -116,17 +124,21 @@ ColumnLayout {
                 id: mirror
                 objectName: "mirrorCheck"
                 text: "Mirror: make the target a copy of the source"
-                ToolTip.text: "Compares every dive, creates the ones the target is missing, forces every mapped field to the source's value and DELETES every target dive the source does not have. Rules marked 'never overwrite' are left alone. Without this, a sync never deletes anything."
-                ToolTip.visible: hovered
-                ToolTip.delay: 300
+                Tip {
+                    text: "Compares every dive, creates the ones the target is missing, forces every mapped field to the source's value and DELETES every target dive the source does not have. Rules marked 'never overwrite' are left alone. Without this, a sync never deletes anything."
+                    visible: parent.hovered
+                    delay: 300
+                }
             }
             CheckBox {
                 id: garminCache
                 text: "Use cached Garmin dives"
                 checked: true
-                ToolTip.text: "Garmin is slow (three requests per dive), so a dive whose entry in Garmin's list is unchanged is read from the local copy instead of downloaded again - for syncing and for Download dives. Untick it to fetch every Garmin dive again, e.g. when testing or after editing only a dive's notes, buddy, weight or visibility on Garmin (not visible in that list). Other services are always downloaded in full."
-                ToolTip.visible: hovered
-                ToolTip.delay: 500
+                Tip {
+                    text: "Garmin is slow (three requests per dive), so a dive whose entry in Garmin's list is unchanged is read from the local copy instead of downloaded again - for syncing and for Download dives. Untick it to fetch every Garmin dive again, e.g. when testing or after editing only a dive's notes, buddy, weight or visibility on Garmin (not visible in that list). Other services are always downloaded in full."
+                    visible: parent.hovered
+                    delay: 500
+                }
             }
         }
         RowLayout {
@@ -137,6 +149,15 @@ ColumnLayout {
                 onClicked: {
                     if (mirror.checked && !dryRun.checked) mirrorDialog.open()
                     else page.startSync()
+                }
+            }
+            Button {
+                text: "Stop"
+                visible: syncController.running
+                onClicked: syncController.stop()
+                Tip {
+                    text: "Stops the sync or download after the current dive. Dives already written stay written and linked, so the next run carries on where this one stopped."
+                    visible: parent.hovered
                 }
             }
             Text { text: syncController.status; color: Theme.muted; Layout.leftMargin: 8; Layout.fillWidth: true; elide: Text.ElideRight }
@@ -167,6 +188,11 @@ ColumnLayout {
                 text: "Download dives"
                 enabled: !syncController.running
                 onClicked: syncController.download(!garminCache.checked, downloadServiceBox.currentValue || "")
+            }
+            Button {
+                text: "Stop"
+                visible: syncController.running
+                onClicked: syncController.stop()
             }
         }
     }

@@ -1,3 +1,5 @@
 singleton Theme 1.0 Theme.qml
 Card 1.0 Card.qml
 LabeledField 1.0 LabeledField.qml
+AccountPicker 1.0 AccountPicker.qml
+Tip 1.0 Tip.qml

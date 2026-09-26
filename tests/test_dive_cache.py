@@ -494,7 +494,7 @@ def test_unified_push_remote_update_sends_the_cached_dive(tmp_path, monkeypatch)
         def finish(self):
             sent["finished"] = True
 
-    monkeypatch.setattr(dive_cache, "_unified_adapter", lambda service: FakeAdapter())
+    monkeypatch.setattr(dive_cache, "_unified_adapter", lambda service, username=None: FakeAdapter())
     assert dive_cache.push_remote_update("submersion", path) is True
     assert sent["id"] == "1E5A-9" and sent["finished"] is True
     assert isinstance(sent["dive"], UnifiedDive) and sent["dive"].location == "Racha Yai Bay 2"
@@ -511,7 +511,7 @@ def test_unified_download_uses_the_adapter(tmp_path, monkeypatch):
         def finish(self):
             pass
 
-    monkeypatch.setattr(dive_cache, "_unified_adapter", lambda service: FakeAdapter())
+    monkeypatch.setattr(dive_cache, "_unified_adapter", lambda service, username=None: FakeAdapter())
     assert dive_cache.download_service_dives("submersion", base_dir=str(tmp_path)) == 1
     assert len(dive_cache.list_dives("submersion", base_dir=str(tmp_path))) == 1
     with pytest.raises(ValueError):
@@ -598,3 +598,23 @@ def test_unified_download_prunes_but_a_plain_save_does_not(tmp_path):
     # ... but a download says "this is all of them"
     dive_cache.save_unified_dives("submersion", [a], base_dir=str(tmp_path), prune=True)
     assert len(os.listdir(directory)) == 1
+
+
+def test_list_garmin_dives_known_lists_only_files_written_since(cache_dirs):
+    """What the dives page polls while a refresh runs: new and rewritten
+    files only, and a half-written one is left for the next poll."""
+    garmin_dir = os.path.join(cache_dirs, "garmin")
+    known = dive_cache.garmin_file_mtimes(base_dir=cache_dirs)
+    assert list(known) == [os.path.join(garmin_dir, "1.json")]
+    assert dive_cache.list_garmin_dives(base_dir=cache_dirs, known=known) == []
+
+    new = {"summary": {"activityId": "10002", "startTimeLocal": "2026-06-23 09:00:00"}, "details": {}}
+    with open(os.path.join(garmin_dir, "2.json"), "w") as f:
+        json.dump(new, f)
+    with open(os.path.join(garmin_dir, "3.json"), "w") as f:
+        f.write('{"summary": {"activ')
+    assert [d["id"] for d in dive_cache.list_garmin_dives(base_dir=cache_dirs, known=known)] == ["10002"]
+    assert dive_cache.list_garmin_dives(base_dir=cache_dirs, known=known) == []
+    with open(os.path.join(garmin_dir, "3.json"), "w") as f:
+        json.dump({"summary": {"activityId": "10003"}, "details": {}}, f)
+    assert [d["id"] for d in dive_cache.list_garmin_dives(base_dir=cache_dirs, known=known)] == ["10003"]

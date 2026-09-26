@@ -67,8 +67,10 @@ ColumnLayout {
                             Button {
                                 text: "Keep this"
                                 enabled: !conflictsController.busy
-                                ToolTip.text: "Writes this value to " + item.modelData.target_name
-                                ToolTip.visible: hovered
+                                Tip {
+                                    text: "Writes this value to " + item.modelData.target_name
+                                    visible: parent.hovered
+                                }
                                 onClicked: conflictsController.resolve(item.modelData.pair_id, item.modelData.id, "source")
                             }
                             Text { text: item.modelData.target_name; color: Theme.muted; font.pixelSize: 11; Layout.preferredWidth: 140 }
@@ -82,8 +84,10 @@ ColumnLayout {
                             Button {
                                 text: "Keep this"
                                 enabled: !conflictsController.busy
-                                ToolTip.text: "Writes this value to " + item.modelData.source_name
-                                ToolTip.visible: hovered
+                                Tip {
+                                    text: "Writes this value to " + item.modelData.source_name
+                                    visible: parent.hovered
+                                }
                                 onClicked: conflictsController.resolve(item.modelData.pair_id, item.modelData.id, "target")
                             }
                         }

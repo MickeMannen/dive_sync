@@ -158,11 +158,18 @@ def _format_sac(tanks: List[Dict[str, Any]], avg_depth: Any, duration_seconds: A
 
 def _resolve_service_dir(service: str, username: Optional[str], base_dir: Optional[str] = None) -> Optional[str]:
     root = _base_dir(base_dir)
+    path_direct = os.path.join(root, service)
     if username:
         path_user = os.path.join(root, service, username)
         if os.path.isdir(path_user) and os.listdir(path_user):
             return path_user
-    path_direct = os.path.join(root, service)
+        # Nothing cached for this account yet. Fall back to a flat, pre-account
+        # cache only - never to the service directory when it holds other
+        # accounts' folders, or one account's page would list another's dives
+        # (rework.md E19).
+        if os.path.isdir(path_direct) and any(os.path.isdir(os.path.join(path_direct, n))
+                                              for n in os.listdir(path_direct)):
+            return None
     if os.path.isdir(path_direct) and os.listdir(path_direct):
         return path_direct
     return None
@@ -183,6 +190,10 @@ def _iter_dive_files(service_dir: str) -> List[Tuple[str, str]]:
 
 def _find_dive_file(service: str, filename: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> Optional[str]:
     root = _base_dir(base_dir)
+    if username and is_unified_cache(service):
+        # per-account cache: only that account's folder (ids may repeat across accounts)
+        path = os.path.join(unified_cache_dir(service, username, base_dir), filename)
+        return path if os.path.exists(path) else None
     if username:
         path = os.path.join(root, service, username, filename)
         if os.path.exists(path):
@@ -203,12 +214,35 @@ def _find_dive_file(service: str, filename: str, username: Optional[str] = None,
 
 def _username_from_filepath(service: str, filepath: str) -> Optional[str]:
     parts = filepath.replace("\\", "/").split("/")
+    if is_unified_cache(service):
+        # <service>/dives/<account>/<file> (unified_cache_dir); the flat
+        # <service>/dives/<file> names no account
+        if len(parts) >= 4 and parts[-4] == service and parts[-3] == UNIFIED_CACHE_SUBDIR:
+            return parts[-2]
+        return None
     if len(parts) >= 3 and parts[-3] == service:
         return parts[-2]
     return None
 
 
-def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+def garmin_file_mtimes(username: Optional[str] = None, base_dir: Optional[str] = None) -> Dict[str, float]:
+    """{path: mtime} of every cached Garmin dive file - where
+    list_garmin_dives(known=...) starts from while a refresh runs."""
+    service_dir = _resolve_service_dir("garmin", username, base_dir)
+    mtimes: Dict[str, float] = {}
+    for _, filepath in _iter_dive_files(service_dir) if service_dir else []:
+        try:
+            mtimes[filepath] = os.path.getmtime(filepath)
+        except OSError:
+            pass
+    return mtimes
+
+
+def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = None,
+                      known: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
+    """``known`` ({path: mtime}, updated in place) lists only the files
+    written since: a refresh fills the dives table as Garmin's dives arrive,
+    a few seconds apart, without re-reading the whole cache each time."""
     dives = []
     service_dir = _resolve_service_dir("garmin", username, base_dir)
     if not service_dir:
@@ -219,8 +253,14 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
 
     for filename, filepath in _iter_dive_files(service_dir):
         try:
+            if known is not None:
+                mtime = os.path.getmtime(filepath)
+                if known.get(filepath) == mtime:
+                    continue
             with open(filepath, "r") as f:
                 data = json.load(f)
+            if known is not None:
+                known[filepath] = mtime
 
             account = _username_from_filepath("garmin", filepath)
             if account not in fit_indexes:
@@ -347,7 +387,10 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
                 "fit_file": fit_file,
             })
         except Exception as e:
-            logger.warning("Failed to parse cached Garmin dive file %s: %s", filename, e)
+            if known is None:
+                logger.warning("Failed to parse cached Garmin dive file %s: %s", filename, e)
+            else:       # replaced or pruned by the refresh; the final listing reports it
+                logger.debug("Skipped Garmin dive file %s while refreshing: %s", filename, e)
 
     dives.sort(key=lambda x: x["date_time"], reverse=True)
     return dives
@@ -497,8 +540,14 @@ def unified_cache_dir(service: str, username: Optional[str] = None, base_dir: Op
     as dives. The cache gets its own subdirectory instead."""
     parts = [_base_dir(base_dir), service, UNIFIED_CACHE_SUBDIR]
     if username:
-        parts.append(username)
+        parts.append(account_dir_name(username))
     return os.path.join(*parts)
+
+
+def account_dir_name(username: str) -> str:
+    """One account's cache folder under ``<service>/dives`` (a Subsurface
+    Cloud email): readable, but never able to leave the cache directory."""
+    return re.sub(r"[^A-Za-z0-9_.@-]", "_", username.strip()) or "account"
 
 
 def prune_cache_dir(directory: str, keep: "set[str]", label: str = "") -> List[str]:
@@ -564,24 +613,43 @@ def save_unified_dives(service: str, dives: List[Any], username: Optional[str] =
     return written
 
 
-def download_service_dives(service: str, overwrite: bool = False, base_dir: Optional[str] = None) -> int:
+def download_service_dives(service: str, overwrite: bool = False, base_dir: Optional[str] = None,
+                           username: Optional[str] = None) -> int:
     """Fetch every dive from a UnifiedDive-cached service and write the cache
     for it. The Garmin/Divelogs equivalent lives in
     SyncEngine.download_and_save_raw_data, which has to speak each of those
     APIs directly; here the adapter already hands back UnifiedDives, which is
-    exactly what this cache stores."""
+    exactly what this cache stores.
+
+    ``username`` (the desktop app, rework.md E19) picks the account and
+    caches it in its own folder; the flat cache from before accounts is then
+    removed, being re-downloaded per account rather than guessed at."""
     if not is_unified_cache(service):
         raise ValueError(f"{service!r} is not cached as UnifiedDive; use SyncEngine.download_and_save_raw_data.")
-    adapter = _unified_adapter(service)
+    adapter = _unified_adapter(service, username)
     if not adapter.login():
         raise RuntimeError(f"Failed to log in to {service}.")
     try:
         dives = adapter.fetch_dives()
     finally:
         adapter.finish()
-    written = save_unified_dives(service, dives, base_dir=base_dir, overwrite=overwrite, prune=True)
-    logger.info("Cached %d %s dive(s).", written, service)
+    written = save_unified_dives(service, dives, username=username, base_dir=base_dir, overwrite=overwrite, prune=True)
+    if username:
+        _remove_flat_unified_cache(service, base_dir)
+    logger.info("Cached %d %s dive(s)%s.", written, service, f" for {username}" if username else "")
     return written
+
+
+def _remove_flat_unified_cache(service: str, base_dir: Optional[str] = None) -> None:
+    directory = unified_cache_dir(service, None, base_dir)
+    stale = [n for n in os.listdir(directory) if n.endswith(".json")] if os.path.isdir(directory) else []
+    for name in stale:
+        try:
+            os.remove(os.path.join(directory, name))
+        except OSError as e:
+            logger.warning("Could not remove %s from the pre-account %s cache: %s", name, service, e)
+    if stale:
+        logger.info("Removed %d %s dive(s) cached before accounts were kept apart.", len(stale), service)
 
 
 def _unified_row(data: Dict[str, Any], service: str, filename: str) -> Dict[str, Any]:
@@ -1140,14 +1208,18 @@ def _active_credentials(service: str, username: Optional[str]):
     return matching[0]
 
 
-def _unified_adapter(service: str):
-    """The configured adapter for a UnifiedDive-cached service. These have no
-    per-account list - one Submersion store, one Subsurface Cloud account -
-    so pairs.build_adapter() reads the whole configuration itself."""
+def _unified_adapter(service: str, username: Optional[str] = None):
+    """The configured adapter for a UnifiedDive-cached service: the one
+    Submersion store, or a Subsurface Cloud account - ``username`` is its
+    email or its cache folder name (account_dir_name)."""
     from src.core.config import ConfigManager
     from src.core.pairs import build_adapter
     spec = "subsurface-cloud" if service == "subsurface" else service
-    return build_adapter(spec, ConfigManager.load_settings())
+    email = None
+    if username and service == "subsurface":
+        accounts = ConfigManager.load_credentials().get_subsurface_accounts()
+        email = next((a.email for a in accounts if username in (a.email, account_dir_name(a.email))), username)
+    return build_adapter(spec, ConfigManager.load_settings(), subsurface_username=email)
 
 
 def download_garmin_fits(filenames: List[str], username: Optional[str] = None,
@@ -1223,7 +1295,7 @@ def push_remote_update(service: str, filepath: str, username: Optional[str] = No
         if not external_id:
             logger.error("No %s id found in cache for %s; cannot update remotely.", service, filepath)
             return False
-        adapter = _unified_adapter(service)
+        adapter = _unified_adapter(service, username or _username_from_filepath(service, filepath))
         if not adapter.login():
             logger.error("Failed to log in to %s; cannot update remotely.", service)
             return False
@@ -1283,7 +1355,7 @@ def push_remote_update(service: str, filepath: str, username: Optional[str] = No
 
 def push_remote_delete(service: str, external_id: str, username: Optional[str] = None, filepath: Optional[str] = None) -> bool:
     if is_unified_cache(service):
-        adapter = _unified_adapter(service)
+        adapter = _unified_adapter(service, username or (_username_from_filepath(service, filepath) if filepath else None))
         if not adapter.login():
             logger.error("Failed to log in to %s; cannot delete remotely.", service)
             return False

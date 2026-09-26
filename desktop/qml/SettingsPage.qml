@@ -138,19 +138,57 @@ ColumnLayout {
             }
         }
         Card {
+            id: subsurfaceCard
             title: "Subsurface Cloud"
-            RowLayout {
-                LabeledField { id: sEmail; label: "Email"; fieldWidth: 220; text: settingsController.subsurfaceEmail }
-                LabeledField { id: sPass; label: "Password"; fieldWidth: 220; secret: true
-                               placeholder: settingsController.subsurfaceEmail !== "" ? "saved - leave blank to keep it" : "" }
-                Button { text: "Test"; onClicked: settingsController.testSubsurface(sEmail.text, sPass.text) }
+            ListModel { id: subsurfaceAccountsModel }
+            function reload() {
+                subsurfaceAccountsModel.clear()
+                var accounts = settingsController.subsurfaceAccounts
+                for (var i = 0; i < accounts.length; i++)
+                    subsurfaceAccountsModel.append({username: accounts[i].username, password: "",
+                                                    hasPassword: accounts[i].has_password})
+                if (accounts.length === 0) subsurfaceAccountsModel.append({username: "", password: "", hasPassword: false})
             }
+            Component.onCompleted: reload()
+            Connections { target: settingsController; function onCredentialsChanged() { subsurfaceCard.reload() } }
+            Repeater {
+                model: subsurfaceAccountsModel
+                delegate: RowLayout {
+                    required property int index
+                    required property string username
+                    required property string password
+                    required property bool hasPassword
+                    // See the Garmin rows above: commit on keystroke so Save
+                    // never reads a stale blank password out of the model.
+                    LabeledField { id: sEmail; fieldWidth: 220; label: "Email"; text: username; onTextChanged: subsurfaceAccountsModel.setProperty(index, "username", text) }
+                    LabeledField { id: sPass; fieldWidth: 220; label: "Password"; placeholder: hasPassword ? "saved - leave blank to keep it" : ""; secret: true; text: password; onTextChanged: subsurfaceAccountsModel.setProperty(index, "password", text) }
+                    // See the Garmin Test button above: read live text.
+                    Button { text: "Test"; onClicked: settingsController.testSubsurface(sEmail.text, sPass.text) }
+                    Button { text: "Remove"; flat: true; onClicked: subsurfaceAccountsModel.remove(index) }
+                    Text {
+                        visible: username !== "" && !hasPassword
+                        text: "⚠ no password stored"
+                        color: Theme.danger
+                        font.pixelSize: 11
+                    }
+                }
+            }
+            // See the Garmin card: this line is permanent, only its text changes.
             Text { text: settingsController.subsurfaceStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             RowLayout {
                 Button {
                     text: "Save"
-                    onClicked: { settingsController.saveSubsurface(sEmail.text, sPass.text); sPass.text = "" }
+                    onClicked: {
+                        // See the Garmin save button above: get(i) is not a dict.
+                        var rows = []
+                        for (var i = 0; i < subsurfaceAccountsModel.count; i++) {
+                            var row = subsurfaceAccountsModel.get(i)
+                            rows.push({username: row.username, password: row.password})
+                        }
+                        settingsController.saveSubsurfaceAccounts(rows)
+                    }
                 }
+                Button { text: "Add another account"; flat: true; onClicked: subsurfaceAccountsModel.append({username: "", password: "", hasPassword: false}) }
             }
         }
         Text { visible: text !== ""; text: settingsController.message; color: Theme.muted }

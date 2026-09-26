@@ -23,6 +23,24 @@ from typing import Any, Dict, Optional
 
 _lock = threading.Lock()
 _state: Optional[Dict[str, Any]] = None
+_stop = threading.Event()
+
+
+class Stopped(BaseException):
+    """Raised by report() once request_stop() was called: every long job
+    reports before each dive, so that is where a Stop button takes effect.
+    A BaseException so the ``except Exception`` that keeps a run going past
+    one bad dive does not swallow it; the scheduler's run_* functions catch
+    it and end the job cleanly."""
+
+
+def request_stop() -> None:
+    """Asks the running job to stop at its next report()."""
+    _stop.set()
+
+
+def stop_requested() -> bool:
+    return _stop.is_set()
 
 
 def report(done: int, total: int, message: str = "", service: str = "") -> None:
@@ -38,12 +56,17 @@ def report(done: int, total: int, message: str = "", service: str = "") -> None:
             "fraction": (done / total) if total > 0 else None,
             "updated_at": time.time(),
         }
+    if _stop.is_set():
+        raise Stopped()
 
 
 def clear() -> None:
+    """End of a job: also forgets a stop request, so it never carries over
+    to the next one."""
     global _state
     with _lock:
         _state = None
+    _stop.clear()
 
 
 def current() -> Optional[Dict[str, Any]]:

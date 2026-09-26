@@ -453,7 +453,9 @@ class SubmersionCredentials(BaseModel):
 class CredentialsModel(BaseModel):
     garmin: Union[List[GarminCredentials], GarminCredentials] = Field(default_factory=GarminCredentials)
     divelogs: Union[List[DivelogsCredentials], DivelogsCredentials] = Field(default_factory=DivelogsCredentials)
-    subsurface: SubsurfaceCredentials = Field(default_factory=SubsurfaceCredentials)
+    # A list in the desktop app (rework.md E19: several accounts, one picked
+    # per page); the web UI and Docker keep writing the single-account form.
+    subsurface: Union[List[SubsurfaceCredentials], SubsurfaceCredentials] = Field(default_factory=SubsurfaceCredentials)
     submersion: SubmersionCredentials = Field(default_factory=SubmersionCredentials)
 
     def configured_services(self) -> List[str]:
@@ -463,7 +465,7 @@ class CredentialsModel(BaseModel):
             out.append("garmin")
         if any(a.username for a in self.get_divelogs_accounts()):
             out.append("divelogs")
-        if self.subsurface.configured:
+        if any(a.configured for a in self.get_subsurface_accounts()):
             out.append("subsurface")
         if SUBMERSION_ENABLED and self.submersion.configured:
             out.append("submersion")
@@ -482,6 +484,18 @@ class CredentialsModel(BaseModel):
         if getattr(self.divelogs, "username", None):
             return [self.divelogs]
         return []
+
+    def get_subsurface_accounts(self) -> List[SubsurfaceCredentials]:
+        if isinstance(self.subsurface, list):
+            return [a for a in self.subsurface if a.email]
+        if self.subsurface.email:
+            return [self.subsurface]
+        return []
+
+    def first_subsurface_account(self) -> SubsurfaceCredentials:
+        """The single account the web UI and setup_credentials.py work with."""
+        accounts = self.get_subsurface_accounts()
+        return accounts[0] if accounts else SubsurfaceCredentials()
 
 class ConfigManager:
     @staticmethod

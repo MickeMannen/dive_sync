@@ -6,7 +6,7 @@ from typing import Optional
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
-from desktop import credentials
+from desktop import accounts, credentials
 from desktop.jobs import LogPump, Worker
 from src.core import scheduler
 from src.core import config
@@ -17,6 +17,7 @@ class SyncController(QObject):
     statusChanged = Signal()
     logLine = Signal(str)
     pairsChanged = Signal()
+    accountsChanged = Signal()
     finished = Signal(bool)   # ok
 
     def __init__(self, log_queue, parent: Optional[QObject] = None):
@@ -38,7 +39,14 @@ class SyncController(QObject):
     def status(self) -> str:
         return self._status
 
-    @Property("QVariantList", constant=True)
+    @Slot()
+    def reloadAccounts(self) -> None:
+        """Credentials were saved: the account lists and the services they
+        make available may have changed."""
+        self.accountsChanged.emit()
+        self.pairsChanged.emit()
+
+    @Property("QVariantList", notify=accountsChanged)
     def services(self):
         """The services that have credentials, as {id, label} - what the
         Download button and the built-in pair list are built from."""
@@ -50,7 +58,7 @@ class SyncController(QObject):
             out.append({"id": "divelogs", "label": "Divelogs.org", "spec": "divelogs"})
         if config.SUBMERSION_ENABLED and model.submersion.configured:
             out.append({"id": "submersion", "label": "Submersion", "spec": "submersion"})
-        if model.subsurface.configured:
+        if model.get_subsurface_accounts():
             # The cloud spec; a local checkout is a hand-written pair instead.
             out.append({"id": "subsurface", "label": "Subsurface Cloud", "spec": "subsurface-cloud"})
         return out
@@ -121,7 +129,8 @@ class SyncController(QObject):
                        garmin_username: str = "", divelogs_username: str = "", use_garmin_cache: bool = True,
                        mirror: bool = False) -> None:
         """Sync from ``source_spec`` into ``target_spec``: the run writes the
-        target only (rework.md G0)."""
+        target only (rework.md G0). A blank username means the account
+        picked on this page (selectedAccount)."""
         from src.core.pairs import service_id_of
         pair = self._pair_between(source_spec, target_spec)
         if not pair or source_spec == target_spec:
@@ -130,13 +139,33 @@ class SyncController(QObject):
         self.runSync(dry_run, f"to_{service_id_of(target_spec)}", only_new, sync_gases, pair["id"],
                      garmin_username, divelogs_username, use_garmin_cache, mirror)
 
-    @Property("QVariantList", constant=True)
+    @Property("QVariantList", notify=accountsChanged)
     def garminAccounts(self):
-        return [a.username for a in credentials.load_credentials_model().get_garmin_accounts()]
+        return accounts.names("garmin")
 
-    @Property("QVariantList", constant=True)
+    @Property("QVariantList", notify=accountsChanged)
     def divelogsAccounts(self):
-        return [a.username for a in credentials.load_credentials_model().get_divelogs_accounts()]
+        return accounts.names("divelogs")
+
+    @Property("QVariantList", notify=accountsChanged)
+    def subsurfaceAccounts(self):
+        return accounts.names("subsurface")
+
+    @Property("QVariantMap", notify=accountsChanged)
+    def selectedAccounts(self):
+        """{service id: account} picked on this page (rework.md E19)."""
+        return accounts.sync_selection()
+
+    @Slot(str, result=str)
+    def selectedAccount(self, service: str) -> str:
+        """The account this page syncs and downloads ``service`` with
+        (rework.md E19); remembered across restarts."""
+        return accounts.selected("sync", service)
+
+    @Slot(str, str)
+    def setSelectedAccount(self, service: str, account: str) -> None:
+        accounts.select("sync", service, account)
+        self.accountsChanged.emit()
 
     @Slot(str, result="QVariantList")
     def directionsFor(self, pair_id: str):
@@ -161,6 +190,14 @@ class SyncController(QObject):
     def _set_running(self, on: bool) -> None:
         self._running = on
         self.runningChanged.emit()
+
+    @Slot()
+    def stop(self) -> None:
+        """Ends the running sync or download at its next dive (progress.Stopped)."""
+        if self._running:
+            from src.core import progress
+            progress.request_stop()
+            self._set_status("Stopping after the current dive…")
 
     def _busy(self) -> bool:
         return self._running or scheduler.is_sync_running or scheduler.is_download_running
@@ -188,10 +225,18 @@ class SyncController(QObject):
                 custom["source"], custom["target"] = selected["source"], selected["target"]
         elif pair_id:
             custom["pair"] = pair_id
+        # Every account-backed side runs as the account picked on this page,
+        # and the pair's history is kept per account combination (E19).
+        selection = accounts.sync_selection()
         if garmin_username:
-            custom["garmin_username"] = garmin_username
+            selection["garmin"] = garmin_username
         if divelogs_username:
-            custom["divelogs_username"] = divelogs_username
+            selection["divelogs"] = divelogs_username
+        for service, key in (("garmin", "garmin_username"), ("divelogs", "divelogs_username"),
+                             ("subsurface", "subsurface_username")):
+            if selection.get(service):
+                custom[key] = selection[service]
+        custom["account_scoped"] = True
         self._start("Running…", lambda: self._run_sync(dry_run, custom),
                     lambda: "Dry run complete." if dry_run else "Sync complete.")
 
@@ -208,7 +253,8 @@ class SyncController(QObject):
         if not services:
             self._set_status("No service is configured yet - add credentials in Settings.")
             return
-        self._start("Downloading…", lambda: self._run_download(overwrite, services),
+        selection = accounts.sync_selection()
+        self._start("Downloading…", lambda: self._run_download(overwrite, services, selection),
                     lambda: "Download complete.")
 
     def _start(self, status: str, target, done_text) -> None:
@@ -220,7 +266,10 @@ class SyncController(QObject):
             self._pump.drain()
             self._set_running(False)
             error = (result or {}).get("error")
-            if error:
+            if (result or {}).get("stopped"):
+                self._set_status("Stopped. What was done so far is kept; the next run does the rest.")
+                self.finished.emit(False)
+            elif error:
                 self._set_status(f"Failed: {error}")
                 self.finished.emit(False)
             elif result is not None and result.get("success") is False:
@@ -253,10 +302,10 @@ class SyncController(QObject):
         return dict(scheduler.last_sync_results.get(custom.get("id") or "Manual", {}))
 
     @staticmethod
-    def _run_download(overwrite: bool, services: list) -> dict:
+    def _run_download(overwrite: bool, services: list, selection: dict = None) -> dict:
         credentials.begin_operation()
         try:
-            scheduler.run_download_thread(overwrite, None, services=services)
+            scheduler.run_download_thread(overwrite, None, services=services, accounts=selection)
         finally:
             credentials.end_operation()
         return dict(scheduler.last_download_results)

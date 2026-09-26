@@ -68,6 +68,7 @@ async function checkForUpdates() {
 function summarizeJobResult(last) {
   if (!last) return "none yet";
   if (last.error) return `error: ${last.error}`;
+  if (last.stopped) return "stopped before it finished";
   const parts = Object.entries(last)
     .filter(([k, v]) => (k.startsWith("uploaded_to_") || k.startsWith("updated_on_")) && Array.isArray(v))
     .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v.length}`);
@@ -282,7 +283,10 @@ function renderProgress(data) {
   const p = data.progress;
   const active = !!(data.is_running || data.is_downloading || p);
   box.hidden = !active;
-  if (!active) return;
+  if (!active) {
+    $("status-stop").disabled = false;      // ready for the next job
+    return;
+  }
   // The bar only shows real progress: a stage without a count (logging in,
   // reading the dive lists) is its text alone, not an animated bar.
   const bar = $("status-progress-bar");
@@ -292,7 +296,16 @@ function renderProgress(data) {
   const parts = [];
   if (p && p.message) parts.push(p.message);
   if (p && p.total > 0) parts.push(`${p.done} of ${p.total}`);
-  $("status-progress-text").textContent = parts.join(" — ") || "Working…";
+  $("status-progress-text").textContent = $("status-stop").disabled
+    ? "Stopping after the current dive…" : (parts.join(" — ") || "Working…");
+}
+
+async function stopRunningJob() {
+  $("status-stop").disabled = true;
+  $("status-progress-text").textContent = "Stopping after the current dive…";
+  const res = await fetch("/api/stop", { method: "POST" });
+  if (!res.ok) $("status-stop").disabled = false;   // it had already finished
+  loadStatus();
 }
 
 async function loadStatus() {
@@ -463,6 +476,7 @@ async function loadCredentialsStatus() {
     $(`${prefix}-garmin-account-label`).hidden = credentialsAccounts.garmin.length < 2;
     $(`${prefix}-divelogs-account-label`).hidden = credentialsAccounts.divelogs.length < 2;
   }
+  $("trigger-accounts").hidden = credentialsAccounts.garmin.length < 2 && credentialsAccounts.divelogs.length < 2;
   if (data.subsurface_email) $("subsurface-email").value = data.subsurface_email;
 }
 
@@ -1780,6 +1794,7 @@ async function init() {
   loadConflicts();
 
   $("trigger-sync").addEventListener("click", triggerSync);
+  $("status-stop").addEventListener("click", stopRunningJob);
   $("trigger-source").addEventListener("change", () => fillTargets("trigger"));
   $("trigger-swap").addEventListener("click", () => swapEndpoints("trigger"));
   $("job-source").addEventListener("change", () => fillTargets("job"));

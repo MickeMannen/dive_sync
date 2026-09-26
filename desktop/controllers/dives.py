@@ -19,7 +19,7 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from desktop import credentials, preferences
+from desktop import accounts, credentials, preferences
 from desktop.jobs import Worker
 from src.core import dive_cache, scheduler
 
@@ -107,6 +107,16 @@ ELASTIC_COLUMN = "location"
 ELASTIC_MIN_WIDTH = 100
 
 
+def _garmin_table_values(rows: List[Dict[str, Any]]) -> None:
+    for r in rows:
+        # The table's FIT column: M for a hand-logged dive (its FIT is one
+        # Connect makes up from the typed-in fields), otherwise a tick
+        # when the device's .fit is on disk and a cross when it is not.
+        r["fit"] = "M" if r.get("manual") else ("✓" if r.get("fit_file") else "✗")
+        # Location is Garmin's location name; the title has its own column
+        r["location"] = r.get("location_name") or ""
+
+
 def sort_key(value: Any, numeric: bool):
     if value in (None, ""):
         return (1, 0.0 if numeric else "")
@@ -187,6 +197,31 @@ class DiveTableModel(QAbstractTableModel):
         self._rows = filled + blank
         self.endResetModel()
 
+    def merge_rows(self, rows: List[Dict[str, Any]], key: str, ascending: bool) -> None:
+        """Rows that arrived while a refresh runs: each replaces the listed
+        dive it is (by Garmin activity id, as a renamed file keeps its id,
+        else by file name) or goes in at its sorted place. Row inserts, not
+        a reset, so the table keeps its scroll position."""
+        numeric = COLUMN_NUMERIC.get(key, False)
+
+        def goes_before(a, b) -> bool:
+            ka, kb = sort_key(a.get(key), numeric), sort_key(b.get(key), numeric)
+            if ka[0] != kb[0]:
+                return ka[0] < kb[0]            # blanks last either way
+            return ka[1] < kb[1] if ascending else ka[1] > kb[1]
+
+        for new in rows:
+            same = next((i for i, r in enumerate(self._rows)
+                         if (new.get("id") and r.get("id") == new.get("id")) or r.get("filename") == new.get("filename")), -1)
+            if same >= 0:
+                self.beginRemoveRows(QModelIndex(), same, same)
+                del self._rows[same]
+                self.endRemoveRows()
+            at = next((i for i, r in enumerate(self._rows) if goes_before(new, r)), len(self._rows))
+            self.beginInsertRows(QModelIndex(), at, at)
+            self._rows.insert(at, new)
+            self.endInsertRows()
+
     @Slot(int, result="QVariantMap")
     def row(self, index: int) -> Dict[str, Any]:
         if 0 <= index < len(self._rows):
@@ -234,6 +269,7 @@ class DivesController(QObject):
     columnsChanged = Signal()
     sortChanged = Signal()
     confirmDelete = Signal(str)
+    accountChanged = Signal()
 
     def __init__(self, service: str, log_queue=None, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -249,6 +285,13 @@ class DivesController(QObject):
         self._progress_timer = QTimer(self)
         self._progress_timer.setInterval(400)
         self._progress_timer.timeout.connect(self._poll_progress)
+        # While a Garmin refresh runs, dives are listed as they are cached
+        # (one every few seconds) instead of all at the end.
+        self._live_timer = QTimer(self)
+        self._live_timer.setInterval(1500)
+        self._live_timer.timeout.connect(self._list_arrived)
+        self._live_known: Optional[Dict[str, float]] = None
+        self._live_account: Optional[str] = None
         self._selected: Dict[str, Any] = {}
         self._pending: Dict[str, Dict[str, Any]] = {}
         # dives marked for deletion: removed from the service (and the cache)
@@ -267,6 +310,49 @@ class DivesController(QObject):
     @Property(QObject, constant=True)
     def model(self):
         return self._model
+
+    # -- account (rework.md E19) -------------------------------------------
+
+    @Property("QVariantList", notify=accountChanged)
+    def accounts(self):
+        """This service's accounts; the page shows a picker with 2+."""
+        return accounts.names(self.service)
+
+    @Property(str, notify=accountChanged)
+    def account(self) -> str:
+        """The account whose dives this page lists and edits: its own
+        remembered pick, independent of the Sync page's."""
+        return accounts.selected("dives", self.service)
+
+    def _account(self) -> Optional[str]:
+        return self.account or None
+
+    @Slot(str)
+    def setAccount(self, account: str) -> None:
+        if account == self.account:
+            return
+        if self._busy:
+            self._set("_list_status", "Wait for the current refresh or save to finish first.", self.listStatusChanged)
+        elif self._pending or self._deleting:
+            # Staged edits belong to the listed account's dives; switching
+            # would silently drop them.
+            self._set("_list_status", "Save or discard your changes before switching account.", self.listStatusChanged)
+        else:
+            accounts.select("dives", self.service, account)
+            self._set("_list_status", "", self.listStatusChanged)
+            self.accountChanged.emit()
+            self.load()
+            return
+        self.accountChanged.emit()     # puts the picker back on the current account
+
+    @Slot()
+    def reloadAccounts(self) -> None:
+        """Credentials were saved: the list, or the current account, may
+        have changed."""
+        before = self.account
+        self.accountChanged.emit()
+        if self.account != before and not (self._pending or self._deleting):
+            self.load()
 
     @Property(str, constant=True)
     def serviceName(self) -> str:
@@ -337,6 +423,18 @@ class DivesController(QObject):
     def busy(self) -> bool:
         return self._busy
 
+    @Property(bool, notify=progressChanged)
+    def stoppable(self) -> bool:
+        """A refresh or FIT download is running: both stop at the next dive."""
+        return self._busy and self._progress_timer.isActive()
+
+    @Slot()
+    def stop(self) -> None:
+        if self.stoppable:
+            from src.core import progress
+            progress.request_stop()
+            self._set("_list_status", "Stopping after the current dive…", self.listStatusChanged)
+
     @Property("QVariantMap", notify=selectedChanged)
     def selected(self):
         return dict(self._selected)
@@ -364,15 +462,9 @@ class DivesController(QObject):
     # -- listing ----------------------------------------------------------
 
     def _list_dives(self) -> List[Dict[str, Any]]:
-        rows = dive_cache.list_dives(self.service)
+        rows = dive_cache.list_dives(self.service, self._account())
         if self.service == "garmin":
-            # The table's FIT column: M for a hand-logged dive (its FIT is one
-            # Connect makes up from the typed-in fields), otherwise a tick
-            # when the device's .fit is on disk and a cross when it is not.
-            for r in rows:
-                r["fit"] = "M" if r.get("manual") else ("✓" if r.get("fit_file") else "✗")
-                # Location is Garmin's location name; the title has its own column
-                r["location"] = r.get("location_name") or ""
+            _garmin_table_values(rows)
         return rows
 
     @Slot()
@@ -416,7 +508,8 @@ class DivesController(QObject):
             self._selected = dict(self._selected, **self._staged_as_row(staged), pending=True)
         if self._selected.get("filename"):
             try:
-                self._selected["samples"] = dive_cache.get_samples(self.service, self._selected["filename"])
+                self._selected["samples"] = dive_cache.get_samples(self.service, self._selected["filename"],
+                                                                    self._account())
             except Exception as e:
                 logger.warning("Failed to load samples for %s: %s", self._selected["filename"], e)
                 self._selected["samples"] = []
@@ -475,6 +568,31 @@ class DivesController(QObject):
         self._progress_fraction, self._progress_text = -1.0, ""
         self.progressChanged.emit()
 
+    def _start_live_listing(self, account: Optional[str]) -> None:
+        if self.service != "garmin":
+            return      # the others arrive in one piece at the end anyway
+        self._live_account = account
+        self._live_known = dive_cache.garmin_file_mtimes(account)
+        self._live_timer.start()
+
+    def _stop_live_listing(self) -> None:
+        self._live_timer.stop()
+        self._live_known = None
+
+    def _list_arrived(self) -> None:
+        if self._live_known is None:
+            return
+        try:
+            rows = dive_cache.list_garmin_dives(self._live_account, known=self._live_known)
+        except Exception as e:
+            logger.debug("Listing the dives cached so far failed: %s", e)
+            return
+        if not rows:
+            return
+        _garmin_table_values(rows)
+        self._model.merge_rows(rows, self._sort_key, self._sort_ascending)
+        self.diveCountChanged.emit()
+
     @Slot()
     def refreshAll(self) -> None:
         """Re-fetch every dive, ignoring the cache. A plain Refresh skips a
@@ -493,13 +611,16 @@ class DivesController(QObject):
                   if force else "Refreshing…", self.listStatusChanged)
         self._start_progress()
         service = self.service
+        account = self._account()
+        self._start_live_listing(account)
 
         def work():
             credentials.begin_operation()
             try:
                 # a Garmin full refresh replaces the saved FIT files too
                 scheduler.run_download_thread(force, None, services=[service],
-                                              refresh_fits=force and service == "garmin")
+                                              refresh_fits=force and service == "garmin",
+                                              accounts={service: account} if account else None)
             finally:
                 credentials.end_operation()
             return dict(scheduler.last_download_results)
@@ -507,8 +628,11 @@ class DivesController(QObject):
         def done(results):
             self._set("_busy", False, self.busyChanged)
             self._stop_progress()
+            self._stop_live_listing()
             if results.get("error"):
                 text = f"Refresh failed: {results['error']}"
+            elif results.get("stopped"):
+                text = "Stopped. The dives downloaded so far are listed."
             elif results.get("success"):
                 text = "Refreshed."
             else:
@@ -523,7 +647,9 @@ class DivesController(QObject):
         def fail(message):
             self._set("_busy", False, self.busyChanged)
             self._stop_progress()
+            self._stop_live_listing()
             self._set("_list_status", f"Refresh failed: {message}", self.listStatusChanged)
+            self.load()     # what did arrive is cached; list it as it is on disk
 
         self._run(work, done, fail)
 
@@ -554,11 +680,12 @@ class DivesController(QObject):
         self._set("_busy", True, self.busyChanged)
         self._set("_list_status", f"Downloading {len(filenames)} FIT file(s)…", self.listStatusChanged)
         self._start_progress()
+        account = self._account()
 
         def work():
             credentials.begin_operation()
             try:
-                return scheduler.run_fit_download_thread(filenames)
+                return scheduler.run_fit_download_thread(filenames, account)
             finally:
                 credentials.end_operation()
 
@@ -567,6 +694,8 @@ class DivesController(QObject):
             self._stop_progress()
             if result.get("error"):
                 text = f"FIT download failed: {result['error']}"
+            elif result.get("stopped"):
+                text = "FIT download stopped. The files downloaded so far are kept."
             else:
                 text = f"Downloaded {len(result['downloaded'])} FIT file(s)."
                 failed = result.get("failed") or {}
@@ -801,6 +930,7 @@ class DivesController(QObject):
         jobs = [(f, self._kwargs_for(f, self._pending[f])) for f in filenames if self._row_for(f)]
         deletes = [f for f in deletes if self._row_for(f)]
         keep_selected = self._selected.get("filename")
+        account = self._account()
         self._set("_busy", True, self.busyChanged)
         total = len(jobs) + len(deletes)
         self._set("_status", f"Saving {total} change(s) to {self.serviceName}…" if total > 1 else "Saving…",
@@ -812,13 +942,13 @@ class DivesController(QObject):
             try:
                 for filename, kwargs in jobs:
                     try:
-                        filepath = dive_cache.update_dive_fields(self.service, filename, **kwargs)
-                        results[filename] = bool(dive_cache.push_remote_update(self.service, filepath))
+                        filepath = dive_cache.update_dive_fields(self.service, filename, username=account, **kwargs)
+                        results[filename] = bool(dive_cache.push_remote_update(self.service, filepath, account))
                     except Exception as e:
                         logger.error("Saving %s failed: %s", filename, e)
                         results[filename] = False
                 for filename in deletes:
-                    results[filename] = self._delete_one(filename)
+                    results[filename] = self._delete_one(filename, account)
             finally:
                 credentials.end_operation()
             return results
@@ -870,16 +1000,16 @@ class DivesController(QObject):
         self._set("_status", f"Marked for deletion. Save all changes deletes it from {self.serviceName}; "
                              "Undo keeps it.", self.statusChanged)
 
-    def _delete_one(self, filename: str) -> bool:
+    def _delete_one(self, filename: str, account: Optional[str] = None) -> bool:
         """Worker thread: delete online first, then the cache file - a failed
         online delete leaves the dive marked and cached, to retry."""
         try:
-            filepath, external_id = dive_cache.dive_external_id(self.service, filename)
-            if external_id and not dive_cache.push_remote_delete(self.service, external_id, filepath=filepath):
+            filepath, external_id = dive_cache.dive_external_id(self.service, filename, account)
+            if external_id and not dive_cache.push_remote_delete(self.service, external_id, account, filepath=filepath):
                 return False
             if not external_id:
                 logger.warning("%s has no %s id; removing it from the local cache only.", filename, self.serviceName)
-            dive_cache.delete_dive_local(self.service, filename)
+            dive_cache.delete_dive_local(self.service, filename, account)
             return True
         except Exception as e:
             logger.error("Deleting %s failed: %s", filename, e)

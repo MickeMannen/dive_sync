@@ -33,6 +33,7 @@ def run_download_thread(
     include_divelogs: bool = True,
     services: Optional[List[str]] = None,
     refresh_fits: bool = False,
+    accounts: Optional[Dict[str, str]] = None,
 ):
     """Fetches and caches dive JSON to local disk - this is the only thing
     that populates the per-dive cache files dive_cache.py's
@@ -47,7 +48,11 @@ def run_download_thread(
 
     ``refresh_fits`` (a Garmin full refresh): afterwards download the original
     .fit of every cached device dive again, replacing the saved copies.
-    Hand-logged dives are skipped - their FIT is one Connect makes up."""
+    Hand-logged dives are skipped - their FIT is one Connect makes up.
+
+    ``accounts`` ({service id: username/email}, the desktop app) downloads
+    only those accounts, each into its own cache folder (rework.md E19);
+    without it the only configured account is used, as before."""
     global is_download_running, last_download_results
     if services is not None:
         include_garmin = "garmin" in services
@@ -55,17 +60,18 @@ def run_download_thread(
     unified = [s for s in (services if services is not None else []) if dive_cache.is_unified_cache(s)]
 
     is_download_running = True
-    progress.report(0, 0, "Starting download", ",".join(services or []))
     logger.info(
         "Raw dive data download started (overwrite=%s, garmin=%s, divelogs=%s%s)...",
         overwrite, include_garmin, include_divelogs,
         ", " + ", ".join(unified) if unified else "",
     )
     try:
+        # inside the try: a stop asked for already raises here
+        progress.report(0, 0, "Starting download", ",".join(services or []))
         resolved_base_dir = base_dir or os.environ.get("DATA_DIR", "./data")
         success = True
         if include_garmin or include_divelogs:
-            engine = SyncEngine()
+            engine = _download_engine(accounts, include_garmin, include_divelogs)
             success = engine.download_and_save_raw_data(
                 mock_data_dir=resolved_base_dir,
                 overwrite=overwrite,
@@ -76,13 +82,14 @@ def run_download_thread(
             # One service failing must not cost the others their download.
             try:
                 # always a full download, pruned (overwrite only concerns Garmin's reuse of unchanged dives)
-                dive_cache.download_service_dives(service, base_dir=resolved_base_dir)
+                dive_cache.download_service_dives(service, base_dir=resolved_base_dir,
+                                                  username=(accounts or {}).get(service) or None)
             except Exception as e:
                 logger.error("Failed to download %s dives: %s", service, e)
                 success = False
         last_download_results = {"success": success}
         if refresh_fits and include_garmin:
-            fits = _refresh_garmin_fits(resolved_base_dir)
+            fits = _refresh_garmin_fits(resolved_base_dir, (accounts or {}).get("garmin") or None)
             last_download_results["fit"] = fits
             if fits["failed"]:
                 success = False
@@ -91,6 +98,10 @@ def run_download_thread(
             logger.info("Raw dive data download completed successfully.")
         else:
             logger.error("Raw dive data download completed with errors - see log above.")
+    except progress.Stopped:
+        # The dives fetched so far stay cached; nothing is pruned.
+        logger.warning("Download stopped; the dives fetched so far are kept.")
+        last_download_results = {"stopped": True}
     except Exception as e:
         logger.error("Raw dive data download encountered an error: %s", e)
         last_download_results = {"error": str(e)}
@@ -99,10 +110,27 @@ def run_download_thread(
         progress.clear()
 
 
-def _refresh_garmin_fits(base_dir: str) -> Dict[str, Any]:
-    """Re-download the FIT of every cached Garmin device dive, per account."""
+def _download_engine(accounts: Optional[Dict[str, str]], include_garmin: bool,
+                     include_divelogs: bool) -> SyncEngine:
+    """SyncEngine builds both the Garmin and the Divelogs adapter, and with
+    several accounts on a side it insists on being told which - even for the
+    side this download skips. That side gets its first account: it is never
+    logged in to, so which one does not matter."""
+    accounts = dict(accounts or {})
+    creds = ConfigManager.load_credentials()
+    for service, included, configured in (("garmin", include_garmin, creds.get_garmin_accounts()),
+                                          ("divelogs", include_divelogs, creds.get_divelogs_accounts())):
+        if not included and not accounts.get(service) and configured:
+            accounts[service] = configured[0].username
+    return SyncEngine(garmin_username=accounts.get("garmin") or None,
+                      divelogs_username=accounts.get("divelogs") or None)
+
+
+def _refresh_garmin_fits(base_dir: str, username: Optional[str] = None) -> Dict[str, Any]:
+    """Re-download the FIT of every cached Garmin device dive, per account
+    (only ``username``'s when given)."""
     by_account: Dict[Optional[str], List[str]] = {}
-    for row in dive_cache.list_garmin_dives(base_dir=base_dir):
+    for row in dive_cache.list_garmin_dives(username, base_dir=base_dir):
         if not row.get("manual"):
             by_account.setdefault(row.get("account"), []).append(row["filename"])
     result: Dict[str, Any] = {"downloaded": [], "failed": {}}
@@ -122,12 +150,16 @@ def run_fit_download_thread(filenames: List[str], username: Optional[str] = None
     at a time is what progress.py assumes."""
     global is_download_running, last_download_results
     is_download_running = True
-    progress.report(0, len(filenames), "Starting FIT download", "garmin")
     try:
+        progress.report(0, len(filenames), "Starting FIT download", "garmin")
         result = dive_cache.download_garmin_fits(filenames, username, base_dir)
         last_download_results = {"success": not result["failed"], "fit": result}
         logger.info("FIT download finished: %d saved, %d failed.", len(result["downloaded"]), len(result["failed"]))
         return result
+    except progress.Stopped:
+        logger.warning("FIT download stopped; the files fetched so far are kept.")
+        last_download_results = {"stopped": True}
+        return {"downloaded": [], "failed": {}, "stopped": True}
     except Exception as e:
         logger.error("FIT download encountered an error: %s", e)
         last_download_results = {"error": str(e)}
@@ -145,17 +177,26 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
     job_id = (custom_settings or {}).get("id") or "Manual"
     garmin_username = (custom_settings or {}).get("garmin_username") or None
     divelogs_username = (custom_settings or {}).get("divelogs_username") or None
+    # Only the desktop app sends these (rework.md E19): a Subsurface Cloud
+    # account, and sync state kept per account combination.
+    account_kwargs: Dict[str, Any] = {}
+    if (custom_settings or {}).get("subsurface_username"):
+        account_kwargs["subsurface_username"] = custom_settings["subsurface_username"]
+    if (custom_settings or {}).get("account_scoped"):
+        account_kwargs["account_scoped_state"] = True
     started_at = datetime.now()
     capture = run_history.LogCapture().attach()
     results: Dict[str, Any] = {}
     error: Optional[str] = None
+    engine = None
     logger.info("Synchronization started for job '%s' (Dry Run: %s)", job_id, dry_run)
     try:
         if custom_settings and custom_settings.get("pair"):
             from src.core.config import ConfigManager
             from src.core.pairs import engine_for_pair, find_pair
             pair = find_pair(ConfigManager.load_settings(), custom_settings["pair"])
-            engine = engine_for_pair(pair, garmin_username=garmin_username, divelogs_username=divelogs_username)
+            engine = engine_for_pair(pair, garmin_username=garmin_username, divelogs_username=divelogs_username,
+                                     **account_kwargs)
         elif custom_settings and custom_settings.get("source") and custom_settings.get("target"):
             # Two service specs with no saved pair behind them: what the
             # desktop Sync page offers for the combinations of configured
@@ -163,9 +204,11 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
             # hand-written entry in settings.json first.
             from src.core.pairs import engine_for
             engine = engine_for(custom_settings["source"], custom_settings["target"],
-                                garmin_username=garmin_username, divelogs_username=divelogs_username)
+                                garmin_username=garmin_username, divelogs_username=divelogs_username,
+                                **account_kwargs)
         else:
-            engine = SyncEngine(garmin_username=garmin_username, divelogs_username=divelogs_username)
+            engine = SyncEngine(garmin_username=garmin_username, divelogs_username=divelogs_username,
+                                account_scoped_state=bool(account_kwargs.get("account_scoped_state")))
         if custom_settings:
             # run_sync re-reads settings.json before every run, so per-job
             # values must go in as explicit overrides rather than by editing
@@ -201,6 +244,12 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
             results = engine.run_sync(dry_run=dry_run)
         last_sync_results[job_id] = results
         logger.info("Synchronization completed successfully.")
+    except progress.Stopped:
+        error = "Stopped before it finished."
+        if engine is not None:
+            engine.keep_stopped_run()
+        logger.warning("Sync stopped. The dives written so far are kept; the next sync does the rest.")
+        last_sync_results[job_id] = {"stopped": True}
     except Exception as e:
         error = str(e)
         logger.error("Sync run encountered an error: %s", e)

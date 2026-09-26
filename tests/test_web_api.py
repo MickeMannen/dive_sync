@@ -577,3 +577,24 @@ def test_web_jobs_with_source_and_target_and_all_conflicts(tmp_path, monkeypatch
     item = groups[0]["conflicts"][0]
     assert (item["field_label"], item["source_text"], item["target_text"]) == ("Buddy", "Anna", "Bob")
     assert (item["source_name"], item["target_name"]) == ("Garmin Connect", "Subsurface Cloud")
+
+
+def test_stop_asks_the_running_job_to_stop(monkeypatch):
+    from src.core import progress, scheduler
+    client = TestClient(app)
+    progress.clear()
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    monkeypatch.setattr(scheduler, "is_download_running", False)
+    assert client.post("/api/stop").status_code == 409       # nothing to stop
+    assert not progress.stop_requested()
+    monkeypatch.setattr(scheduler, "is_sync_running", True)
+    try:
+        assert client.post("/api/stop").json() == {"status": "stopping"}
+        assert progress.stop_requested()
+    finally:
+        progress.clear()
+
+
+def test_dashboard_has_the_stop_button():
+    html = TestClient(app).get("/").text
+    assert 'id="status-stop"' in html

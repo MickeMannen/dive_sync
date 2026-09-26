@@ -22,8 +22,16 @@ class Worker(QThread):
         self._target = target
 
     def run(self) -> None:
+        from src.core import progress
         try:
             result = self._target()
+        except progress.Stopped:
+            # The scheduler's jobs catch their own stop; this is the net for
+            # one raised anywhere else, so it neither kills the thread nor
+            # stays requested for the next job.
+            progress.clear()
+            self.finished_ok.emit({"stopped": True})
+            return
         except Exception as e:  # reported to the UI, never swallowed
             self.failed.emit(str(e))
             return

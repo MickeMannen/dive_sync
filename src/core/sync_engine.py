@@ -126,7 +126,8 @@ class SyncEngine:
                  mock_data_dir: Optional[str] = None, garmin_username: Optional[str] = None,
                  divelogs_username: Optional[str] = None, *,
                  source_adapter: Optional[BaseDiveAdapter] = None,
-                 target_adapter: Optional[BaseDiveAdapter] = None):
+                 target_adapter: Optional[BaseDiveAdapter] = None,
+                 account_scoped_state: bool = False):
         from src.core.config import SETTINGS_FILE, CREDENTIALS_FILE
         self.settings_path = settings_path or SETTINGS_FILE
         self.credentials_path = credentials_path or CREDENTIALS_FILE
@@ -205,6 +206,13 @@ class SyncEngine:
 
         if self.source_id == self.target_id:
             raise ValueError(f"Cannot sync a service with itself ({self.source_id}).")
+        if account_scoped_state and not mock_data_dir:
+            # The desktop app (rework.md E19): links, last sync time and
+            # conflicts belong to one account combination, so a test account
+            # never inherits a live account's history.
+            from src.core.pairs import account_state_file, adapter_account
+            self.state_file = account_state_file(state_dir, self.source_id, adapter_account(self.source),
+                                                 self.target_id, adapter_account(self.target))
 
         # Names and catalogue are captured now so that tests (and callers)
         # may later swap in duck-typed adapters without service metadata.
@@ -380,6 +388,26 @@ class SyncEngine:
             logger.info("Saved sync state (%s, %d known pairs)", state.get("last_sync_time"), len(state.get("links", {})))
         except Exception as e:
             logger.error("Failed to save sync state: %s", e)
+
+    def keep_stopped_run(self) -> None:
+        """After progress.Stopped ended run_sync part way: keep what it wrote.
+        The links to dives already created are saved, so the next run does
+        not create them again, and batching adapters publish what they hold
+        (git push, file save). The last sync time stays where it was: the
+        dives not reached yet must still count as new next time."""
+        links = getattr(self, "_run_links", None)
+        if links is None:
+            return
+        self._run_links = None
+        for adapter in (self.source, self.target):
+            finish = getattr(adapter, "finish", None)
+            if callable(finish):
+                try:
+                    finish()
+                except Exception as e:
+                    logger.error("Could not finish writing to %s after the stop: %s",
+                                 getattr(adapter, "display_name", "") or type(adapter).__name__, e)
+        self.save_state(links=links)
 
     def save_last_sync_time(self, dt: datetime) -> None:
         self.save_state(dt=dt)
@@ -962,6 +990,9 @@ class SyncEngine:
         # normal unmatched-dive upload below, exactly as with the switch off.
         src, tgt = self.source_id, self.target_id
         known_links = self.load_links()
+        # The same dict, grown as dives are linked: what keep_stopped_run
+        # saves when the run is stopped part way.
+        self._run_links = None if dry_run else known_links
         writable = self.writable_sides()
         deleted_entries: Dict[str, List[Dict[str, Any]]] = {f"deleted_on_{tgt}": [], f"deleted_on_{src}": []}
         if not self.settings.sync_filters.only_new:
@@ -1662,8 +1693,12 @@ class SyncEngine:
                             logger.warning(" Garmin activity %s cached without %s; the next refresh will retry it.",
                                            activity_id, ", ".join(incomplete))
                         
-                        with open(filepath, "w") as f:
+                        # Written whole, then renamed in: the dives page
+                        # lists the cache while a refresh runs and must never
+                        # read a half-written dive.
+                        with open(filepath + ".tmp", "w") as f:
                             json.dump(raw_payload, f, indent=2)
+                        os.replace(filepath + ".tmp", filepath)
                         logger.debug(" Saved %s", filepath)
                     except Exception as e:
                         logger.error("Failed to fetch/save details for Garmin activity %s: %s", activity_id, e)

@@ -74,13 +74,23 @@ ColumnLayout {
         // Refresh - which belongs next to the title rather than on a toolbar
         // row of its own.
         headerContent: [
+            // This page's own account (rework.md E19); hidden with only one.
+            AccountPicker {
+                objectName: "divesAccount-" + controller.serviceName
+                accounts: controller.accounts
+                current: controller.account
+                enabled: !controller.busy
+                onPicked: (account) => controller.setAccount(account)
+            },
             Button {
                 text: "Refresh"
                 enabled: !controller.busy
-                ToolTip.text: controller.fitSupported
-                              ? "Fetches new and changed dives; dives already on this computer are left alone"
-                              : "Downloads every dive from " + controller.serviceName
-                ToolTip.visible: hovered
+                Tip {
+                    text: controller.fitSupported
+                          ? "Fetches new and changed dives; dives already on this computer are left alone"
+                          : "Downloads every dive from " + controller.serviceName
+                    visible: parent.hovered
+                }
                 onClicked: controller.refresh()
             },
             Button {
@@ -89,8 +99,10 @@ ColumnLayout {
                 // only Garmin reuses unchanged dives; every other refresh is full already
                 visible: controller.fitSupported
                 enabled: !controller.busy
-                ToolTip.text: "Re-fetches every dive" + (controller.fitSupported ? " and downloads each device dive's FIT file again, replacing the saved one" : "") + ". Needed after editing only a dive's notes, buddy, weight or visibility on Garmin, which the activity listing does not reveal."
-                ToolTip.visible: hovered
+                Tip {
+                    text: "Re-fetches every dive" + (controller.fitSupported ? " and downloads each device dive's FIT file again, replacing the saved one" : "") + ". Needed after editing only a dive's notes, buddy, weight or visibility on Garmin, which the activity listing does not reveal."
+                    visible: parent.hovered
+                }
                 onClicked: controller.refreshAll()
             },
             Button {
@@ -114,6 +126,15 @@ ColumnLayout {
                     }
                 }
             },
+            Button {
+                text: "Stop"
+                visible: controller.stoppable
+                onClicked: controller.stop()
+                Tip {
+                    text: "Stops after the dive being fetched now; what has arrived so far is kept"
+                    visible: parent.hovered
+                }
+            },
             Text { text: controller.listStatus; color: Theme.muted; elide: Text.ElideRight; Layout.maximumWidth: 360 },
             Item { Layout.fillWidth: true },
             Text {
@@ -126,8 +147,10 @@ ColumnLayout {
             Button {
                 text: controller.pendingCount > 0 ? "Save all changes (" + controller.pendingCount + ")" : "Save all changes"
                 enabled: !controller.busy && (controller.pendingCount > 0 || !!detailCard.sel.filename)
-                ToolTip.text: "Uploads every dive with unsaved changes to " + controller.serviceName + " in one go"
-                ToolTip.visible: hovered
+                Tip {
+                    text: "Uploads every dive with unsaved changes to " + controller.serviceName + " in one go"
+                    visible: parent.hovered
+                }
                 onClicked: {
                     page.stageCurrent()
                     if (controller.deletingFiles.length > 0) saveAllDialog.open()
@@ -219,9 +242,11 @@ ColumnLayout {
                                 else
                                     controller.toggleSort(key)
                             }
-                            ToolTip.visible: containsMouse
-                            ToolTip.delay: 600
-                            ToolTip.text: "Click to sort · right-click to choose columns"
+                            Tip {
+                                text: "Click to sort · right-click to choose columns"
+                                visible: parent.containsMouse
+                                delay: 600
+                            }
                         }
                     }
                 }
@@ -273,6 +298,9 @@ ColumnLayout {
                     }
                     Connections {
                         target: controller.model
+                        // dives listed while a refresh runs move the selected one down
+                        function onRowsInserted() { page.selectedRow = controller.rowOf(controller.selected.filename || "") }
+                        function onRowsRemoved() { page.selectedRow = controller.rowOf(controller.selected.filename || "") }
                         function onModelReset() {
                             page.selectedRow = controller.rowOf(controller.selected.filename || "")
                             // set_columns() resets the model, and the leftover
@@ -365,18 +393,22 @@ ColumnLayout {
                     Button {
                         text: "Save"
                         enabled: !!detailCard.sel.filename && !controller.busy
-                        ToolTip.text: controller.saveStagesOnly
-                                      ? "Keeps this dive's changes; Save all changes sends every kept dive to " + controller.serviceName
-                                      : "Uploads this dive's changes to " + controller.serviceName
-                        ToolTip.visible: hovered
+                        Tip {
+                            text: controller.saveStagesOnly
+                                  ? "Keeps this dive's changes; Save all changes sends every kept dive to " + controller.serviceName
+                                  : "Uploads this dive's changes to " + controller.serviceName
+                            visible: parent.hovered
+                        }
                         onClicked: { page.stageCurrent(); controller.saveDive(detailCard.sel.filename) }
                     }
                     Button {
                         text: "Undo"
                         flat: true
                         enabled: !!detailCard.sel.filename && !controller.busy
-                        ToolTip.text: "Drops this dive's unsaved changes and shows its stored values again"
-                        ToolTip.visible: hovered
+                        Tip {
+                            text: "Drops this dive's unsaved changes and shows its stored values again"
+                            visible: parent.hovered
+                        }
                         onClicked: controller.discard(detailCard.sel.filename)
                     }
                     Button {
@@ -502,8 +534,10 @@ ColumnLayout {
                                     text: "✕"
                                     flat: true
                                     implicitWidth: 28
-                                    ToolTip.text: "Remove this tank"
-                                    ToolTip.visible: hovered
+                                    Tip {
+                                        text: "Remove this tank"
+                                        visible: parent.hovered
+                                    }
                                     onClicked: { tankModel.remove(index); page.stageCurrent() }
                                 }
                             }

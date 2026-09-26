@@ -36,6 +36,9 @@
         <span class="muted">&rarr;</span>
         <label>Target (written to) <select id="trigger-target"></select></label>
         <button type="button" class="secondary" id="trigger-swap" title="Swap source and target">&#8644;</button>
+      </div>
+      <!-- the accounts to sync as, on a row of their own; shown only with a choice to make -->
+      <div class="board-toolbar" id="trigger-accounts" hidden>
         <label id="trigger-garmin-account-label" hidden>Garmin account <select id="trigger-garmin-account"></select></label>
         <label id="trigger-divelogs-account-label" hidden>Divelogs account <select id="trigger-divelogs-account"></select></label>
       </div>
@@ -51,6 +54,7 @@
       <div id="status-progress" class="job-progress" hidden>
         <progress id="status-progress-bar" max="1"></progress>
         <span id="status-progress-text" class="muted"></span>
+        <button type="button" id="status-stop" class="secondary" title="Stops after the current dive. Dives already written stay written and linked, so the next run carries on where this one stopped.">Stop</button>
       </div>
       <table id="job-results-table">
         <thead><tr><th>Job</th><th>Last run</th><th>Last result</th></tr></thead>

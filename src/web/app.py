@@ -346,8 +346,8 @@ def get_credentials_status():
                                 for a in garmin_accounts if a.username],
         "divelogs_account_rows": [{"username": a.username, "has_password": bool(a.password)}
                                   for a in divelogs_accounts if a.username],
-        "subsurface_configured": creds.subsurface.configured,
-        "subsurface_email": creds.subsurface.email,
+        "subsurface_configured": creds.first_subsurface_account().configured,
+        "subsurface_email": creds.first_subsurface_account().email,
         "submersion_configured": creds.submersion.configured,
         "submersion_store": {
             "store_type": creds.submersion.store_type,
@@ -713,6 +713,17 @@ def get_garmin_fit(activity_id: str, account: Optional[str] = None):
     if not path:
         raise HTTPException(status_code=404, detail="No FIT downloaded for this dive.")
     return FileResponse(path, media_type="application/octet-stream", filename=os.path.basename(path))
+
+
+@app.post("/api/stop")
+def stop_running_job():
+    """The Sync page's Stop button: the running sync or download ends at its
+    next dive, keeping what it has done (progress.Stopped)."""
+    from src.core import progress
+    if not (scheduler.is_sync_running or scheduler.is_download_running):
+        raise HTTPException(status_code=409, detail="Nothing is running.")
+    progress.request_stop()
+    return {"status": "stopping"}
 
 
 @app.get("/api/status")

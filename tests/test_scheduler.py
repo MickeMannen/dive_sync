@@ -138,7 +138,7 @@ def test_run_download_thread_services_picks_the_right_path_per_service(monkeypat
             engine_calls.append((include_garmin, include_divelogs)) or True,
     )
     monkeypatch.setattr(dive_cache, "download_service_dives",
-                        lambda service, overwrite=False, base_dir=None: cache_calls.append(service) or 1)
+                        lambda service, overwrite=False, base_dir=None, username=None: cache_calls.append(service) or 1)
 
     scheduler.run_download_thread(base_dir=str(tmp_path), services=["submersion"])
     assert engine_calls == [] and cache_calls == ["submersion"]   # no Garmin/Divelogs API hit
@@ -151,7 +151,7 @@ def test_run_download_thread_services_picks_the_right_path_per_service(monkeypat
     # One service failing is reported but must not cost the others their run.
     engine_calls.clear(); cache_calls.clear()
 
-    def boom(service, overwrite=False, base_dir=None):
+    def boom(service, overwrite=False, base_dir=None, username=None):
         cache_calls.append(service)
         raise RuntimeError("store unreachable")
 
@@ -301,7 +301,7 @@ def test_full_refresh_replaces_fit_files_of_device_dives(monkeypatch, tmp_path):
     from src.core.sync_engine import SyncEngine
     monkeypatch.setattr(SyncEngine, "__init__", lambda self, *a, **k: None)
     monkeypatch.setattr(SyncEngine, "download_and_save_raw_data", lambda self, **k: True)
-    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda base_dir=None: [
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda username=None, base_dir=None: [
         {"filename": "1.json", "account": "a", "manual": False},
         {"filename": "2.json", "account": "a", "manual": True},
         {"filename": "3.json", "account": "b", "manual": False}])
@@ -366,3 +366,29 @@ def test_scheduled_job_with_source_and_target(monkeypatch):
     scheduler.run_sync_thread(False, job.model_dump())
     assert seen["sides"] == ("garmin", "subsurface-cloud")
     assert seen["run"]["direction_override"] == "to_subsurface" and seen["run"]["use_garmin_cache_override"] is False
+
+
+def test_run_download_thread_one_service_with_several_accounts_on_both(monkeypatch, tmp_path):
+    """A dives page refreshes one service's picked account. With two
+    accounts on the *other* service too, the engine must not fail asking
+    which of those to use - that side is never logged in to."""
+    from src.core.config import CredentialsModel, DivelogsCredentials, GarminCredentials
+    from src.core.sync_engine import SyncEngine
+
+    creds = CredentialsModel(
+        garmin=[GarminCredentials(username="live-g", password="x"), GarminCredentials(username="test-g", password="x")],
+        divelogs=[DivelogsCredentials(username="live-d", password="x"), DivelogsCredentials(username="test-d", password="x")],
+    )
+    monkeypatch.setattr(scheduler.ConfigManager, "load_credentials", staticmethod(lambda path=None: creds))
+    monkeypatch.setattr("src.core.sync_engine.ConfigManager.load_credentials", staticmethod(lambda path=None: creds))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    used = []
+    monkeypatch.setattr(SyncEngine, "download_and_save_raw_data",
+                        lambda self, mock_data_dir, overwrite, include_garmin, include_divelogs:
+                            used.append((self.garmin_username, self.divelogs_username)) or True)
+
+    scheduler.run_download_thread(base_dir=str(tmp_path), services=["garmin"], accounts={"garmin": "test-g"})
+    assert scheduler.last_download_results == {"success": True}
+    scheduler.run_download_thread(base_dir=str(tmp_path), services=["divelogs"], accounts={"divelogs": "test-d"})
+    assert scheduler.last_download_results == {"success": True}
+    assert used == [("test-g", "live-d"), ("live-g", "test-d")]
