@@ -19,6 +19,7 @@ from src.core.config import ProfileError, export_profile, import_profile
 from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
 import src.core.scheduler as scheduler
+from src.core import run_history
 
 # Configure logger
 logger = logging.getLogger("dive_sync.web")
@@ -724,8 +725,26 @@ def get_status():
         # How far a long job has got (rework.md E14); None when nothing runs
         "progress": progress.current(),
         "last_results": scheduler.last_sync_results,
+        # newest run per job from the persisted history: when it ran and its
+        # id, so the Sync page can link a row to the History page
+        "last_runs": run_history.latest_per_job(),
         "next_scheduled_run": scheduler.get_next_scheduled_run(settings)
     }
+
+@app.get("/api/history")
+def get_history(job: Optional[str] = None, status: Optional[str] = None, limit: int = 200):
+    """Past sync runs, newest first (summaries; /api/history/{id} has the rest)."""
+    return {"runs": run_history.list_runs(job=job or None, status=status or None, limit=limit)}
+
+
+@app.get("/api/history/{run_id}")
+def get_history_run(run_id: str):
+    """One run in full: its per-dive results, conflicts and log lines."""
+    run = run_history.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="No such run in the history.")
+    return run
+
 
 class NotifyTestRequest(BaseModel):
     notify_url: str

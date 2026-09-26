@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 
 from src.core import dive_cache
 from src.core import progress
+from src.core import run_history
 from src.core.config import ConfigManager
 from src.core.fields import FieldLink
 from src.core.sync_engine import SyncEngine
@@ -136,12 +137,18 @@ def run_fit_download_thread(filenames: List[str], username: Optional[str] = None
         progress.clear()
 
 
-def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = None):
+def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = None, trigger: str = "manual"):
+    """``trigger`` is "scheduled" when the scheduler loop starts the run,
+    for the History page; it does not change what the run does."""
     global is_sync_running, last_sync_results
     is_sync_running = True
     job_id = (custom_settings or {}).get("id") or "Manual"
     garmin_username = (custom_settings or {}).get("garmin_username") or None
     divelogs_username = (custom_settings or {}).get("divelogs_username") or None
+    started_at = datetime.now()
+    capture = run_history.LogCapture().attach()
+    results: Dict[str, Any] = {}
+    error: Optional[str] = None
     logger.info("Synchronization started for job '%s' (Dry Run: %s)", job_id, dry_run)
     try:
         if custom_settings and custom_settings.get("pair"):
@@ -195,10 +202,18 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
         last_sync_results[job_id] = results
         logger.info("Synchronization completed successfully.")
     except Exception as e:
+        error = str(e)
         logger.error("Sync run encountered an error: %s", e)
-        last_sync_results[job_id] = {"error": str(e)}
-        _notify_failure(job_id, str(e))
+        last_sync_results[job_id] = {"error": error}
+        _notify_failure(job_id, error)
     finally:
+        capture.detach()
+        run_history.record_run(
+            job_id, trigger, started_at, datetime.now(), dry_run,
+            results=results if isinstance(results, dict) else {}, error=error,
+            source=(custom_settings or {}).get("source"), target=(custom_settings or {}).get("target"),
+            log=capture.all_lines(),
+        )
         is_sync_running = False
         progress.clear()
 
@@ -288,7 +303,8 @@ async def scheduler_loop():
                     if slot.hour == now.hour and slot.minute == now.minute:
                         logger.info("Legacy scheduled slot triggered for %02d:%02d", slot.hour, slot.minute)
                         if not is_sync_running:
-                            threading.Thread(target=run_sync_thread, args=(False,), daemon=True).start()
+                            threading.Thread(target=run_sync_thread, args=(False,),
+                                             kwargs={"trigger": "scheduled"}, daemon=True).start()
                         else:
                             logger.warning("Scheduled sync skipped: another synchronization is currently running.")
 
@@ -322,7 +338,8 @@ async def scheduler_loop():
 
                         if not is_sync_running:
                             custom_set = job.model_dump()
-                            threading.Thread(target=run_sync_thread, args=(False, custom_set), daemon=True).start()
+                            threading.Thread(target=run_sync_thread, args=(False, custom_set),
+                                             kwargs={"trigger": "scheduled"}, daemon=True).start()
                         else:
                             logger.warning("Cron job '%s' skipped: another synchronization is currently running.", job.id)
 

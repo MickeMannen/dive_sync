@@ -12,6 +12,7 @@ function selectPage(page) {
   document.querySelectorAll(".nav-item").forEach((el) => el.classList.toggle("active", el.dataset.page === page));
   if (page === "mapping") requestAnimationFrame(drawLines);  // board was laid out while hidden (0-size rects)
   if (page === "conflicts") loadConflicts();
+  if (page === "history") loadHistory();
   try { localStorage.setItem("dive_sync_page", page); } catch (e) { /* private mode etc. */ }
 }
 
@@ -74,17 +75,194 @@ function summarizeJobResult(last) {
   return (last.dry_run ? "[dry run] " : "") + (parts.join(" · ") || "ok");
 }
 
-function renderJobResults(lastResults) {
+// lastRuns: newest persisted run per job (survives a restart, carries its time
+// and id); lastResults: this process's in-memory result per job.
+function renderJobResults(lastResults, lastRuns) {
   const body = $("job-results-body");
-  const jobIds = Object.keys(lastResults || {});
+  lastResults = lastResults || {};
+  lastRuns = lastRuns || {};
+  const jobIds = [...new Set([...Object.keys(lastRuns), ...Object.keys(lastResults)])];
   if (!jobIds.length) {
-    body.innerHTML = `<tr><td colspan="2" class="muted">No sync has run yet.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="3" class="muted">No sync has run yet.</td></tr>`;
     return;
   }
   body.innerHTML = jobIds
     .sort((a, b) => (a === "Manual" ? -1 : b === "Manual" ? 1 : a.localeCompare(b)))
-    .map((id) => `<tr><td>${escapeHtml(id)}</td><td>${escapeHtml(summarizeJobResult(lastResults[id]))}</td></tr>`)
+    .map((id) => {
+      const run = lastRuns[id];
+      const summary = run ? summarizeRun(run) : summarizeJobResult(lastResults[id]);
+      const when = run ? formatWhen(run.started_at) : "–";
+      const attrs = run ? ` class="clickable" data-run="${escapeHtml(run.id)}" title="Show this run in the history"` : "";
+      return `<tr${attrs}><td>${escapeHtml(id)}</td><td>${escapeHtml(when)}</td><td>${escapeHtml(summary)}</td></tr>`;
+    })
     .join("");
+  body.querySelectorAll("tr[data-run]").forEach((row) => row.addEventListener("click", () => {
+    selectPage("history");
+    openHistoryRun(row.dataset.run);
+  }));
+}
+
+// ---------------------------------------------------------------- history
+
+const SERVICE_NAMES = { garmin: "Garmin", divelogs: "Divelogs", subsurface: "Subsurface", uddf: "UDDF", submersion: "Submersion" };
+
+function serviceName(id) {
+  return SERVICE_NAMES[id] || id || "?";
+}
+
+// "uploaded_to_divelogs" -> "Uploaded to Divelogs"
+function actionLabel(key) {
+  const m = key.match(/^(uploaded_to|updated_on|deleted_on)_(.+)$/);
+  if (!m) return key.replace(/_/g, " ");
+  const verb = { uploaded_to: "Uploaded to", updated_on: "Updated on", deleted_on: "Deleted on" }[m[1]];
+  return `${verb} ${serviceName(m[2])}`;
+}
+
+function formatWhen(iso) {
+  return iso ? new Date(iso).toLocaleString() : "–";
+}
+
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined) return "–";
+  if (seconds < 60) return `${seconds.toFixed(1)} s`;
+  const m = Math.floor(seconds / 60), sec = Math.round(seconds % 60);
+  return m < 60 ? `${m} min ${sec} s` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+// changed = at least one dive written (uploaded/updated/deleted)
+function runChanged(run) {
+  return Object.keys(run.counts || {}).some((k) => /^(uploaded_to|updated_on|deleted_on)_/.test(k));
+}
+
+function summarizeRun(run) {
+  if (run.status === "error") return `error: ${run.error}`;
+  const counts = run.counts || {};
+  const parts = Object.keys(counts)
+    .filter((k) => /^(uploaded_to|updated_on|deleted_on)_/.test(k))
+    .map((k) => `${actionLabel(k).toLowerCase()}: ${counts[k]}`);
+  if (counts.conflicts) parts.push(`conflicts: ${counts.conflicts}`);
+  return (run.dry_run ? "[dry run] " : "") + (parts.join(" · ") || "no changes");
+}
+
+let historyRuns = [];
+let historyOpenId = null;
+
+async function loadHistory() {
+  $("history-message").textContent = "Loading…";
+  try {
+    const res = await fetch("/api/history");
+    historyRuns = (await res.json()).runs || [];
+    $("history-message").textContent = "";
+  } catch (e) {
+    $("history-message").textContent = "Could not load the history.";
+    return;
+  }
+  const jobs = [...new Set(historyRuns.map((r) => r.job))].sort();
+  const job = $("history-job");
+  job.innerHTML = optionList([["", "All jobs"], ...jobs.map((j) => [j, j])], job.value);
+  renderHistory();
+}
+
+function renderHistory() {
+  const job = $("history-job").value, filter = $("history-filter").value;
+  const runs = historyRuns.filter((r) => (!job || r.job === job) &&
+    (!filter || (filter === "error" ? r.status === "error" : runChanged(r))));
+  const body = $("history-body");
+  if (!runs.length) {
+    body.innerHTML = `<tr><td colspan="6" class="muted">${historyRuns.length ? "No run matches." : "No sync has run yet."}</td></tr>`;
+    return;
+  }
+  body.innerHTML = runs.map((r) => `
+    <tr class="clickable${r.id === historyOpenId ? " selected" : ""}${r.status === "error" ? " failed" : ""}" data-run="${escapeHtml(r.id)}">
+      <td>${escapeHtml(formatWhen(r.started_at))}</td>
+      <td>${escapeHtml(r.job)}</td>
+      <td>${escapeHtml(r.trigger)}</td>
+      <td>${r.source || r.target ? `${escapeHtml(serviceName(r.source))} &rarr; ${escapeHtml(serviceName(r.target))}` : "–"}</td>
+      <td>${escapeHtml(summarizeRun(r))}</td>
+      <td>${escapeHtml(formatDuration(r.duration_s))}</td>
+    </tr>`).join("");
+  body.querySelectorAll("tr[data-run]").forEach((row) => row.addEventListener("click", () => openHistoryRun(row.dataset.run)));
+}
+
+// the ids an entry carries, labelled; the generic source_id/new_id/linked_id
+// copies of the service-specific keys are left out
+function entryIds(entry) {
+  return Object.entries(entry)
+    .filter(([k, v]) => !["time", "dry_run", "reason", "source_id", "new_id", "linked_id"].includes(k) && v !== null && v !== undefined)
+    .map(([k, v]) => {
+      const label = k === "id" ? "id" : k.replace(/^new_(.+)_id$/, "new $1 id").replace(/^linked_(.+)$/, "$1 id").replace(/_/g, " ");
+      return `${label}: ${v}`;
+    })
+    .join(", ");
+}
+
+function historyTable(headers, rows) {
+  return `<div class="scroll-x"><table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map((cells) => `<tr>${cells.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
+function formatValue(value) {
+  if (value === null || value === undefined || value === "") return "(empty)";
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+function renderHistoryRun(run) {
+  const results = run.results || {};
+  const sections = [];
+  if (run.error) sections.push(`<h3>Error</h3><p class="row-warning">${escapeHtml(run.error)}</p>`);
+  for (const key of Object.keys(results).filter((k) => /^(uploaded_to|updated_on|deleted_on)_/.test(k))) {
+    const entries = results[key];
+    if (!Array.isArray(entries) || !entries.length) continue;
+    sections.push(`<h3>${escapeHtml(actionLabel(key))} (${entries.length})</h3>` +
+      historyTable(["Dive", "Ids"], entries.map((e) => [e.time || "", entryIds(e)])));
+  }
+  if (results.conflicts && results.conflicts.length) {
+    sections.push(`<h3>Conflicts (${results.conflicts.length})</h3>` +
+      historyTable(["Dive", "Field", serviceName(results.conflicts[0].source_service), serviceName(results.conflicts[0].target_service)],
+        results.conflicts.map((c) => [c.dive_time || "", c.source_key === c.target_key ? c.target_key : `${c.source_key} → ${c.target_key}`,
+          formatValue(c.source_value), formatValue(c.target_value)])));
+  }
+  if (results.skipped && results.skipped.length) {
+    sections.push(`<h3>Skipped (${results.skipped.length})</h3>` +
+      historyTable(["Dive", "Reason"], results.skipped.map((e) => [e.time || "", (e.reason || "").replace(/_/g, " ")])));
+  }
+  if (!run.error && !sections.length) sections.push(`<p class="muted">Nothing to upload, update or delete.</p>`);
+  const log = run.log || [];
+  sections.push(`<details class="history-log-block"${run.status === "error" ? " open" : ""}><summary>Log (${log.length} line${log.length === 1 ? "" : "s"})</summary>
+    <pre class="history-log">${escapeHtml(log.join("\n") || "(no log lines)")}</pre></details>`);
+
+  const meta = [
+    ["Job", run.job],
+    ["Trigger", run.trigger],
+    ["Direction", run.source || run.target ? `${serviceName(run.source)} → ${serviceName(run.target)}` : "–"],
+    ["Started", formatWhen(run.started_at)],
+    ["Duration", formatDuration(run.duration_s)],
+    ["Result", run.status === "error" ? "failed" : (run.dry_run ? "ok (dry run: nothing written)" : "ok")],
+  ];
+  if (results.matched_count !== undefined) meta.push(["Dives matched", String(results.matched_count)]);
+  const box = $("history-detail");
+  box.innerHTML = `<h2>Run ${escapeHtml(run.id)} <button type="button" class="secondary" id="history-detail-close">Close</button></h2>
+    <div class="status-grid">${meta.map(([k, v]) => `<div><span class="label">${escapeHtml(k)}</span><span>${escapeHtml(v)}</span></div>`).join("")}</div>
+    ${sections.join("")}`;
+  box.hidden = false;
+  $("history-detail-close").addEventListener("click", () => {
+    box.hidden = true;
+    historyOpenId = null;
+    renderHistory();
+  });
+}
+
+async function openHistoryRun(id) {
+  historyOpenId = id;
+  renderHistory();
+  try {
+    const res = await fetch(`/api/history/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error((await res.json()).detail);
+    renderHistoryRun(await res.json());
+    $("history-detail").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) {
+    $("history-message").textContent = `Could not load run ${id}: ${e.message}`;
+  }
 }
 
 // A Garmin refresh is minutes long, so while one runs the status poll speeds
@@ -124,7 +302,11 @@ async function loadStatus() {
     $("status-running").textContent = data.is_running ? "yes" : "no";
     $("status-next").textContent = data.next_scheduled_run ? new Date(data.next_scheduled_run).toLocaleString() : "none";
     renderProgress(data);
-    renderJobResults(data.last_results);
+    renderJobResults(data.last_results, data.last_runs);
+    // a run finished while the History page is open: show it
+    const newest = Object.values(data.last_runs || {}).map((r) => r.id + r.finished_at).sort().join();
+    if (loadStatus.newest !== undefined && loadStatus.newest !== newest && !$("history-body").closest(".page").hidden) loadHistory();
+    loadStatus.newest = newest;
     const busy = !!(data.is_running || data.is_downloading || data.progress);
     const wanted = busy ? 1000 : 15000;
     if (scheduleStatus.interval !== wanted) scheduleStatus(wanted);
@@ -1607,6 +1789,10 @@ async function init() {
   $("job-new").addEventListener("click", () => openJobEditor(-1));
   $("job-cancel").addEventListener("click", () => { editingJob = -1; showJobEditor(false); });
   $("conflicts-reload").addEventListener("click", loadConflicts);
+  $("history-reload").addEventListener("click", loadHistory);
+  $("history-job").addEventListener("change", renderHistory);
+  $("history-filter").addEventListener("change", renderHistory);
+  $("open-history").addEventListener("click", () => selectPage("history"));
   $("save-sync-settings").addEventListener("click", async () => {
     const { ok, message } = await postSettings(settingsPayload());
     $("sync-settings-message").textContent = message;

@@ -16,6 +16,7 @@
         <span id="version" class="muted"></span>
       </div>
       <button type="button" class="nav-item" data-page="sync">Sync</button>
+      <button type="button" class="nav-item" data-page="history">History</button>
       <button type="button" class="nav-item" data-page="mapping">Mapping</button>
       <button type="button" class="nav-item" data-page="conflicts">Conflicts</button>
       <button type="button" class="nav-item" data-page="settings">Settings</button>
@@ -52,15 +53,42 @@
         <span id="status-progress-text" class="muted"></span>
       </div>
       <table id="job-results-table">
-        <thead><tr><th>Job</th><th>Last result</th></tr></thead>
+        <thead><tr><th>Job</th><th>Last run</th><th>Last result</th></tr></thead>
         <tbody id="job-results-body"></tbody>
       </table>
+      <div class="actions"><button type="button" class="link-button" id="open-history">Full history &rarr;</button></div>
 </section>
 
     <section class="card">
       <h2>Live log</h2>
       <pre id="log-tail"></pre>
     </section>
+    </div>
+
+    <div class="page" data-page="history" hidden>
+    <section class="card">
+      <h2>Sync history</h2>
+      <p class="muted">The last 200 sync runs, scheduled and manual, newest first. Click a run to see the dives it uploaded, updated or deleted, what it skipped, its conflicts and its log.</p>
+      <div class="board-toolbar">
+        <label>Job <select id="history-job"></select></label>
+        <label>Show
+          <select id="history-filter">
+            <option value="">All runs</option>
+            <option value="changes">Runs that changed something</option>
+            <option value="error">Failed runs</option>
+          </select>
+        </label>
+        <button type="button" class="secondary" id="history-reload">Reload</button>
+        <span id="history-message" class="muted"></span>
+      </div>
+      <div class="scroll-x">
+        <table id="history-table">
+          <thead><tr><th>Started</th><th>Job</th><th>Trigger</th><th>Direction</th><th>Result</th><th>Duration</th></tr></thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card" id="history-detail" hidden></section>
     </div>
 
     <div class="page" data-page="mapping" hidden>
