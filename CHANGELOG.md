@@ -36,6 +36,18 @@ once this version works for you (the desktop app logs where it is).
   the watch that recorded each dive (e.g. Descent X50i, Descent Mk3(i)
   51mm; "Hand-logged" for a dive typed in on Connect), read from the
   dive's `.fit` file.
+- Garmin: only scuba dives are downloaded and synced (single gas, multi
+  gas, CCR, gauge, and dives logged by hand). Apnea dives and spearfishing
+  are left on Garmin; one downloaded by an earlier version is removed from
+  the cache on the next download.
+- Conflicts page: saving a mapping board drops the waiting conflicts its
+  rules no longer raise (a rule deleted, re-pointed, or given a policy other
+  than manual), instead of leaving them until a run happens to compare those
+  dives again. A sync run does the same for a board edited by hand.
+- Subsurface Cloud in the desktop app: fixed "certificate verify failed"
+  on every clone, fetch and push. The bundled Python has no CA store of
+  its own, so the app now uses the same certificate bundle as its Garmin
+  and Divelogs connections.
 
 ## 0.1.0 - Unreleased
 

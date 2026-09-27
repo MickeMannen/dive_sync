@@ -20,6 +20,7 @@ from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
 import src.core.scheduler as scheduler
 from src.core import layout, run_history
+from src.core.conflicts import prune_stale_conflicts
 
 # Configure logger
 logger = logging.getLogger("dive_sync.web")
@@ -233,6 +234,10 @@ def save_settings(data: SettingsSchema):
         if problems:
             raise HTTPException(status_code=400, detail={"message": "Field links are invalid.", "errors": problems})
         ConfigManager.save_settings(settings)
+        from src.core import config
+        dropped = prune_stale_conflicts(settings, os.path.dirname(config.SETTINGS_FILE) or ".")
+        if dropped:
+            logger.info("Dropped %d waiting conflict(s) the saved boards no longer raise.", dropped)
         logger.info("Schedule configuration updated successfully.")
         return {"status": "success", "message": "Settings updated."}
     except HTTPException:
@@ -691,6 +696,22 @@ def trigger_sync(request: Optional[SyncTriggerRequest] = None):
 
     threading.Thread(target=scheduler.run_sync_thread, args=(dry_run, custom_settings), daemon=True).start()
     return {"status": "success", "message": "Sync job triggered in background."}
+
+
+@app.post("/api/jobs/{job_id}/run")
+def run_job_now(job_id: str):
+    """Run a saved scheduled job right away, exactly as the scheduler would at
+    its next slot (same sides, direction, options and accounts). A disabled
+    job runs too: Run is how to try a job without switching it on. Unsaved
+    edits on the page are not seen here; the job runs as saved."""
+    settings = ConfigManager.load_settings()
+    job = next((j for j in settings.cron_jobs if j.id == job_id), None)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"No saved job '{job_id}'. Save the schedule first.")
+    if scheduler.is_sync_running:
+        raise HTTPException(status_code=409, detail="A synchronization run is already in progress.")
+    threading.Thread(target=scheduler.run_sync_thread, args=(False, job.model_dump()), daemon=True).start()
+    return {"status": "success", "message": f"Job '{job_id}' started."}
 
 # ---- Garmin dive list + FIT files --------------------------------------------
 

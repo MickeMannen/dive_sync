@@ -53,9 +53,75 @@ class Conflict(BaseModel):
         """Identifies the matched pair independent of which way the link points."""
         return pair_key(self.dive_ids)
 
+    @property
+    def rule_key(self) -> Tuple[str, str, str, str, str]:
+        """What ``rule_conflict_keys`` lists for the rule that queued this
+        entry, so a board change can tell a stale entry from a live one."""
+        return (self.link_id, self.source_service, self.target_service, self.source_key, self.target_key)
+
 
 def pair_key(dive_ids: Dict[str, Optional[str]]) -> Tuple[Tuple[str, Optional[str]], ...]:
     return tuple(sorted(dive_ids.items()))
+
+
+def rule_conflict_keys(rules: Optional[Dict[str, list]]) -> Set[Tuple[str, str, str, str, str]]:
+    """Every conflict a board can still queue, as the (link id, source
+    service, target service, source key, target key) tuple
+    ``SyncEngine._conflict_for`` records. A plain rule queues one on its
+    receiver when its policy is ``manual``; a composite with a reverse
+    pattern queues the same tuple on a run towards its sources' side when
+    its split policy is ``manual`` (``_conflict_for`` keeps the sources ->
+    composite orientation for a split, so the tuple is the same either way)."""
+    keys: Set[Tuple[str, str, str, str, str]] = set()
+    for receiver, items in (rules or {}).items():
+        for rule in items:
+            split_manual = bool(rule.template and rule.reverse) and (rule.reverse_conflict or rule.conflict) == "manual"
+            if rule.conflict == "manual" or split_manual:
+                keys.add((rule.id, rule.sender_id, receiver, rule.source[0], rule.target))
+    return keys
+
+
+def prune_stale_conflicts(settings, state_dir: str, pair_ids: Optional[Iterable[str]] = None) -> int:
+    """Drop every waiting conflict the saved boards no longer raise (owner
+    request, 2026-09-27): after a rule is deleted, re-pointed or given a
+    policy other than ``manual``, its queued entries would otherwise sit on
+    the Conflicts page until a run that spans their dives happens to compare
+    them again. Walks every ``conflicts*.json`` in the sync folder, since a
+    pair keeps one file per direction and account combination; entries
+    between services no saved pair joins are left alone (they run on the
+    shipped defaults, which do not change). ``pair_ids`` limits the check to
+    those pairs. Returns how many entries were dropped."""
+    from src.core import layout
+    from src.core.fields import links_to_rules
+
+    keys_by_services: Dict[frozenset, Set[Tuple[str, str, str, str, str]]] = {}
+    for pair in settings.sync_pairs:
+        if pair_ids is not None and pair.id not in set(pair_ids):
+            continue
+        try:
+            services = frozenset({pair.source_service, pair.target_service})
+        except Exception:
+            continue            # a disabled or unknown service: nothing of it is queued
+        if pair.rules is not None:
+            rules = pair.rules
+        else:
+            rules, _keys = links_to_rules(pair.effective_field_links(), pair.source_service, pair.target_service)
+        keys_by_services.setdefault(services, set()).update(rule_conflict_keys(rules))
+
+    folder = layout.sync_dir(state_dir)
+    if not keys_by_services or not os.path.isdir(folder):
+        return 0
+    dropped = 0
+    for name in sorted(os.listdir(folder)):
+        if not (name.startswith("conflicts") and name.endswith(".json")):
+            continue
+        store = ConflictStore(os.path.join(folder, name))
+        for services, keys in keys_by_services.items():
+            for gone in store.prune(keys, set(services)):
+                dropped += 1
+                logger.info("Dropped conflict %s (%s -> %s, rule %s): the board no longer raises it",
+                            gone.id, gone.source_key, gone.target_key, gone.link_id)
+    return dropped
 
 
 def conflicts_path_for(state_file: str) -> str:
@@ -116,6 +182,20 @@ class ConflictStore:
             return False
         self.save(remaining)
         return True
+
+    def prune(self, keys: Set[Tuple[str, str, str, str, str]], services: Set[str]) -> List[Conflict]:
+        """Drop the stored entries between ``services`` whose rule key is not
+        in ``keys`` (see ``rule_conflict_keys``); entries of other service
+        pairs stay. Never creates the file. Returns what was dropped."""
+        if not os.path.exists(self.path):
+            return []
+        kept, gone = [], []
+        for c in self.load():
+            stale = {c.source_service, c.target_service} == set(services) and c.rule_key not in keys
+            (gone if stale else kept).append(c)
+        if gone:
+            self.save(kept)
+        return gone
 
     def replace_for_pairs(self, seen_pairs: Set[Tuple[Tuple[str, Optional[str]], ...]],
                           new_conflicts: List[Conflict]) -> List[Conflict]:

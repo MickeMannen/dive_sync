@@ -10,7 +10,27 @@
   "grace_window_minutes": 15,
   "api_cooldown_seconds": 0.5,
   "schedule": [],
-  "cron_jobs": [],
+  "cron_jobs": [
+    {
+      "id": "garmin-to-divelogs-weekly",
+      "directionality": "to_divelogs",
+      "frequency": "weekly",
+      "hour": 12,
+      "minute": 0,
+      "day_of_week": 4,
+      "interval_minutes": 60,
+      "only_new": true,
+      "sync_gases": true,
+      "enabled": true,
+      "field_links": null,
+      "pair": null,
+      "source": "garmin",
+      "target": "divelogs",
+      "use_garmin_cache": true,
+      "garmin_username": null,
+      "divelogs_username": null
+    }
+  ],
   "garmin_timezone": null,
   "sync_pairs": [
     {

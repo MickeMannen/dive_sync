@@ -146,13 +146,8 @@ class GarminAdapter(BaseDiveAdapter):
                 logger.error("Failed to query activity list from Garmin Connect: %s", e)
                 raise
 
-        # Filter to diving type specifically
-        return [
-            act for act in all_dives
-            if act.get("activityType", {}).get("typeKey") == "diving" or
-               (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving") or
-               "diving" in (act.get("activityType", {}).get("typeKey") or "")
-        ]
+        # Scuba modes only: apnea dives are listed under "diving" too
+        return [act for act in all_dives if garmin_files.is_scuba_activity(act)]
 
     def _fetch_activity_details(self, target_activities: List[Any]) -> List[UnifiedDive]:
         """Fetch details, telemetry and tank sensors for each (activity, start_time)

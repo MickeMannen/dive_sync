@@ -43,6 +43,7 @@ It comes in two forms that share the same sync engine and settings format:
 * **Dive editing (desktop app)**: edit dives on Garmin Connect, Divelogs.org and Subsurface; changes are staged, shown in the list, and uploaded together with **Save all changes** (Garmin is slow — three requests per dive). Undo, staged deletes, Garmin FIT file downloads, and hand-logged Subsurface dives' duration and depths are editable too.
 * **Scheduled Sync**: cron-like jobs (hourly/daily/weekly/custom interval, per-job pair, direction and filters) that run unattended in the Docker image, with optional failure alerts to a webhook (ntfy, Gotify, ...).
 * **Multi-Account Support**: several Garmin and Divelogs accounts, selected per run from the CLI.
+* **Scuba only**: from Garmin, single gas, multi gas, CCR, gauge and hand-logged dives are downloaded and synced. Apnea dives and spearfishing stay on Garmin.
 * **Docker Ready**: Package and run the scheduler with custom port routing and unified volume mapping to persist settings, credentials, session tokens, and data caches.
 
 ---
@@ -372,7 +373,7 @@ Start the web dashboard locally without Docker:
 python docker_run.py
 ```
 Open `http://localhost:8000` in your web browser. It is the unattended side of the project: it syncs, it does not browse or edit dives (that is the desktop app). The pages:
-1. **Sync**: whether a sync is running, the next scheduled run, and **Sync now** for a source → target (dry run, only new dives, sync gases, use cached Garmin dives) with its progress and the live log; **Scheduled jobs** as a list ("Garmin Connect → Divelogs.org, every day at 06:00") with **Add job** asking what and when; and **Failure alerts**: a webhook (e.g. an ntfy topic) that gets a short message whenever a run fails. A sync from here never deletes dives — Mirror is desktop-only.
+1. **Sync**: whether a sync is running, the next scheduled run, and **Sync now** for a source → target (dry run, only new dives, sync gases, use cached Garmin dives) with its progress and the live log; **Scheduled jobs** as a list ("Garmin Connect → Divelogs.org, every day at 06:00") with **Add job** asking what and when, and **Run** to start a saved job right away (as the scheduler would, even when it is disabled); and **Failure alerts**: a webhook (e.g. an ntfy topic) that gets a short message whenever a run fails. A sync from here never deletes dives — Mirror is desktop-only.
 2. **Mapping**: the mapping board for a source → target and the pair's options — see the "🗺️ Mapping Board" section above.
 3. **Conflicts**: every pair's queued conflicts with **Keep this** per side; a pick is staged (green, click again to undo) and written by the **Save** button of the service that gets the update.
 4. **Settings**: Garmin, Divelogs.org and Subsurface Cloud credentials (with a test), the API cooldown, file pairs (UDDF file, Subsurface checkout) under *Advanced*, and the sync profile export/import.

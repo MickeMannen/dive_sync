@@ -31,7 +31,7 @@ from src.core.fields import (
     values_equal,
 )
 from src.core.models import UnifiedDive, GasMixture
-from src.core.conflicts import Conflict, ConflictStore, conflicts_path_for, pair_key
+from src.core.conflicts import Conflict, ConflictStore, conflicts_path_for, pair_key, rule_conflict_keys
 from src.core.templates import render, reverse_parse, validate_links
 
 logger = logging.getLogger("dive_sync.sync_engine")
@@ -1243,7 +1243,12 @@ class SyncEngine:
             # Touch conflicts.json only when there is something to record or a
             # file whose stale entries may need dropping; never create an empty one.
             if run_conflicts or (seen_pairs and os.path.exists(self.conflicts_file)):
-                stored = ConflictStore(self.conflicts_file).replace_for_pairs(seen_pairs, run_conflicts)
+                store = ConflictStore(self.conflicts_file)
+                # Entries a board edited outside the apps (settings.json by
+                # hand, Docker) no longer raises go too; the apps drop them
+                # on save (conflicts.prune_stale_conflicts).
+                store.prune(rule_conflict_keys(self.rules), {self.source_id, self.target_id})
+                stored = store.replace_for_pairs(seen_pairs, run_conflicts)
                 if stored:
                     logger.info("%d conflict(s) waiting for manual resolution in %s", len(stored), self.conflicts_file)
             self.save_state(dt=datetime.now(), links=known_links, clear_full_compare=full_compare_once)
@@ -1562,13 +1567,8 @@ class SyncEngine:
                         if not response:
                             break
                         
-                        # Filter to diving activity type
-                        dives_batch = [
-                            act for act in response 
-                            if act.get("activityType", {}).get("typeKey") == "diving" or 
-                               (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving") or
-                               "diving" in (act.get("activityType", {}).get("typeKey") or "")
-                        ]
+                        # Scuba modes only: apnea dives are listed under "diving" too
+                        dives_batch = [act for act in response if garmin_files.is_scuba_activity(act)]
                         all_dives.extend(dives_batch)
                         
                         if len(response) < limit:

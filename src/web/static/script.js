@@ -663,6 +663,22 @@ function jobOptions(job) {
   return bits.join(", ");
 }
 
+// Run starts the job as it is saved on the server, so a new or changed job
+// has to be saved first; the button says so until then.
+function jobIsSaved(job) {
+  const saved = (currentSettings?.cron_jobs || []).find((j) => j.id === job.id);
+  return !!saved && JSON.stringify(saved) === JSON.stringify(job);
+}
+
+async function runJobNow(job) {
+  const message = $("schedule-message");
+  message.textContent = `Starting ${job.id}…`;
+  const res = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/run`, { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  message.textContent = res.ok ? `Job started - see Sync for its progress.` : (data.detail || "Failed to start.");
+  setTimeout(loadStatus, 2000);
+}
+
 function renderJobs() {
   const list = $("jobs-list");
   list.innerHTML = "";
@@ -670,12 +686,15 @@ function renderJobs() {
   jobs.forEach((job, i) => {
     const [source, target] = jobSides(job);
     const li = document.createElement("li");
+    const saved = jobIsSaved(job);
     li.innerHTML = `<label class="inline-checkbox" title="Enabled"><input type="checkbox" class="job-enabled" ${job.enabled ? "checked" : ""}></label>
       <span class="job-what"><strong>${escapeHtml(endpointLabel(source))} &rarr; ${escapeHtml(endpointLabel(target))}</strong>,
       ${escapeHtml(jobWhen(job))} <span class="muted">(${escapeHtml(jobOptions(job))})</span></span>
+      <button type="button" class="secondary job-run" ${saved ? "" : "disabled"} title="${saved ? "Run this job now" : "Save the schedule first"}">Run</button>
       <button type="button" class="secondary job-edit">Edit</button>
       <button type="button" class="secondary danger job-remove" title="Remove">&#x2715;</button>`;
-    li.querySelector(".job-enabled").addEventListener("change", (e) => { job.enabled = e.target.checked; });
+    li.querySelector(".job-enabled").addEventListener("change", (e) => { job.enabled = e.target.checked; renderJobs(); });
+    li.querySelector(".job-run").addEventListener("click", () => runJobNow(job));
     li.querySelector(".job-edit").addEventListener("click", () => openJobEditor(i));
     li.querySelector(".job-remove").addEventListener("click", () => { jobs.splice(i, 1); renderJobs(); });
     list.appendChild(li);

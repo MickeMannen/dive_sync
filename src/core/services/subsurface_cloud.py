@@ -38,6 +38,32 @@ logger = logging.getLogger("dive_sync.subsurface_cloud")
 DEFAULT_BASE_URL = "https://cloud.subsurface-divelog.org/"
 
 
+def ensure_ca_bundle() -> Optional[str]:
+    """Point OpenSSL at certifi's CA bundle unless the user chose a cert store.
+
+    ``requests`` (Garmin, Divelogs) always verifies against ``certifi``, but
+    dulwich hands urllib3 no CA file, so it falls back to OpenSSL's compiled-in
+    default paths. Those exist in a venv on a Homebrew/system Python but not
+    in the Briefcase-bundled Python of the desktop app, where every clone,
+    fetch and push then fails with CERTIFICATE_VERIFY_FAILED. OpenSSL reads
+    ``SSL_CERT_FILE`` when a context loads its default certs, so setting it
+    once before the first dulwich call is enough. Returns the path set, or
+    None when the environment already names a store or certifi is missing.
+    """
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return None
+    try:
+        import certifi
+    except ImportError:  # pragma: no cover - certifi ships with requests
+        return None
+    path = certifi.where()
+    if not os.path.isfile(path):
+        return None
+    os.environ["SSL_CERT_FILE"] = path
+    logger.debug("Subsurface Cloud: SSL_CERT_FILE set to certifi bundle %s", path)
+    return path
+
+
 def repo_url(email: str, base_url: str = DEFAULT_BASE_URL) -> str:
     base = base_url if base_url.endswith("/") else base_url + "/"
     return f"{base}git/{email.strip()}"
@@ -117,6 +143,7 @@ class SubsurfaceCloudAdapter(SubsurfaceAdapter):
 
     def _clone(self) -> None:
         from dulwich import porcelain
+        ensure_ca_bundle()
         os.makedirs(os.path.dirname(self.clone_dir), exist_ok=True)
         logger.info("Subsurface Cloud: cloning %s (branch %s) into %s", self.url, self.branch, self.clone_dir)
         porcelain.clone(self.url, self.clone_dir, branch=self.branch.encode("utf-8"), checkout=True, **self._auth())
@@ -125,6 +152,7 @@ class SubsurfaceCloudAdapter(SubsurfaceAdapter):
         """Fetch and hard-reset the checkout to the remote branch; drop
         untracked leftovers so a failed earlier run cannot be re-read as dives."""
         from dulwich import porcelain
+        ensure_ca_bundle()
         repo = self._open()
         try:
             result = porcelain.fetch(repo, self.url, **self._auth())
@@ -156,6 +184,7 @@ class SubsurfaceCloudAdapter(SubsurfaceAdapter):
 
     def _commit_and_push(self, message: str) -> None:
         from dulwich import porcelain
+        ensure_ca_bundle()
         repo = self._open()
         try:
             status = porcelain.status(repo)
