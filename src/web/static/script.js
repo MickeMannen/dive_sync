@@ -1689,9 +1689,10 @@ async function testBoard() {
 
 // ---------------------------------------------------------------- conflicts
 
-// Picks made on the Conflicts page wait here until Save changes writes them
-// all at once; Undo on a conflict, or Discard picks, takes them back. Keyed by
-// conflict id: {pairId, winner}.
+// Picks made on the Conflicts page wait here until a Save button writes them;
+// clicking a green (picked) Keep this again, or Discard picks, takes them
+// back. Keyed by conflict id: {pairId, winner, service, serviceName}, where
+// service is the side that will be updated (the loser).
 const stagedPicks = new Map();
 let conflictsSaving = false;
 
@@ -1731,12 +1732,12 @@ function renderConflict(item, c) {
   const pick = stagedPicks.get(c.id);
   const winner = pick ? pick.winner : null;
   const side = (which, name, text, other) => {
-    const cls = winner ? (winner === which ? "chosen" : "loser") : "";
-    const cell = winner === which
-      ? `<span class="pick"><span class="pick-mark">✓ Keeping this</span><button type="button" class="secondary undo" title="Take this pick back">Undo</button></span>`
-      : winner ? ""
-      : `<button type="button" class="secondary keep" data-winner="${which}" title="Stages this value for ${escapeHtml(other)}; nothing is written until Save changes">Keep this</button>`;
-    return `<tr class="${cls}"><th>${escapeHtml(name)}</th><td>${escapeHtml(text)}</td><td>${cell}</td></tr>`;
+    const picked = winner === which;
+    const cls = winner ? (picked ? "chosen" : "loser") : "";
+    const title = picked ? `Staged: ${escapeHtml(other)} gets this value when you save. Click again to undo`
+      : `Stages this value for ${escapeHtml(other)}; nothing is written until you save`;
+    return `<tr class="${cls}"><th>${escapeHtml(name)}</th><td>${escapeHtml(text)}</td>
+      <td><button type="button" class="secondary keep${picked ? " picked" : ""}" data-winner="${which}" title="${title}">${picked ? "Keeping this ✓" : "Keep this"}</button></td></tr>`;
   };
   item.classList.toggle("staged", !!winner);
   item.innerHTML = `<div><strong>${escapeHtml(c.field_label)}</strong> <span class="muted">dive ${escapeHtml(c.dive_time)}</span></div>
@@ -1746,23 +1747,46 @@ function renderConflict(item, c) {
     </table>`;
   item.querySelectorAll(".keep").forEach((btn) => btn.addEventListener("click", () => {
     if (conflictsSaving) return;
-    stagedPicks.set(c.id, { pairId: c.pair_id, winner: btn.dataset.winner });
+    const which = btn.dataset.winner;
+    if (winner === which) {
+      stagedPicks.delete(c.id);                                    // same button again: undo
+    } else {
+      // the side that loses is the one that will be updated
+      const loserIsTarget = which === "source";
+      stagedPicks.set(c.id, { pairId: c.pair_id, winner: which,
+                              service: loserIsTarget ? c.target_service : c.source_service,
+                              serviceName: loserIsTarget ? c.target_name : c.source_name });
+    }
     renderConflict(item, c);
     updateConflictsToolbar();
   }));
-  const undo = item.querySelector(".undo");
-  if (undo) undo.addEventListener("click", () => {
-    if (conflictsSaving) return;
-    stagedPicks.delete(c.id);
-    renderConflict(item, c);
-    updateConflictsToolbar();
+}
+
+// One Save button per service that has picks waiting: [{service, name, count}].
+function pendingConflictServices() {
+  const byService = new Map();
+  stagedPicks.forEach((pick) => {
+    const entry = byService.get(pick.service) || { service: pick.service, name: pick.serviceName, count: 0 };
+    entry.count += 1;
+    byService.set(pick.service, entry);
   });
+  return [...byService.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function updateConflictsToolbar() {
   const n = stagedPicks.size;
-  $("conflicts-staged").textContent = n ? `${n} ${n === 1 ? "pick" : "picks"} waiting to be saved` : "";
-  $("conflicts-save").disabled = conflictsSaving || n === 0;
+  const saves = $("conflicts-saves");
+  saves.innerHTML = "";
+  pendingConflictServices().forEach((entry) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = `Save ${entry.count} ${entry.count === 1 ? "change" : "changes"} to ${entry.name}`;
+    btn.title = `Writes the picked values to ${entry.name}`;
+    btn.disabled = conflictsSaving;
+    btn.addEventListener("click", () => saveConflictPicks(entry.service, entry.name));
+    saves.appendChild(btn);
+  });
+  $("conflicts-staged").textContent = n ? `${n} ${n === 1 ? "pick" : "picks"} waiting` : "";
   $("conflicts-discard").disabled = conflictsSaving || n === 0;
   $("conflicts-reload").disabled = conflictsSaving;
   document.querySelectorAll("#conflict-groups button").forEach((b) => { b.disabled = conflictsSaving; });
@@ -1775,15 +1799,17 @@ function discardConflictPicks() {
   loadConflicts();
 }
 
-async function saveConflictPicks() {
-  if (conflictsSaving || !stagedPicks.size) return;
-  const decisions = [...stagedPicks.entries()].map(([id, pick]) => ({ id, winner: pick.winner, pair: pick.pairId }));
+async function saveConflictPicks(service, serviceName) {
+  if (conflictsSaving) return;
+  const decisions = [...stagedPicks.entries()].filter(([, pick]) => pick.service === service)
+    .map(([id, pick]) => ({ id, winner: pick.winner, pair: pick.pairId }));
+  if (!decisions.length) return;
   conflictsSaving = true;
   updateConflictsToolbar();
   $("conflicts-message").textContent = "";
   $("conflicts-progress").hidden = false;
   $("conflicts-progress-bar").removeAttribute("value");
-  $("conflicts-progress-text").textContent = `Updating the services for ${decisions.length} ${decisions.length === 1 ? "pick" : "picks"}…`;
+  $("conflicts-progress-text").textContent = `Updating ${serviceName} with ${decisions.length} ${decisions.length === 1 ? "change" : "changes"}…`;
   let data, ok;
   try {
     const res = await fetch("/api/conflicts/resolve", {
@@ -1808,7 +1834,7 @@ async function saveConflictPicks() {
   const failed = data.results.filter((r) => r.status === "failed");
   data.results.filter((r) => r.status === "resolved").forEach((r) => stagedPicks.delete(r.id));
   await loadConflicts();
-  const parts = [`Saved ${data.resolved} of ${decisions.length}.`];
+  const parts = [`${serviceName}: saved ${data.resolved} of ${decisions.length}.`];
   if (failed.length) parts.push(`${failed.length} failed and ${failed.length === 1 ? "is" : "are"} still staged: ` + failed.map((r) => r.detail).join("; "));
   $("conflicts-message").textContent = parts.join(" ");
 }
@@ -1881,7 +1907,6 @@ async function init() {
   $("job-new").addEventListener("click", () => openJobEditor(-1));
   $("job-cancel").addEventListener("click", () => { editingJob = -1; showJobEditor(false); });
   $("conflicts-reload").addEventListener("click", loadConflicts);
-  $("conflicts-save").addEventListener("click", saveConflictPicks);
   $("conflicts-discard").addEventListener("click", discardConflictPicks);
   $("history-reload").addEventListener("click", loadHistory);
   $("history-job").addEventListener("change", renderHistory);

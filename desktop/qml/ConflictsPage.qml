@@ -25,33 +25,43 @@ ColumnLayout {
         Layout.maximumWidth: 520
     }
 
-    // One side's control: Keep this while nothing is picked, a check mark
-    // and Undo once this side is.
-    component PickCell: RowLayout {
+    // One side's control: Keep this, green once this side is picked; clicking
+    // it again undoes the pick. Drawn by hand so the green does not depend on
+    // the platform's Qt Quick style.
+    component PickCell: AbstractButton {
+        id: cell
         required property string side
         required property string other
         property string pick: ""
         property string pairId: ""
         property string conflictId: ""
         readonly property bool chosen: pick === side
-        spacing: 6
-        Text { visible: chosen; text: "✓ Keeping this"; color: Theme.accent; font.bold: true; font.pixelSize: 12 }
-        Button {
-            visible: pick === ""
-            text: "Keep this"
-            enabled: !conflictsController.busy
-            Tip { text: "Stages this value for " + other + "; nothing is written until Save changes"; visible: parent.hovered }
-            onClicked: conflictsController.stage(pairId, conflictId, side)
+        enabled: !conflictsController.busy
+        padding: 6
+        leftPadding: 12
+        rightPadding: 12
+        contentItem: Text {
+            text: cell.chosen ? "Keeping this ✓" : "Keep this"
+            color: cell.chosen ? "white" : (cell.enabled ? Theme.accent : Theme.muted)
+            font.pixelSize: 12
+            font.bold: cell.chosen
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
         }
-        Button {
-            visible: chosen
-            text: "Undo"
-            flat: true
-            enabled: !conflictsController.busy
-            Tip { text: "Take this pick back"; visible: parent.hovered }
-            onClicked: conflictsController.unstage(conflictId)
+        background: Rectangle {
+            radius: 5
+            color: cell.chosen ? Theme.ok : (cell.hovered ? Qt.alpha(Theme.accent, 0.12) : "transparent")
+            border.color: cell.chosen ? Theme.ok : (cell.enabled ? Theme.accent : Theme.border)
+            border.width: 1
         }
+        Tip {
+            text: cell.chosen ? "Staged: " + cell.other + " gets this value when you save. Click again to undo"
+                              : "Stages this value for " + cell.other + "; nothing is written until you save"
+            visible: cell.hovered
+        }
+        onClicked: conflictsController.stage(pairId, conflictId, side)
     }
+
     Component.onCompleted: conflictsController.load()
     // the page is kept alive between visits: reload when shown, so a sync that
     // queued new conflicts meanwhile is reflected
@@ -67,28 +77,35 @@ ColumnLayout {
                 wrapMode: Text.WordWrap
                 color: Theme.muted
                 font.pixelSize: 12
-                text: "A rule with the policy \"Fill blanks, ask about real differences\" waits here when both sides hold a different value. Pick the value to keep on each conflict (Undo takes a pick back), then Save changes: the other service is updated for every pick."
+                text: "A rule with the policy \"Fill blanks, ask about real differences\" waits here when both sides hold a different value. Click Keep this on the value to keep (it turns green; click it again to undo). Nothing is written until you press Save for the service that gets the updates."
             }
             Button { text: "Reload"; flat: true; enabled: !conflictsController.busy; onClicked: conflictsController.load() }
         }
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
-            Button {
-                text: "Save changes"
-                highlighted: true
-                enabled: !conflictsController.busy && conflictsController.stagedCount > 0
-                onClicked: conflictsController.save()
+            // one Save per service that has picks waiting to be written to it
+            Repeater {
+                model: conflictsController.pendingServices
+                delegate: Button {
+                    required property var modelData
+                    text: "Save " + modelData.count + (modelData.count === 1 ? " change to " : " changes to ") + modelData.name
+                    highlighted: true
+                    enabled: !conflictsController.busy
+                    Tip { text: "Writes the picked values to " + modelData.name; visible: parent.hovered }
+                    onClicked: conflictsController.save(modelData.service)
+                }
             }
             Button {
                 text: "Discard picks"
                 flat: true
-                enabled: !conflictsController.busy && conflictsController.stagedCount > 0
+                visible: conflictsController.stagedCount > 0
+                enabled: !conflictsController.busy
                 onClicked: conflictsController.discard()
             }
             Text {
                 visible: conflictsController.stagedCount > 0
-                text: conflictsController.stagedCount + (conflictsController.stagedCount === 1 ? " pick" : " picks") + " waiting to be saved"
+                text: conflictsController.stagedCount + (conflictsController.stagedCount === 1 ? " pick" : " picks") + " waiting"
                 color: Theme.text
                 font.bold: true
                 font.pixelSize: 12

@@ -439,15 +439,17 @@ input[type="file"] { display: inline; width: auto; max-width: none; }
 .conflicts-toolbar #conflicts-message { display: block; margin-top: 0.4rem; }
 .conflicts-toolbar .job-progress { margin-top: 0.4rem; }
 #conflicts-staged:not(:empty) { font-weight: 600; color: var(--text); }
+#conflicts-saves { display: inline-flex; gap: 0.5rem; flex-wrap: wrap; }
+#conflicts-saves:empty + #conflicts-discard { display: none; }
 .conflict-group h3 { margin: 1rem 0 0.4rem; font-size: 0.95rem; }
 .conflict-group:first-child h3 { margin-top: 0.2rem; }
 .conflict { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; margin-bottom: 0.5rem; }
 .conflict td { padding-right: 1.2rem; }
-.conflict.staged { border-color: var(--accent); }
-.conflict.staged tr.chosen th, .conflict.staged tr.chosen td { background: rgba(37, 99, 235, 0.12); }
+.conflict.staged { border-color: var(--badge-on); }
 .conflict.staged tr.loser td:nth-child(2) { color: var(--muted); text-decoration: line-through; }
-.conflict .pick { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
-.conflict .pick-mark { color: var(--accent); font-weight: 600; font-size: 0.85rem; }
+/* A staged pick: the button goes green; clicking it again undoes the pick. */
+.conflict button.keep { white-space: nowrap; }
+.conflict button.keep.picked { background: var(--badge-on); border-color: var(--badge-on); color: white; }
 
 /* ---------- sync history ---------- */
 

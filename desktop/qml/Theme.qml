@@ -10,6 +10,7 @@ QtObject {
     readonly property color muted: dark ? "#9aa0a8" : "#6b7280"
     readonly property color accent: "#0ea5a4"
     readonly property color danger: "#dc2626"
+    readonly property color ok: "#16a34a"        // a staged pick, "on" badges
     readonly property color sidebar: "#1f2937"
     readonly property color sidebarText: "#e5e7eb"
     readonly property color navActive: "#0ea5a4"

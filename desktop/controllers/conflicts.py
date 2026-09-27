@@ -32,9 +32,10 @@ class ConflictsController(QObject):
         self._message = ""
         self._busy = False
         self._worker = None
-        # Picks made on the page wait here until Save changes writes them all
-        # at once; Undo on a conflict, or Discard picks, takes them back.
-        # conflict id -> {"pair_id", "winner"}
+        # Picks made on the page wait here until a Save button writes them;
+        # picking the same side again, or Discard picks, takes them back.
+        # conflict id -> {"pair_id", "winner", "service", "service_name"},
+        # service being the side that gets updated (the loser).
         self._staged: Dict[str, Dict[str, str]] = {}
 
     @Property("QVariantList", notify=conflictsChanged)
@@ -69,6 +70,16 @@ class ConflictsController(QObject):
     @Property(int, notify=stagedChanged)
     def stagedCount(self) -> int:
         return len(self._staged)
+
+    @Property("QVariantList", notify=stagedChanged)
+    def pendingServices(self):
+        """One entry per service with picks waiting to be written to it:
+        [{service, name, count}], the page's Save buttons."""
+        by_service: Dict[str, Dict[str, Any]] = {}
+        for pick in self._staged.values():
+            entry = by_service.setdefault(pick["service"], {"service": pick["service"], "name": pick["service_name"], "count": 0})
+            entry["count"] += 1
+        return sorted(by_service.values(), key=lambda e: e["name"])
 
     def _set_message(self, text: str) -> None:
         self._message = text
@@ -217,12 +228,25 @@ class ConflictsController(QObject):
         self._worker = worker
         worker.start()
 
+    def _conflict(self, conflict_id: str) -> Optional[Dict[str, Any]]:
+        return next((c for g in self._groups for c in g["conflicts"] if c["id"] == conflict_id), None)
+
     @Slot(str, str, str)
     def stage(self, pair_id: str, conflict_id: str, winner: str) -> None:
-        """Pick a side for one conflict; nothing is written until save()."""
+        """Pick a side for one conflict; nothing is written until save().
+        Picking the side already picked undoes the pick."""
         if self._busy or winner not in ("source", "target"):
             return
-        self._staged[conflict_id] = {"pair_id": pair_id, "winner": winner}
+        current = self._staged.get(conflict_id)
+        if current and current["winner"] == winner:
+            self.unstage(conflict_id)
+            return
+        row = self._conflict(conflict_id)
+        if row is None:
+            return
+        loser = "target" if winner == "source" else "source"
+        self._staged[conflict_id] = {"pair_id": pair_id, "winner": winner,
+                                     "service": row[f"{loser}_service"], "service_name": row[f"{loser}_name"]}
         self.stagedChanged.emit()
 
     @Slot(str)
@@ -243,17 +267,23 @@ class ConflictsController(QObject):
         self._set_message("")
 
     @Slot()
-    def save(self) -> None:
-        """Write every staged pick to the losing service: one engine (one
-        login) per pair, every pick attempted even when an earlier one fails.
-        Picks that failed stay staged for another try."""
-        if self._busy or not self._staged:
+    @Slot(str)
+    def save(self, service: str = "") -> None:
+        """Write the staged picks to the losing service - the picks that
+        update ``service`` (one Save button), or every pick when it is empty.
+        One engine (one login) per pair, every pick attempted even when an
+        earlier one fails; picks that failed stay staged for another try."""
+        if self._busy:
             return
-        decisions = [(cid, pick["pair_id"], pick["winner"]) for cid, pick in self._staged.items()]
+        picks = {cid: pick for cid, pick in self._staged.items() if not service or pick["service"] == service}
+        if not picks:
+            return
+        decisions = [(cid, pick["pair_id"], pick["winner"]) for cid, pick in picks.items()]
+        names = sorted({pick["service_name"] for pick in picks.values()})
         self._busy = True
         self.busyChanged.emit()
         n = len(decisions)
-        self._set_message(f"Updating the services for {n} {'pick' if n == 1 else 'picks'}…")
+        self._set_message(f"Updating {' and '.join(names)} with {n} {'change' if n == 1 else 'changes'}…")
 
         def work():
             credentials.begin_operation()
@@ -280,7 +310,7 @@ class ConflictsController(QObject):
             self._busy = False
             self.busyChanged.emit()
             self.load()
-            parts = [f"Saved {len(done)} of {n}."]
+            parts = [f"{' and '.join(names)}: saved {len(done)} of {n}."]
             if failures:
                 parts.append(f"{len(failures)} failed and {'is' if len(failures) == 1 else 'are'} still staged: "
                              + "; ".join(detail for _, detail in failures))

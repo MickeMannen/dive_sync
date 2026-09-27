@@ -206,9 +206,9 @@
     <div class="page" data-page="conflicts" hidden>
     <section class="card conflicts-toolbar">
       <h2>Conflicts <button type="button" class="secondary" id="conflicts-reload">Reload</button></h2>
-      <p class="muted">A rule with the policy "Fill blanks, ask about real differences" waits here when both sides hold a different value. Pick the value to keep on each conflict (Undo takes a pick back), then Save changes: the other service is updated for every pick.</p>
+      <p class="muted">A rule with the policy "Fill blanks, ask about real differences" waits here when both sides hold a different value. Click Keep this on the value to keep (it turns green; click it again to undo). Nothing is written until you press Save for the service that gets the updates.</p>
       <div class="actions conflicts-actions">
-        <button type="button" id="conflicts-save" disabled>Save changes</button>
+        <span id="conflicts-saves"></span>
         <button type="button" class="secondary" id="conflicts-discard" disabled>Discard picks</button>
         <span id="conflicts-staged" class="muted"></span>
       </div>

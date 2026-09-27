@@ -1078,23 +1078,29 @@ def test_conflicts_controller_lists_every_pair(qapp, scratch_data_dir, fake_keyr
     assert gps["pair_id"] == "garmin_subsurface::g@x::me@x.org" and gps["source_text"] == "4.7948, 103.684"
     assert brief(None) == "(empty)" and brief([{"o2": 21}]) == "1 item(s)" and brief(18.2) == "18.2"
 
-    # Picks are staged, undoable, and written together by save(): one engine
-    # per pair, every pick attempted, failed picks kept staged.
+    # Picks are staged (the same side again undoes), grouped per receiving
+    # service for the Save buttons, and written per service: one engine per
+    # pair, every pick attempted, failed picks kept staged.
     staged_signals = []
     c.stagedChanged.connect(lambda: staged_signals.append(c.stagedCount))
-    c.stage(buddy["pair_id"], buddy["id"], "source")
-    c.stage(gps["pair_id"], gps["id"], "target")
+    c.stage(buddy["pair_id"], buddy["id"], "source")           # Garmin's "Anna" wins: Divelogs gets updated
+    c.stage(gps["pair_id"], gps["id"], "target")               # Subsurface's GPS wins: Garmin gets updated
     assert c.stagedCount == 2 and c.staged == {buddy["id"]: "source", gps["id"]: "target"}
-    c.unstage(gps["id"])
-    assert c.staged == {buddy["id"]: "source"}
+    assert c.pendingServices == [{"service": "divelogs", "name": "Divelogs.org", "count": 1},
+                                 {"service": "garmin", "name": "Garmin Connect", "count": 1}]
+    c.stage(gps["pair_id"], gps["id"], "target")               # same side again: undo
+    assert c.staged == {buddy["id"]: "source"} and c.pendingServices[0]["service"] == "divelogs"
+    c.unstage(gps["id"])                                       # nothing staged: no signal
     c.stage(gps["pair_id"], gps["id"], "target")
-    c.stage(gps["pair_id"], gps["id"], "source")           # picking the other side replaces the pick
-    assert c.staged[gps["id"]] == "source" and staged_signals[-1] == 2
+    c.stage(gps["pair_id"], gps["id"], "source")               # picking the other side replaces the pick
+    assert c.staged[gps["id"]] == "source" and c.pendingServices[1] == {"service": "subsurface", "name": "Subsurface Cloud", "count": 1}
+    assert staged_signals[-1] == 2
+    c.stage(gps["pair_id"], "ghost", "target")                 # unknown conflict: ignored
+    assert c.stagedCount == 2
     c.discard()
-    assert c.stagedCount == 0
+    assert c.stagedCount == 0 and c.pendingServices == []
     c.stage(buddy["pair_id"], buddy["id"], "source")
     c.stage(gps["pair_id"], gps["id"], "target")
-    c.stage(gps["pair_id"], "ghost", "target")               # a pick for a conflict that vanished
 
     calls, engines = [], {}
 
@@ -1104,8 +1110,8 @@ def test_conflicts_controller_lists_every_pair(qapp, scratch_data_dir, fake_keyr
 
         def resolve_conflict(self, conflict_id, winner):
             calls.append((self.pair_id, conflict_id, winner))
-            if conflict_id == "ghost":
-                raise ValueError("No conflict with id 'ghost'")
+            if conflict_id == gps["id"]:
+                raise RuntimeError("garmin refused the update of dive 1")
             store = ConflictStore(self.conflicts_file)
             found = store.get(conflict_id)
             store.remove(conflict_id)
@@ -1113,19 +1119,22 @@ def test_conflicts_controller_lists_every_pair(qapp, scratch_data_dir, fake_keyr
     files = {buddy["pair_id"]: os.path.join(base, "conflicts_g@x_d.json"),
              gps["pair_id"]: os.path.join(base, "conflicts_garmin-g@x_subsurface-me@x.org.json")}
     monkeypatch.setattr(c, "_engine", lambda pair_id: engines.setdefault(pair_id, FakeEngine(pair_id, files[pair_id])))
-    c.save()
-    assert c.busy and "3 picks" in c.message
+    c.save("divelogs")                                         # only the picks Divelogs receives
+    assert c.busy and c.message == "Updating Divelogs.org with 1 change…"
     c.stage(buddy["pair_id"], buddy["id"], "target")          # ignored while saving
     assert wait_until(qapp, lambda: not c.busy)
-    assert sorted(calls) == sorted([(buddy["pair_id"], buddy["id"], "source"), (gps["pair_id"], gps["id"], "target"),
-                                    (gps["pair_id"], "ghost", "target")])
-    assert set(engines) == {buddy["pair_id"], gps["pair_id"]}
-    assert c.count == 0 and c.groups == []
-    assert c.message.startswith("Saved 2 of 3.") and "ghost" in c.message
-    # the failed pick was for a conflict no longer listed, so load() dropped it
-    assert c.stagedCount == 0
-    c.save()                                                   # nothing staged: a no-op
+    assert calls == [(buddy["pair_id"], buddy["id"], "source")]
+    assert c.count == 1 and c.staged == {gps["id"]: "target"}
+    assert c.message == "Divelogs.org: saved 1 of 1."
+    c.save("garmin")                                           # the service refuses: the pick stays staged
+    assert wait_until(qapp, lambda: not c.busy)
+    assert calls[-1] == (gps["pair_id"], gps["id"], "target") and set(engines) == {buddy["pair_id"], gps["pair_id"]}
+    assert c.staged == {gps["id"]: "target"} and c.count == 1
+    assert c.message.startswith("Garmin Connect: saved 0 of 1. 1 failed and is still staged: garmin refused")
+    c.save("divelogs")                                         # nothing for this service: a no-op
     assert not c.busy
+    c.save()                                                   # no argument: everything staged
+    assert c.busy and wait_until(qapp, lambda: not c.busy) and calls[-1][1] == gps["id"]
 
 
 def test_conflicts_page_renders_staged_picks(qapp, scratch_data_dir, fake_keyring, monkeypatch):
