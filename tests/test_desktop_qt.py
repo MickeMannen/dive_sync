@@ -1325,3 +1325,29 @@ def test_editing_a_dive_in_the_table(qapp, scratch_data_dir, fake_keyring, monke
     assert warnings == [], warnings
     engine.deleteLater()
     wait(qapp, 50)
+
+
+def test_mapping_save_drops_conflicts_the_board_no_longer_raises(qapp, scratch_data_dir, fake_keyring):
+    """Owner request 2026-09-27: giving a rule a policy other than manual
+    clears the conflicts it queued, without waiting for a run."""
+    import os
+    from desktop.controllers.mapping import MappingController
+    from src.core import layout
+    from src.core.conflicts import Conflict, ConflictStore
+
+    def conflict(link, source_key, target_key):
+        return Conflict(id=Conflict.make_id(link, "garmin", "divelogs", "1", "2"), link_id=link, source_service="garmin",
+                        target_service="divelogs", source_external_id="1", target_external_id="2", source_key=source_key,
+                        target_key=target_key, field_type="text", dive_ids={"garmin": "1", "divelogs": "2"},
+                        source_value="A", target_value="B")
+    store = ConflictStore(os.path.join(layout.sync_dir(str(scratch_data_dir)), "conflicts_u_v.json"))
+    store.save([conflict("buddy", "garmin.buddy", "divelogs.buddy"), conflict("notes", "garmin.notes", "divelogs.notes")])
+
+    m = MappingController()
+    m.selectRule("divelogs", "buddy")
+    assert m.updateRule({"conflict": "source_wins"}) == ""
+    assert m.save() == ""
+    assert "1 waiting conflict" in m.message and "dropped" in m.message
+    assert [c.link_id for c in store.load()] == ["notes"]         # notes' policy did not change
+
+    assert m.save() == "" and m.message == "Saved."               # nothing more to drop

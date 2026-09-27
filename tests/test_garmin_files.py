@@ -302,3 +302,66 @@ def test_is_manual_dive_reads_connects_manual_activity_flag():
     assert garmin_files.is_manual_dive({"summary": {"isManualActivity": True}})
     assert not garmin_files.is_manual_dive({"summary": {"manualActivity": False},
                                             "details": {"metadataDTO": {"manualActivity": False}}})
+
+
+def test_only_scuba_modes_count_as_dives():
+    """Garmin lists apnea under the "diving" activity type too; the owner
+    wants only scuba modes downloaded and synced (2026-09-27)."""
+    def entry(key, field="activityType"):
+        return {"activityId": 1, field: {"typeKey": key}}
+
+    for key in ("diving", "single_gas_diving", "multi_gas_diving", "gauge_diving", "ccr_diving"):
+        assert garmin_files.is_scuba_activity(entry(key)), key
+        assert garmin_files.is_scuba_activity(entry(key, "activityTypeDTO")), key
+    for key in ("apnea_diving", "apnea_hunting", "running", ""):
+        assert not garmin_files.is_scuba_activity(entry(key)), key
+        assert not garmin_files.is_scuba_activity(entry(key, "activityTypeDTO")), key
+    assert not garmin_files.is_scuba_activity({"activityId": 1})
+    assert not garmin_files.is_scuba_activity({"activityId": 1, "activityType": None})
+    # the listing shape wins when both are present
+    assert garmin_files.activity_type_key(
+        {"activityType": {"typeKey": "ccr_diving"}, "activityTypeDTO": {"typeKey": "apnea_diving"}}) == "ccr_diving"
+
+
+def test_adapter_listing_drops_apnea_dives():
+    from src.core.services.garmin import GarminAdapter
+
+    listing = [
+        {"activityId": 1, "activityType": {"typeKey": "single_gas_diving"}},
+        {"activityId": 2, "activityType": {"typeKey": "apnea_diving"}},
+        {"activityId": 3, "activityType": {"typeKey": "multi_gas_diving"}},
+        {"activityId": 4, "activityType": {"typeKey": "apnea_hunting"}},
+        {"activityId": 5, "activityType": {"typeKey": "ccr_diving"}},
+    ]
+
+    class FakeClient:
+        def get_activities(self, start, limit, activitytype=None):
+            return list(listing) if start == 0 else []
+
+    adapter = GarminAdapter.__new__(GarminAdapter)
+    adapter.client = FakeClient()
+    adapter.cooldown_seconds = 0
+    assert [a["activityId"] for a in adapter._list_dive_activities()] == [1, 3, 5]
+
+
+def test_download_skips_apnea_and_prunes_one_cached_earlier(tmp_path, monkeypatch):
+    scuba = {"typeKey": "single_gas_diving"}
+    apnea = {"typeKey": "apnea_diving"}
+    listing = [
+        {"activityId": 1, "activityName": "Scuba", "diveNumber": 1, "activityType": scuba,
+         "startTimeLocal": "2026-06-01 10:00:00", "metadataDTO": {"diveNumber": 1}},
+        {"activityId": 2, "activityName": "Freedive", "diveNumber": 2, "activityType": apnea,
+         "startTimeLocal": "2026-06-02 10:00:00", "metadataDTO": {"diveNumber": 2}},
+    ]
+    calls = []
+    engine = _refresh_engine(tmp_path, monkeypatch, listing, calls)
+    base = str(tmp_path / "cache")
+    garmin_dir = os.path.join(base, "garmin", "u", "data")
+    os.makedirs(garmin_dir)
+    # an apnea dive downloaded before the filter existed
+    with open(os.path.join(garmin_dir, "2_2026-06-02_100000_2.json"), "w") as f:
+        json.dump({"summary": listing[1], "details": {"metadataDTO": {"diveNumber": 2}}}, f)
+
+    assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
+    assert os.listdir(garmin_dir) == ["1_2026-06-01_100000_1.json"]
+    assert all(url.rsplit("/", 1)[-1] != "2" for url in calls), calls

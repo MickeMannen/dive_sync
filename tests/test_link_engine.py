@@ -731,6 +731,18 @@ def test_manual_conflicts_are_recorded_refreshed_and_not_written_on_dry_run(tmp_
     engine.run_sync(dry_run=False)
     assert [c.id for c in engine.list_conflicts()] == ["other"]
 
+    # a board edited outside the apps (settings.json by hand, Docker) that no
+    # longer raises an entry: the next run drops it even for a pair it never
+    # compares, while an entry of a still-manual rule survives (2026-09-27)
+    stale = other.model_copy(update={"id": "stale", "link_id": "buddy", "source_key": "garmin.buddy",
+                                     "target_key": "divelogs.buddy"})
+    ConflictStore(engine.conflicts_file).save([other, stale])
+    engine.run_sync(dry_run=False)
+    assert [c.id for c in engine.list_conflicts()] == ["other"]
+    softer = [FieldLink(id="notes", source=["garmin.notes"], target="divelogs.notes", conflict="prefer_source")]
+    engine.run_sync(dry_run=False, field_links_override=softer)
+    assert engine.list_conflicts() == []
+
 
 def test_resolve_conflict_writes_the_chosen_side(tmp_path):
     link = FieldLink(id="notes", source=["garmin.notes"], target="divelogs.notes", conflict="manual")

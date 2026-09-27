@@ -342,6 +342,34 @@ def device_name(manual: bool, serial: str, type_pk: Optional[int],
     return f"Garmin device type {type_pk}" if type_pk is not None else ""
 
 
+# Garmin files every dive under the "diving" activity type (typeId 144) with
+# a sub-type per mode. Only the scuba modes are wanted: apnea (freediving
+# and spearfishing) has no gases, tanks or deco and neither Divelogs nor
+# Subsurface would make sense of it (owner request, 2026-09-27). The bare
+# "diving" key is what a dive created by hand or uploaded without a mode
+# gets, so it stays in.
+SCUBA_ACTIVITY_TYPES = frozenset({
+    "diving", "single_gas_diving", "multi_gas_diving", "gauge_diving", "ccr_diving",
+})
+
+
+def activity_type_key(activity: Dict[str, Any]) -> str:
+    """The dive mode of a listing entry, from either of the two shapes Garmin
+    uses (the activity list carries ``activityType``, an activity fetched by
+    id carries ``activityTypeDTO``)."""
+    for field in ("activityType", "activityTypeDTO"):
+        key = (activity.get(field) or {}).get("typeKey")
+        if key:
+            return key
+    return ""
+
+
+def is_scuba_activity(activity: Dict[str, Any]) -> bool:
+    """True for a dive in one of the scuba modes; False for apnea and for
+    anything that is not a dive at all."""
+    return activity_type_key(activity) in SCUBA_ACTIVITY_TYPES
+
+
 def listing_fingerprint(entry: Dict[str, Any]) -> Dict[str, Any]:
     return {k: entry.get(k) for k in LISTING_KEYS}
 

@@ -43,6 +43,7 @@ It comes in two forms that share the same sync engine and settings format:
 * **Dive editing (desktop app)**: edit dives on Garmin Connect, Divelogs.org and Subsurface; changes are staged, shown in the list, and uploaded together with **Save all changes** (Garmin is slow — three requests per dive). Undo, staged deletes, Garmin FIT file downloads, and hand-logged Subsurface dives' duration and depths are editable too.
 * **Scheduled Sync**: cron-like jobs (hourly/daily/weekly/custom interval, per-job pair, direction and filters) that run unattended in the Docker image, with optional failure alerts to a webhook (ntfy, Gotify, ...).
 * **Multi-Account Support**: several Garmin and Divelogs accounts, selected per run from the CLI.
+* **Scuba only**: from Garmin, single gas, multi gas, CCR, gauge and hand-logged dives are downloaded and synced. Apnea dives and spearfishing stay on Garmin.
 * **Docker Ready**: Package and run the scheduler with custom port routing and unified volume mapping to persist settings, credentials, session tokens, and data caches.
 
 ---

@@ -6,13 +6,16 @@ QML only draws it."""
 from __future__ import annotations
 
 import copy
+import os
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from desktop import accounts, credentials
 from desktop.jobs import Worker
+from src.core import config
 from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncPairModel
+from src.core.conflicts import prune_stale_conflicts
 from src.core.fields import FieldLink, SyncRule, build_catalog, links_to_rules, rules_to_links
 from src.core.pairs import board_pairs, default_links_for, parse_service_spec, service_id_of
 from src.core.templates import AUTO_REVERSE, preview as preview_link, validate_links
@@ -878,7 +881,9 @@ class MappingController(QObject):
         self._settings = settings
         self._saved = copy.deepcopy({"rules": self._rules, "match_keys": self._match_keys})
         self.boardChanged.emit()
-        self._set_message("Saved.")
+        dropped = prune_stale_conflicts(settings, os.path.dirname(config.SETTINGS_FILE) or ".", [pair.id])
+        self._set_message("Saved." if not dropped else
+                          f"Saved. {dropped} waiting conflict(s) these rules no longer raise were dropped.")
         if changed:
             self.askApplyToAll.emit()
         return ""

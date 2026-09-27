@@ -20,6 +20,7 @@ from src.core.services.garmin import GarminAdapter
 from src.core.services.divelogs import DivelogsAdapter
 import src.core.scheduler as scheduler
 from src.core import layout, run_history
+from src.core.conflicts import prune_stale_conflicts
 
 # Configure logger
 logger = logging.getLogger("dive_sync.web")
@@ -233,6 +234,10 @@ def save_settings(data: SettingsSchema):
         if problems:
             raise HTTPException(status_code=400, detail={"message": "Field links are invalid.", "errors": problems})
         ConfigManager.save_settings(settings)
+        from src.core import config
+        dropped = prune_stale_conflicts(settings, os.path.dirname(config.SETTINGS_FILE) or ".")
+        if dropped:
+            logger.info("Dropped %d waiting conflict(s) the saved boards no longer raise.", dropped)
         logger.info("Schedule configuration updated successfully.")
         return {"status": "success", "message": "Settings updated."}
     except HTTPException:

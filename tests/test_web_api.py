@@ -635,3 +635,31 @@ def test_stop_asks_the_running_job_to_stop(monkeypatch):
 def test_dashboard_has_the_stop_button():
     html = TestClient(app).get("/").text
     assert 'id="status-stop"' in html
+
+
+def test_saving_settings_drops_conflicts_the_boards_no_longer_raise(tmp_path, monkeypatch):
+    """Owner request 2026-09-27: a rule change clears its queued conflicts."""
+    import os
+    import src.core.config as config
+    from src.core import layout
+    from src.core.conflicts import Conflict, ConflictStore
+    _isolated_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "SETTINGS_FILE", str(tmp_path / "settings.json"))
+    client = TestClient(app)
+
+    def conflict(link, source_key, target_key):
+        return Conflict(id=Conflict.make_id(link, "garmin", "divelogs", "1", "2"), link_id=link, source_service="garmin",
+                        target_service="divelogs", source_external_id="1", target_external_id="2", source_key=source_key,
+                        target_key=target_key, field_type="text", dive_ids={"garmin": "1", "divelogs": "2"},
+                        source_value="A", target_value="B")
+    store = ConflictStore(os.path.join(layout.sync_dir(str(tmp_path)), "conflicts_u_v.json"))
+    store.save([conflict("buddy", "garmin.buddy", "divelogs.buddy"), conflict("bogus", "garmin.notes", "divelogs.notes")])
+
+    # the default board keeps buddy manual: only the entry of a rule that does not exist goes
+    assert client.post("/api/settings", json=_base_settings_payload()).status_code == 200
+    assert [c.link_id for c in store.load()] == ["buddy"]
+
+    payload = dict(_base_settings_payload(),
+                   field_links=[{"id": "buddy", "source": ["garmin.buddy"], "target": "divelogs.buddy", "conflict": "source_wins"}])
+    assert client.post("/api/settings", json=payload).status_code == 200
+    assert store.load() == [] and os.path.exists(store.path)

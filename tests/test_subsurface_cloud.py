@@ -202,3 +202,40 @@ def test_pairs_know_the_cloud_spec(tmp_path):
     assert service_id_of("subsurface-cloud") == "subsurface"
     with pytest.raises(ValueError, match="not configured"):
         build_adapter("subsurface-cloud", SettingsModel(), credentials_path=str(tmp_path / "c.json"))
+
+
+def test_ensure_ca_bundle_points_openssl_at_certifi(monkeypatch):
+    """The Briefcase-bundled Python has no CA bundle at OpenSSL's compiled-in
+    path, so dulwich (urllib3, no certifi) fails TLS verification unless
+    SSL_CERT_FILE names one. A user-chosen store is left alone."""
+    import certifi
+    from src.core.services import subsurface_cloud
+
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    assert subsurface_cloud.ensure_ca_bundle() == certifi.where()
+    assert os.environ["SSL_CERT_FILE"] == certifi.where()
+    assert os.path.isfile(os.environ["SSL_CERT_FILE"])
+    # Idempotent: a second call sees the variable set and does nothing.
+    assert subsurface_cloud.ensure_ca_bundle() is None
+
+    monkeypatch.setenv("SSL_CERT_FILE", "/custom/ca.pem")
+    assert subsurface_cloud.ensure_ca_bundle() is None
+    assert os.environ["SSL_CERT_FILE"] == "/custom/ca.pem"
+
+    monkeypatch.delenv("SSL_CERT_FILE")
+    monkeypatch.setenv("SSL_CERT_DIR", "/custom/certs")
+    assert subsurface_cloud.ensure_ca_bundle() is None
+    assert "SSL_CERT_FILE" not in os.environ
+
+
+def test_login_sets_ca_bundle_before_clone_and_refresh(tmp_path, remote, monkeypatch):
+    from src.core.services import subsurface_cloud
+
+    calls = []
+    monkeypatch.setattr(subsurface_cloud, "ensure_ca_bundle", lambda: calls.append("ca"))
+    adapter = _adapter(tmp_path, remote)
+    assert adapter.login()          # clone
+    assert calls == ["ca"]
+    assert adapter.login()          # refresh
+    assert calls == ["ca", "ca"]
