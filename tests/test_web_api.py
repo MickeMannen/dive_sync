@@ -467,6 +467,43 @@ def test_mapping_test_conflicts_and_full_compare_endpoints(monkeypatch):
     assert res.status_code == 200 and fake.full_compare is True
 
 
+def test_resolve_conflicts_batch_endpoint(monkeypatch):
+    """Save changes on the Conflicts page: one engine per pair, every pick
+    attempted, per-pick outcome so failed picks can stay staged."""
+    import src.web.app as web
+    client = TestClient(app)
+    engines = {}
+
+    def factory(pair_id):
+        if pair_id == "broken":
+            raise ValueError("No sync pair named 'broken'")
+        return engines.setdefault(pair_id or "default", _FakeEngine())
+    monkeypatch.setattr(web, "_engine_for_pair_id", factory)
+
+    monkeypatch.setattr(scheduler, "is_sync_running", True)
+    assert client.post("/api/conflicts/resolve", json={"decisions": [{"id": "abc123", "winner": "source"}]}).status_code == 409
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+
+    res = client.post("/api/conflicts/resolve", json={"decisions": [
+        {"id": "abc123", "winner": "source"},
+        {"id": "nope", "winner": "target"},                       # unknown id: fails, the rest still run
+        {"id": "abc123", "winner": "target", "pair": "other"},
+        {"id": "abc123", "winner": "source", "pair": "other"},    # same pair reuses its engine
+        {"id": "abc123", "winner": "source", "pair": "broken"},
+    ]})
+    assert res.status_code == 200
+    body = res.json()
+    assert (body["resolved"], body["failed"]) == (3, 2)
+    assert [r["status"] for r in body["results"]] == ["resolved", "failed", "resolved", "resolved", "failed"]
+    assert "No conflict" in body["results"][1]["detail"] and "broken" in body["results"][4]["detail"]
+    assert engines["default"].resolved == [("abc123", "source")]
+    assert engines["other"].resolved == [("abc123", "target"), ("abc123", "source")]
+    assert set(engines) == {"default", "other"}
+
+    res = client.post("/api/conflicts/resolve", json={"decisions": []})
+    assert res.status_code == 200 and res.json() == {"resolved": 0, "failed": 0, "results": []}
+
+
 def test_profile_export_and_import_endpoints(tmp_path, monkeypatch):
     import io
     import json as _json

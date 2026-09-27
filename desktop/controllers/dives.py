@@ -118,6 +118,15 @@ def _garmin_table_values(rows: List[Dict[str, Any]]) -> None:
         r["location"] = r.get("location_name") or ""
 
 
+def sort_value(row: Dict[str, Any], key: str) -> Any:
+    """What a row is sorted on for a column: its value, except that sorting
+    by date orders the dives of one day by their time too, whichever way
+    the sort runs."""
+    if key == "date" and row.get("date"):
+        return f"{row['date']} {row.get('time') or ''}".strip()
+    return row.get(key)
+
+
 def sort_key(value: Any, numeric: bool):
     if value in (None, ""):
         return (1, 0.0 if numeric else "")
@@ -192,11 +201,18 @@ class DiveTableModel(QAbstractTableModel):
         """Blank values go last whichever way the sort runs."""
         numeric = COLUMN_NUMERIC.get(key, False)
         self.beginResetModel()
-        filled = [r for r in self._rows if sort_key(r.get(key), numeric)[0] == 0]
-        blank = [r for r in self._rows if sort_key(r.get(key), numeric)[0] == 1]
-        filled.sort(key=lambda d: sort_key(d.get(key), numeric)[1], reverse=not ascending)
+        filled = [r for r in self._rows if sort_key(sort_value(r, key), numeric)[0] == 0]
+        blank = [r for r in self._rows if sort_key(sort_value(r, key), numeric)[0] == 1]
+        filled.sort(key=lambda d: sort_key(sort_value(d, key), numeric)[1], reverse=not ascending)
         self._rows = filled + blank
         self.endResetModel()
+
+    def remove_row(self, filename: str) -> None:
+        at = next((i for i, r in enumerate(self._rows) if r.get("filename") == filename), -1)
+        if at >= 0:
+            self.beginRemoveRows(QModelIndex(), at, at)
+            del self._rows[at]
+            self.endRemoveRows()
 
     def merge_rows(self, rows: List[Dict[str, Any]], key: str, ascending: bool) -> None:
         """Rows that arrived while a refresh runs: each replaces the listed
@@ -206,7 +222,7 @@ class DiveTableModel(QAbstractTableModel):
         numeric = COLUMN_NUMERIC.get(key, False)
 
         def goes_before(a, b) -> bool:
-            ka, kb = sort_key(a.get(key), numeric), sort_key(b.get(key), numeric)
+            ka, kb = sort_key(sort_value(a, key), numeric), sort_key(sort_value(b, key), numeric)
             if ka[0] != kb[0]:
                 return ka[0] < kb[0]            # blanks last either way
             return ka[1] < kb[1] if ascending else ka[1] > kb[1]
@@ -271,6 +287,12 @@ class DivesController(QObject):
     sortChanged = Signal()
     confirmDelete = Signal(str)
     accountChanged = Signal()
+    savingChanged = Signal()
+    # Emitted on the save worker thread, delivered queued on the GUI thread:
+    # (dives done, total, the dive being saved now, how to name it) before
+    # each dive, and (filename, ok, was a delete) after it.
+    _saveStep = Signal(int, int, str, str)
+    _itemSaved = Signal(str, bool, bool)
 
     def __init__(self, service: str, log_queue=None, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -300,6 +322,14 @@ class DivesController(QObject):
         self._deleting: List[str] = []
         self._log_queue = log_queue
         self._worker: Optional[Worker] = None
+        # Save all: the dive being uploaded now, and the staged values each
+        # upload was started with (a dive re-edited meanwhile stays pending)
+        self._saving_file = ""
+        self._save_sent: Dict[str, Dict[str, Any]] = {}
+        self._save_known: Optional[Dict[str, float]] = None
+        self._save_account: Optional[str] = None
+        self._saveStep.connect(self._on_save_step)
+        self._itemSaved.connect(self._on_item_saved)
         self._sort_key, self._sort_ascending = preferences.get_sort(service, "date")
         extra_on = SERVICE_DEFAULT_ON.get(service, [])
         columns = preferences.get_visible_columns(service, DEFAULT_VISIBLE_COLUMNS + extra_on)
@@ -431,8 +461,9 @@ class DivesController(QObject):
 
     @Property(bool, notify=progressChanged)
     def stoppable(self) -> bool:
-        """A refresh or FIT download is running: both stop at the next dive."""
-        return self._busy and self._progress_timer.isActive()
+        """A refresh, FIT download or Save all is running: each stops at the
+        next dive."""
+        return self._busy and (self._progress_timer.isActive() or self._save_known is not None)
 
     @Slot()
     def stop(self) -> None:
@@ -440,6 +471,11 @@ class DivesController(QObject):
             from src.core import progress
             progress.request_stop()
             self._set("_list_status", "Stopping after the current dive…", self.listStatusChanged)
+
+    @Property(str, notify=savingChanged)
+    def savingFile(self) -> str:
+        """The dive Save all is uploading right now, empty otherwise."""
+        return self._saving_file
 
     @Property("QVariantMap", notify=selectedChanged)
     def selected(self):
@@ -933,44 +969,80 @@ class DivesController(QObject):
         if scheduler.is_sync_running or scheduler.is_download_running:
             self._set("_status", "A sync or download is currently running — try again once it finishes.", self.statusChanged)
             return
-        jobs = [(f, self._kwargs_for(f, self._pending[f])) for f in filenames if self._row_for(f)]
-        deletes = [f for f in deletes if self._row_for(f)]
+        from src.core import progress
+        filenames = [f for f in filenames if self._row_for(f)]
+        self._save_sent = {f: self._pending[f] for f in filenames}
+        jobs = [(f, self._kwargs_for(f, self._pending[f]), self._save_label(f)) for f in filenames]
+        deletes = [(f, self._save_label(f)) for f in deletes if self._row_for(f)]
         keep_selected = self._selected.get("filename")
         account = self._account()
+        self._save_account = account
+        # Garmin lists only the files written since (see _refresh_saved_row)
+        self._save_known = dive_cache.garmin_file_mtimes(account) if self.service == "garmin" else {}
         self._set("_busy", True, self.busyChanged)
         total = len(jobs) + len(deletes)
         self._set("_status", f"Saving {total} change(s) to {self.serviceName}…" if total > 1 else "Saving…",
                   self.statusChanged)
+        self._progress_fraction, self._progress_text = 0.0, ""
+        self.progressChanged.emit()
+        progress.clear()
 
         def work():
             credentials.begin_operation()
             results = {}
             try:
-                for filename, kwargs in jobs:
+                # one signed-in session for the whole batch rather than a
+                # sign-in per dive (None: each push opens its own)
+                try:
+                    session = dive_cache.remote_adapter(self.service, account)
+                except Exception as e:
+                    logger.warning("Could not prepare a %s session: %s", self.serviceName, e)
+                    session = None
+                step = 0
+                for filename, kwargs, label in jobs:
+                    if progress.stop_requested():
+                        break
+                    self._saveStep.emit(step, total, filename, f"Saving {label}")
                     try:
                         filepath = dive_cache.update_dive_fields(self.service, filename, username=account, **kwargs)
-                        results[filename] = bool(dive_cache.push_remote_update(self.service, filepath, account))
+                        results[filename] = bool(dive_cache.push_remote_update(self.service, filepath, account,
+                                                                               adapter=session))
                     except Exception as e:
                         logger.error("Saving %s failed: %s", filename, e)
                         results[filename] = False
-                for filename in deletes:
-                    results[filename] = self._delete_one(filename, account)
+                    step += 1
+                    self._itemSaved.emit(filename, results[filename], False)
+                for filename, label in deletes:
+                    if progress.stop_requested():
+                        break
+                    self._saveStep.emit(step, total, filename, f"Deleting {label}")
+                    results[filename] = self._delete_one(filename, account, session)
+                    step += 1
+                    self._itemSaved.emit(filename, results[filename], True)
             finally:
                 credentials.end_operation()
-            return results
+                stopped = progress.stop_requested()
+                progress.clear()
+            return {"results": results, "stopped": stopped}
 
-        def done(results):
+        def finish():
             self._set("_busy", False, self.busyChanged)
+            self._save_known = None
+            self._save_sent = {}
+            self._set("_saving_file", "", self.savingChanged)
+            self._progress_fraction, self._progress_text = -1.0, ""
+            self.progressChanged.emit()
+
+        def done(outcome):
+            finish()
+            results = outcome.get("results", {})
             saved = [f for f, ok in results.items() if ok]
-            for f in saved:
-                self._pending.pop(f, None)
-                if f in self._deleting:
-                    self._deleting.remove(f)
-            self._pending_changed()
             failed = len(results) - len(saved)
-            removed = sum(1 for f in saved if f in deletes)
+            removed = sum(1 for f in saved if f in dict(deletes))
             done_text = f"Saved {len(saved) - removed} dive(s), deleted {removed}." if removed else f"Saved {len(saved)} dives."
-            if not failed:
+            if outcome.get("stopped"):
+                status = f"Stopped after {len(results)} of {total} change(s); the rest are still pending."
+            elif not failed:
                 status = "Saved." if len(results) == 1 and not removed else ("Deleted." if len(results) == 1 else done_text)
             elif len(results) == 1:
                 status = ("Delete failed on " + self.serviceName + " - still marked, Save all retries it."
@@ -978,13 +1050,60 @@ class DivesController(QObject):
             else:
                 status = f"{len(saved)} of {len(results)} changes done; {failed} failed (still pending, Save all retries them)."
             self._set("_status", status, self.statusChanged)
+            self._set("_list_status", "", self.listStatusChanged)
             self.load(keep_selected)
 
         def fail(message):
-            self._set("_busy", False, self.busyChanged)
+            finish()
             self._set("_status", f"Failed: {message}", self.statusChanged)
+            self.load(keep_selected)
 
         self._run(work, done, fail)
+
+    def _save_label(self, filename: str) -> str:
+        """How the progress line names a dive: its date and name."""
+        row = self._row_for(filename) or {}
+        name = (row.get("activity_name") if self.splitSiteNames else None) or row.get("location") or ""
+        return " ".join(p for p in (row.get("date") or "", name) if p) or filename
+
+    def _on_save_step(self, done: int, total: int, filename: str, text: str) -> None:
+        self._progress_fraction = done / total if total else -1.0
+        self._progress_text = f"{text} ({done + 1}/{total})"
+        self.progressChanged.emit()
+        self._set("_saving_file", filename, self.savingChanged)
+
+    def _on_item_saved(self, filename: str, ok: bool, deleted: bool) -> None:
+        """One dive of a Save all is done: show it as saved right away rather
+        than when the whole batch is."""
+        self._set("_saving_file", "", self.savingChanged)
+        if not ok:
+            return
+        if deleted:
+            if filename in self._deleting:
+                self._deleting.remove(filename)
+            self._pending.pop(filename, None)
+            self._model.remove_row(filename)
+            self.diveCountChanged.emit()
+        else:
+            # only the values that were sent: a dive edited again while it
+            # uploaded keeps its newer edits pending
+            if self._pending.get(filename) is self._save_sent.get(filename):
+                self._pending.pop(filename, None)
+            self._refresh_saved_row(filename)
+        self._pending_changed()
+
+    def _refresh_saved_row(self, filename: str) -> None:
+        try:
+            if self.service == "garmin" and self._save_known is not None:
+                rows = dive_cache.list_garmin_dives(self._save_account, known=self._save_known)
+                _garmin_table_values(rows)
+            else:
+                rows = [r for r in self._list_dives() if r.get("filename") == filename]
+        except Exception as e:
+            logger.debug("Re-listing saved dive %s failed: %s", filename, e)
+            return
+        if rows:
+            self._model.merge_rows(rows, self._sort_key, self._sort_ascending)
 
     @Slot()
     def requestDelete(self) -> None:
@@ -1006,12 +1125,13 @@ class DivesController(QObject):
         self._set("_status", f"Marked for deletion. Save all changes deletes it from {self.serviceName}; "
                              "Undo keeps it.", self.statusChanged)
 
-    def _delete_one(self, filename: str, account: Optional[str] = None) -> bool:
+    def _delete_one(self, filename: str, account: Optional[str] = None, session=None) -> bool:
         """Worker thread: delete online first, then the cache file - a failed
         online delete leaves the dive marked and cached, to retry."""
         try:
             filepath, external_id = dive_cache.dive_external_id(self.service, filename, account)
-            if external_id and not dive_cache.push_remote_delete(self.service, external_id, account, filepath=filepath):
+            if external_id and not dive_cache.push_remote_delete(self.service, external_id, account, filepath=filepath,
+                                                                          adapter=session):
                 return False
             if not external_id:
                 logger.warning("%s has no %s id; removing it from the local cache only.", filename, self.serviceName)

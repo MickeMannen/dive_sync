@@ -1,0 +1,79 @@
+name: Build test image on the home server
+
+# Gitea Actions (the Gitea server on the local network, not GitHub). Every
+# push to a branch other than main builds the Docker image on the server
+# itself and replaces the "dive_sync_test" container with it, so a change
+# can be tried against real data without a GitHub release or a Docker Hub
+# push (those stay in .github/workflows/docker-release.yml).
+#
+# Needs a runner registered in host mode with the label "dive-sync-host"
+# (act_runner register --labels dive-sync-host:host) running as a user in
+# the docker group; every step below is plain shell on that host, so no
+# Node.js and no JavaScript actions are required.
+#
+# Repository variables (Settings -> Actions -> Variables), all optional:
+#   TEST_DATA_DIR  host folder mounted as /app/data   (default ~/dive_sync/test-data of the
+#                  runner's user; any other folder must be writable by that user)
+#   TEST_PORT      host port for the dashboard         (default 8081)
+#   TEST_TZ        container time zone                 (default Europe/Stockholm)
+
+on:
+  push:
+    branches-ignore:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-run:
+    runs-on: dive-sync-host
+    env:
+      IMAGE: dive_sync
+      CONTAINER: dive_sync_test
+      DATA_DIR: ${{ vars.TEST_DATA_DIR }}
+      PORT: ${{ vars.TEST_PORT || '8081' }}
+      TZ: ${{ vars.TEST_TZ || 'Europe/Stockholm' }}
+    steps:
+      - name: Check out the pushed commit
+        run: |
+          set -euo pipefail
+          rm -rf src && mkdir src && cd src
+          git init -q
+          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" \
+              fetch -q --depth 1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Build the image
+        run: |
+          set -euo pipefail
+          TAG=$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9_.-' '-')
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          docker build --pull -t "$IMAGE:$TAG" -t "$IMAGE:test" \
+            --build-arg "APP_VERSION=$GITHUB_REF_NAME@$(git -C src rev-parse --short HEAD)" src
+
+      - name: Replace the test container
+        run: |
+          set -euo pipefail
+          DATA_DIR="${DATA_DIR:-$HOME/dive_sync/test-data}"
+          mkdir -p "$DATA_DIR" || {
+            echo "Cannot create $DATA_DIR as $(id -un). Create it and give this user ownership, e.g.:"
+            echo "  sudo mkdir -p $DATA_DIR && sudo chown $(id -un): $DATA_DIR"
+            exit 1
+          }
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          docker run -d --name "$CONTAINER" --restart unless-stopped \
+            -p "$PORT:8000" -v "$DATA_DIR:/app/data" -e "TZ=$TZ" \
+            "$IMAGE:$TAG"
+          sleep 5
+          curl -fsS "http://127.0.0.1:$PORT/api/version" || { docker logs "$CONTAINER"; exit 1; }
+          echo
+          echo "Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT  (image $IMAGE:$TAG, data in $DATA_DIR)"
+
+      - name: Drop images of branches that are gone
+        run: |
+          set -euo pipefail
+          docker image prune -f >/dev/null
+          # keep the current tag and "test"; remove other branch tags of this image
+          docker images "$IMAGE" --format '{{.Tag}}' | grep -vx -e "$TAG" -e test \
+            | xargs -r -I{} docker rmi "$IMAGE:{}" || true

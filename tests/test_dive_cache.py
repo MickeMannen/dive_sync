@@ -667,3 +667,47 @@ def test_fit_device_reads_file_id(tmp_path):
     bad = tmp_path / "bad.fit"
     bad.write_bytes(b"not a fit file at all")
     assert garmin_files.fit_device(str(bad)) is None
+
+
+def test_one_remote_adapter_signs_in_once_for_a_batch(cache_dirs, monkeypatch):
+    """remote_adapter() hands several pushes one session: a batch of saves
+    and deletes signs in to Garmin once, not once per dive."""
+    import src.core.config as config
+    creds_file = os.path.join(cache_dirs, "credentials.json")
+    creds = config.CredentialsModel(garmin=config.GarminCredentials(username="user@example.com", password="pw"))
+    config.ConfigManager.save_credentials(creds, creds_file)
+    original_load = config.ConfigManager.load_credentials
+    monkeypatch.setattr(config.ConfigManager, "load_credentials", lambda path=creds_file: original_load(creds_file))
+
+    from src.core.services.garmin import GarminAdapter
+    logins, created = [], []
+    original_init = GarminAdapter.__init__
+
+    def init(self, *a, **k):
+        created.append(self)
+        original_init(self, *a, **k)
+    monkeypatch.setattr(GarminAdapter, "__init__", init)
+    monkeypatch.setattr(GarminAdapter, "login", lambda self: logins.append(1) or setattr(self, "logged_in", True) or True)
+    monkeypatch.setattr(GarminAdapter, "_map_to_unified", lambda self, summary, details: "unified-dive")
+    monkeypatch.setattr(GarminAdapter, "update_dive",
+                        lambda self, ext_id, dive: (self.logged_in or self.login()) and True)
+    monkeypatch.setattr(GarminAdapter, "delete_dive", lambda self, ext_id: (self.logged_in or self.login()) and True)
+
+    filepath = os.path.join(cache_dirs, "garmin", "default", "data", "1.json")
+    adapter = dive_cache.remote_adapter("garmin", "user@example.com")
+    assert dive_cache.push_remote_update("garmin", filepath, "user@example.com", adapter=adapter)
+    assert dive_cache.push_remote_update("garmin", filepath, "user@example.com", adapter=adapter)
+    assert dive_cache.push_remote_delete("garmin", "10002", "user@example.com", adapter=adapter)
+    assert len(created) == 1 and logins == [1]
+    assert dive_cache.remote_adapter("submersion") is None      # opens its own session per push
+
+
+def test_garmin_login_does_not_list_every_dive(monkeypatch, tmp_path):
+    """Signing in used to page through the whole activity list just to log a
+    dive count - seconds per sign-in on a large log."""
+    from src.core.services.garmin import GarminAdapter
+    adapter = GarminAdapter("user@example.com", "pw", token_dir=str(tmp_path))
+    listed = []
+    monkeypatch.setattr(adapter.client, "login", lambda *a, **k: None)
+    monkeypatch.setattr(adapter.client, "get_activities", lambda *a, **k: listed.append(a) or [])
+    assert adapter.login() and listed == []

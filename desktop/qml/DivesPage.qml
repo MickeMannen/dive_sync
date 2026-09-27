@@ -47,6 +47,88 @@ ColumnLayout {
         if (!filename || detailCard.formSnapshot === "") return
         if (JSON.stringify(formPayload()) !== detailCard.formSnapshot) controller.stage(filename, formPayload())
     }
+    // ---- editing in the table ----------------------------------------------
+    // A double-clicked cell edits the same value as its field in the form
+    // below, through the same staging: the edit lands in the form as well,
+    // and Save / Save all treat it like one typed there. null for a column
+    // that has no editable field (derived values, the gas list, ids).
+    function cellTarget(key) {
+        switch (key) {
+        case "date": return { field: fDate, key: "date" }
+        case "time": return { field: fTime, key: "time" }
+        case "dive_number": return controller.diveNumberEditable ? { field: fDiveNumber, key: "dive_number" } : null
+        case "duration": return page.profileLocked ? null : { field: fDuration, key: "duration" }
+        case "max_depth": return page.profileLocked ? null : { field: fMaxDepth, key: "max_depth" }
+        case "water_temp": return { field: fWaterTemp, key: "water_temp" }
+        case "visibility": return controller.hasVisibility ? { field: fVisibility, key: "visibility" } : null
+        case "buddy": return { field: fBuddy, key: "buddy" }
+        case "weight": return { field: fWeight, key: "weight" }
+        case "location": return controller.splitSiteNames ? { field: fLocationName, key: "location_name" }
+                                                           : { field: fLocation, key: "location" }
+        case "activity_name": return controller.splitSiteNames ? { field: fActivityName, key: "activity_name" } : null
+        case "notes": return { field: fNotes, key: "notes" }
+        }
+        return null
+    }
+    function selectRow(row) {
+        if (row === page.selectedRow) return
+        page.stageCurrent()
+        page.selectedRow = row
+        controller.select(row)
+    }
+    function startCellEdit(row, column) {
+        page.commitCellEdit()
+        page.selectRow(row)
+        var filename = detailCard.sel.filename
+        var target = page.cellTarget(controller.model.columnKey(column))
+        if (!filename || !target || controller.deletingFiles.indexOf(filename) >= 0) return
+        // one line in the table: notes of several lines are edited in the form
+        if (target.key === "notes" && target.field.text.indexOf("\n") >= 0) {
+            target.field.forceActiveFocus()
+            return
+        }
+        table.positionViewAtIndex(table.index(row, column), TableView.Contain)
+        table.forceLayout()
+        var cell = table.itemAtIndex(table.index(row, column))
+        if (!cell) return
+        cellEditor.filename = filename
+        cellEditor.column = column
+        cellEditor.target = target
+        cellEditor.x = cell.x
+        cellEditor.y = cell.y
+        cellEditor.width = cell.width
+        cellEditor.height = cell.height
+        cellEditor.text = target.field.text
+        cellEditor.visible = true
+        cellEditor.forceActiveFocus()
+        cellEditor.selectAll()
+    }
+    // Stages the edited value right away - no Save needed - and shows the
+    // dive with it, in the table and in the form.
+    function commitCellEdit() {
+        if (!cellEditor.visible) return
+        var filename = cellEditor.filename, target = cellEditor.target, text = cellEditor.text
+        cellEditor.visible = false
+        if (!target || text === target.field.text || filename !== detailCard.sel.filename) return
+        var payload = page.formPayload()
+        payload[target.key] = text
+        controller.stage(filename, payload)
+        controller.select(controller.rowOf(filename))
+    }
+    function cancelCellEdit() { cellEditor.visible = false }
+    // Tab / Shift+Tab: stage this cell and edit the next editable one in the row
+    function moveCellEdit(step) {
+        var filename = cellEditor.filename, column = cellEditor.column
+        page.commitCellEdit()
+        var row = controller.rowOf(filename)
+        if (row < 0) return
+        for (var c = column + step; c >= 0 && c < table.columns; c += step) {
+            if (page.cellTarget(controller.model.columnKey(c))) {
+                page.startCellEdit(row, c)
+                return
+            }
+        }
+    }
     function isDeleting(row) {
         var r = controller.model.row(row)
         return !!r && controller.deletingFiles.indexOf(r.filename) >= 0
@@ -131,7 +213,7 @@ ColumnLayout {
                 visible: controller.stoppable
                 onClicked: controller.stop()
                 Tip {
-                    text: "Stops after the dive being fetched now; what has arrived so far is kept"
+                    text: "Stops after the current dive; what is done so far is kept"
                     visible: parent.hovered
                 }
             },
@@ -237,6 +319,7 @@ ColumnLayout {
                             cursorShape: Qt.PointingHandCursor
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             onClicked: function (mouse) {
+                                page.commitCellEdit()
                                 if (mouse.button === Qt.RightButton)
                                     columnDialog.open()
                                 else
@@ -279,8 +362,11 @@ ColumnLayout {
                             verticalAlignment: Text.AlignVCenter
                             readonly property bool pending: column === 0 && controller.pendingFiles.length > 0 && page.isPending(row)
                             readonly property bool deleting: controller.deletingFiles.length > 0 && page.isDeleting(row)
+                            // the dive Save all is uploading at this moment
+                            readonly property bool saving: column === 0 && controller.savingFile !== ""
+                                                           && controller.model.row(row).filename === controller.savingFile
                             readonly property bool fitCell: controller.model.columnKey(column) === "fit"
-                            text: pending ? (deleting ? "🗑 " : "✎ ") + display : display
+                            text: saving ? "⏳ " + display : pending ? (deleting ? "🗑 " : "✎ ") + display : display
                             font.italic: pending
                             font.strikeout: deleting
                             opacity: deleting ? 0.6 : 1
@@ -293,15 +379,37 @@ ColumnLayout {
                         }
                         MouseArea {
                             anchors.fill: parent
-                            onClicked: { page.stageCurrent(); page.selectedRow = row; controller.select(row) }
+                            onClicked: { page.commitCellEdit(); page.selectRow(row) }
+                            onDoubleClicked: page.startCellEdit(row, column)
                         }
+                    }
+                    // The one editor for a double-clicked cell, laid over it
+                    // (a child of the table's content, so it scrolls along).
+                    TextField {
+                        id: cellEditor
+                        objectName: "cellEditor"
+                        property string filename: ""
+                        property int column: -1
+                        property var target: null
+                        visible: false
+                        z: 10
+                        padding: 2
+                        leftPadding: 5
+                        font.pixelSize: 12
+                        selectByMouse: true
+                        onAccepted: page.commitCellEdit()
+                        onActiveFocusChanged: if (!activeFocus) page.commitCellEdit()
+                        Keys.onEscapePressed: page.cancelCellEdit()
+                        Keys.onTabPressed: page.moveCellEdit(1)
+                        Keys.onBacktabPressed: page.moveCellEdit(-1)
                     }
                     Connections {
                         target: controller.model
                         // dives listed while a refresh runs move the selected one down
-                        function onRowsInserted() { page.selectedRow = controller.rowOf(controller.selected.filename || "") }
-                        function onRowsRemoved() { page.selectedRow = controller.rowOf(controller.selected.filename || "") }
+                        function onRowsInserted() { page.commitCellEdit(); page.selectedRow = controller.rowOf(controller.selected.filename || "") }
+                        function onRowsRemoved() { page.commitCellEdit(); page.selectedRow = controller.rowOf(controller.selected.filename || "") }
                         function onModelReset() {
+                            page.commitCellEdit()
                             page.selectedRow = controller.rowOf(controller.selected.filename || "")
                             // set_columns() resets the model, and the leftover
                             // width depends on which columns are visible.
@@ -313,8 +421,10 @@ ColumnLayout {
         }
         RowLayout {
             spacing: 14
+            Text { text: "Double-click a cell to edit ·"; color: Theme.muted; font.pixelSize: 11 }
             Text { text: "Legend:"; color: Theme.muted; font.pixelSize: 11 }
             Text { text: "✎ unsaved changes"; color: Theme.accent; font.pixelSize: 11 }
+            Text { text: "⏳ saving now"; color: Theme.muted; font.pixelSize: 11 }
             Text { text: "🗑 marked for deletion"; color: Theme.danger; font.pixelSize: 11 }
             Text { visible: controller.fitSupported; text: "✓ FIT downloaded"; color: page.fitOk; font.pixelSize: 11; font.bold: true }
             Text { visible: controller.fitSupported; text: "✗ FIT not downloaded"; color: Theme.danger; font.pixelSize: 11; font.bold: true }

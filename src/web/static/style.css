@@ -425,9 +425,29 @@ input[type="file"] { display: inline; width: auto; max-width: none; }
 .job-editor h3 { margin: 0.2rem 0 0.6rem; font-size: 0.95rem; }
 
 /* conflicts page */
+/* The toolbar (Save changes, progress, messages) stays in view while the
+   list below it scrolls: a long queue otherwise hides the outcome of a pick
+   made far down the page. */
+.conflicts-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+}
+.conflicts-toolbar p { margin-bottom: 0.4rem; }
+.conflicts-actions { margin-top: 0; }
+.conflicts-toolbar #conflicts-message { display: block; margin-top: 0.4rem; }
+.conflicts-toolbar .job-progress { margin-top: 0.4rem; }
+#conflicts-staged:not(:empty) { font-weight: 600; color: var(--text); }
 .conflict-group h3 { margin: 1rem 0 0.4rem; font-size: 0.95rem; }
+.conflict-group:first-child h3 { margin-top: 0.2rem; }
 .conflict { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; margin-bottom: 0.5rem; }
 .conflict td { padding-right: 1.2rem; }
+.conflict.staged { border-color: var(--accent); }
+.conflict.staged tr.chosen th, .conflict.staged tr.chosen td { background: rgba(37, 99, 235, 0.12); }
+.conflict.staged tr.loser td:nth-child(2) { color: var(--muted); text-decoration: line-through; }
+.conflict .pick { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.conflict .pick-mark { color: var(--accent); font-weight: 600; font-size: 0.85rem; }
 
 /* ---------- sync history ---------- */
 

@@ -76,6 +76,27 @@ def test_dive_table_model_columns_and_sorting(qapp, scratch_data_dir, fake_keyri
     assert sort_key("12 kg", True) == (0, 12.0) and sort_key(None, False) == (1, "")
 
 
+def test_sorting_by_date_orders_one_days_dives_by_time(qapp):
+    from desktop.controllers.dives import DiveTableModel
+    model = DiveTableModel(service="divelogs")
+    model.set_rows([{"date": "2026-06-22", "time": "09:15:00", "filename": "morning.json"},
+                    {"date": "2026-06-23", "time": "08:00:00", "filename": "next-day.json"},
+                    {"date": "2026-06-22", "time": "14:40:00", "filename": "afternoon.json"},
+                    {"date": "", "time": "10:00:00", "filename": "undated.json"},
+                    {"date": "2026-06-22", "time": "11:05:00", "filename": "midday.json"}])
+
+    def order():
+        return [model.row(i)["filename"] for i in range(model.rowCount())]
+
+    model.sort_rows("date", True)
+    assert order() == ["morning.json", "midday.json", "afternoon.json", "next-day.json", "undated.json"]
+    model.sort_rows("date", False)
+    assert order() == ["next-day.json", "afternoon.json", "midday.json", "morning.json", "undated.json"]
+    # a dive arriving during a refresh goes in at its time, not just its day
+    model.merge_rows([{"id": "n", "date": "2026-06-22", "time": "12:30:00", "filename": "lunch.json"}], "date", False)
+    assert order()[:4] == ["next-day.json", "afternoon.json", "lunch.json", "midday.json"]
+
+
 def test_dive_table_location_column_takes_the_leftover_width(qapp, scratch_data_dir, fake_keyring):
     """The view sizes the elastic column as width - fixedColumnsWidth(), so
     the row spans the window at any size instead of only near the one the
@@ -949,7 +970,7 @@ def test_dives_controller_stages_deletions_until_save_all(qapp, scratch_data_dir
     remote_ok = {"value": False}
     monkeypatch.setattr(dive_cache, "dive_external_id", lambda service, filename, *a, **k: (f"/x/{filename}", "id-" + filename))
     monkeypatch.setattr(dive_cache, "push_remote_delete",
-                        lambda service, external_id, username=None, filepath=None: calls.append(("remote", external_id)) or remote_ok["value"])
+                        lambda service, external_id, username=None, filepath=None, adapter=None: calls.append(("remote", external_id)) or remote_ok["value"])
     def local_delete(service, filename, *a):
         calls.append(("local", filename))
         listed[:] = [r for r in listed if r["filename"] != filename]
@@ -1057,6 +1078,96 @@ def test_conflicts_controller_lists_every_pair(qapp, scratch_data_dir, fake_keyr
     assert gps["pair_id"] == "garmin_subsurface::g@x::me@x.org" and gps["source_text"] == "4.7948, 103.684"
     assert brief(None) == "(empty)" and brief([{"o2": 21}]) == "1 item(s)" and brief(18.2) == "18.2"
 
+    # Picks are staged, undoable, and written together by save(): one engine
+    # per pair, every pick attempted, failed picks kept staged.
+    staged_signals = []
+    c.stagedChanged.connect(lambda: staged_signals.append(c.stagedCount))
+    c.stage(buddy["pair_id"], buddy["id"], "source")
+    c.stage(gps["pair_id"], gps["id"], "target")
+    assert c.stagedCount == 2 and c.staged == {buddy["id"]: "source", gps["id"]: "target"}
+    c.unstage(gps["id"])
+    assert c.staged == {buddy["id"]: "source"}
+    c.stage(gps["pair_id"], gps["id"], "target")
+    c.stage(gps["pair_id"], gps["id"], "source")           # picking the other side replaces the pick
+    assert c.staged[gps["id"]] == "source" and staged_signals[-1] == 2
+    c.discard()
+    assert c.stagedCount == 0
+    c.stage(buddy["pair_id"], buddy["id"], "source")
+    c.stage(gps["pair_id"], gps["id"], "target")
+    c.stage(gps["pair_id"], "ghost", "target")               # a pick for a conflict that vanished
+
+    calls, engines = [], {}
+
+    class FakeEngine:
+        def __init__(self, pair_id, conflicts_file):
+            self.pair_id, self.conflicts_file = pair_id, conflicts_file
+
+        def resolve_conflict(self, conflict_id, winner):
+            calls.append((self.pair_id, conflict_id, winner))
+            if conflict_id == "ghost":
+                raise ValueError("No conflict with id 'ghost'")
+            store = ConflictStore(self.conflicts_file)
+            found = store.get(conflict_id)
+            store.remove(conflict_id)
+            return found
+    files = {buddy["pair_id"]: os.path.join(base, "conflicts_g@x_d.json"),
+             gps["pair_id"]: os.path.join(base, "conflicts_garmin-g@x_subsurface-me@x.org.json")}
+    monkeypatch.setattr(c, "_engine", lambda pair_id: engines.setdefault(pair_id, FakeEngine(pair_id, files[pair_id])))
+    c.save()
+    assert c.busy and "3 picks" in c.message
+    c.stage(buddy["pair_id"], buddy["id"], "target")          # ignored while saving
+    assert wait_until(qapp, lambda: not c.busy)
+    assert sorted(calls) == sorted([(buddy["pair_id"], buddy["id"], "source"), (gps["pair_id"], gps["id"], "target"),
+                                    (gps["pair_id"], "ghost", "target")])
+    assert set(engines) == {buddy["pair_id"], gps["pair_id"]}
+    assert c.count == 0 and c.groups == []
+    assert c.message.startswith("Saved 2 of 3.") and "ghost" in c.message
+    # the failed pick was for a conflict no longer listed, so load() dropped it
+    assert c.stagedCount == 0
+    c.save()                                                   # nothing staged: a no-op
+    assert not c.busy
+
+
+def test_conflicts_page_renders_staged_picks(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """The QML page instantiates its conflict delegates, and staging a pick
+    (Keep this / Undo) re-renders them without warnings."""
+    import os
+    from desktop import app as desktop_app
+    from desktop import credentials as creds_store
+    from desktop import logging_bridge
+    from src.core import config, dive_cache
+    from src.core.config import CredentialsModel, DivelogsCredentials, GarminCredentials
+    from src.core.conflicts import Conflict, ConflictStore
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    creds_store.save_credentials_model(CredentialsModel(
+        garmin=[GarminCredentials(username="g@x", password="pw")], divelogs=[DivelogsCredentials(username="d", password="pw")]))
+    path = os.path.join(os.path.dirname(config.SETTINGS_FILE), "sync", "conflicts_g@x_d.json")
+    ConflictStore(path).save([Conflict(
+        id=Conflict.make_id("buddy", "garmin", "divelogs", str(i), str(i + 100)), link_id="buddy",
+        source_service="garmin", target_service="divelogs", source_external_id=str(i), target_external_id=str(i + 100),
+        source_key="garmin.buddy", target_key="divelogs.buddy", field_type="text",
+        dive_ids={"garmin": str(i), "divelogs": str(i + 100)}, source_value=f"Anna {i}", target_value=f"Bob {i}",
+        dive_time=f"2026-06-{10 + i:02d} 09:20:00") for i in range(3)])
+    warnings = []
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    engine = desktop_app.create_engine(controllers, "Conflicts",
+                                       on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    c = controllers["conflictsController"]
+    assert c.count == 3
+    first = c.groups[0]["conflicts"][0]
+    c.stage(first["pair_id"], first["id"], "target")
+    wait(qapp, 150)
+    assert c.stagedCount == 1
+    c.unstage(first["id"])
+    wait(qapp, 150)
+    assert c.stagedCount == 0
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)
+
 
 def test_about_info(qapp, scratch_data_dir, fake_keyring):
     import os
@@ -1107,3 +1218,101 @@ def test_tooltips_use_the_themed_tip():
     offenders = [f"{os.path.basename(p)}:{n}" for p in glob.glob(os.path.join(qml_dir, "*.qml"))
                  for n, line in enumerate(open(p, encoding="utf-8"), 1) if re.search(r"\bToolTip\.\w+\s*:", line)]
     assert offenders == []
+
+
+def test_save_all_reports_progress_and_updates_each_dive_as_it_is_saved(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """Save all names the dive it is on and how far it has got, and each dive
+    loses its unsaved mark as soon as its own upload is done - not only when
+    the whole batch is. A dive edited again while it uploads stays pending."""
+    import threading
+    from desktop.controllers.dives import DivesController
+    from src.core import dive_cache
+    listed = [{"date": "2026-06-22", "time": "10:00:00", "date_time": "2026-06-22 10:00:00", "filename": f"{n}.json",
+               "location": f"Site {n}", "buddy": ""} for n in (1, 2, 3)]
+    monkeypatch.setattr(dive_cache, "list_dives", lambda service, *a, **k: [dict(r) for r in listed])
+    gates = {f"{n}.json": threading.Event() for n in (1, 2, 3)}
+
+    def update(service, filename, **kw):
+        next(r for r in listed if r["filename"] == filename)["buddy"] = kw["buddy"]
+        return filename
+    monkeypatch.setattr(dive_cache, "update_dive_fields", update)
+    monkeypatch.setattr(dive_cache, "push_remote_update", lambda service, filepath, *a, **k: gates[filepath].wait(5))
+    c = DivesController("subsurface")
+    c.setVisibleColumns(["date", "location", "buddy"])
+    c.load()
+    form = lambda buddy: {"date": "2026-06-22", "time": "10:00:00", "location": "x", "buddy": buddy}
+    for n in (1, 2, 3):
+        c.stage(f"{n}.json", dict(form(f"B{n}"), location=f"Site {n}"))
+    buddy = lambda f: c.model.data(c.model.index(c.rowOf(f), c.visibleColumns.index("buddy")))
+
+    c.saveAll()
+    assert wait_until(qapp, lambda: c.savingFile == "1.json")
+    assert c.progressText == "Saving 2026-06-22 Site 1 (1/3)" and c.progressFraction == 0 and c.stoppable
+    gates["1.json"].set()
+    assert wait_until(qapp, lambda: c.savingFile == "2.json")
+    assert sorted(c.pendingFiles) == ["2.json", "3.json"] and c.busy        # 1 is done, the rest still going
+    assert buddy("1.json") == "B1" and c.progressText.endswith("(2/3)")
+    c.stage("2.json", dict(form("newer"), location="Site 2"))                # edited again while it uploads
+    gates["2.json"].set()
+    gates["3.json"].set()
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.pendingFiles == ["2.json"] and c.savingFile == "" and c.progressFraction == -1
+    assert c.status == "Saved 3 dives."
+
+
+def test_editing_a_dive_in_the_table(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """A double-clicked cell edits the dive in place: Enter / Tab stages the
+    value without a Save and the form below shows it too; Esc drops it."""
+    from PySide6.QtCore import QMetaObject, QObject, Q_ARG
+    from desktop import app as desktop_app
+    from desktop import logging_bridge
+    from src.core import dive_cache
+    rows = [{"date": "2026-06-22", "time": "10:00:00", "date_time": "2026-06-22 10:00:00", "dive_number": 1,
+             "activity_name": "Reef", "location_name": "Gozo", "filename": "1.json", "buddy": "A", "weight": "4"},
+            {"date": "2026-06-23", "time": "11:00:00", "date_time": "2026-06-23 11:00:00", "dive_number": 2,
+             "activity_name": "Wreck", "location_name": "", "filename": "2.json", "buddy": "", "weight": ""}]
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [dict(r) for r in rows])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "get_samples", lambda *a, **k: [])
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    c = controllers["garminDives"]
+    c.setVisibleColumns(["date", "dive_number", "buddy", "weight", "avg_depth"])
+    warnings = []
+    engine = desktop_app.create_engine(controllers, "Garmin Dives",
+                                       on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    page = root.findChild(QObject, "divesPage-Garmin Connect")
+    editor = root.findChild(QObject, "cellEditor")
+    buddy_field = root.findChild(QObject, "field-buddy")
+    call = lambda name, *args: QMetaObject.invokeMethod(page, name, *[Q_ARG("QVariant", a) for a in args])
+    row, col = c.rowOf("1.json"), c.visibleColumns.index("buddy")
+
+    call("startCellEdit", row, col)
+    wait(qapp)
+    assert editor.property("visible") and editor.property("text") == "A"
+    assert c.selected["filename"] == "1.json"                                # double-click selects the dive
+    editor.setProperty("text", "Anna")
+    call("moveCellEdit", 1)                                                  # Tab: stage, go on to Weight
+    wait(qapp)
+    assert c.pendingFiles == ["1.json"] and c.selected["buddy"] == "Anna"
+    assert buddy_field.property("text") == "Anna"                           # the form shows the edit too
+    assert c.model.data(c.model.index(row, col)) == "Anna"
+    assert editor.property("visible") and editor.property("text") == "4"
+    editor.setProperty("text", "6")
+    call("moveCellEdit", 1)                                                  # Avg depth is derived: no next cell
+    wait(qapp)
+    assert not editor.property("visible") and c.selected["weight"] == "6" and c.selected["buddy"] == "Anna"
+
+    call("startCellEdit", c.rowOf("2.json"), col)
+    wait(qapp)
+    editor.setProperty("text", "dropped")
+    call("cancelCellEdit")                                                   # Esc
+    wait(qapp)
+    assert not editor.property("visible") and c.pendingFiles == ["1.json"]
+    call("startCellEdit", c.rowOf("2.json"), c.visibleColumns.index("avg_depth"))
+    wait(qapp)
+    assert not editor.property("visible")                                    # not an editable column
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)

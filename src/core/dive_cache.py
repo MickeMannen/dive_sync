@@ -1231,9 +1231,34 @@ def download_garmin_fits(filenames: List[str], username: Optional[str] = None,
     return result
 
 
-def push_remote_update(service: str, filepath: str, username: Optional[str] = None) -> bool:
+def remote_adapter(service: str, username: Optional[str] = None, filepath: Optional[str] = None):
+    """A Garmin or Divelogs adapter for ``username`` (else the account the
+    cached ``filepath`` belongs to), to hand to several push_remote_update /
+    push_remote_delete calls so a batch signs in once instead of per dive.
+    It signs in on its first call. None for the UnifiedDive-cached services
+    (they open and finish their own session per call) and when the account
+    has no stored password."""
+    if is_unified_cache(service):
+        return None
+    if service not in ("garmin", "divelogs"):
+        raise ValueError(f"Unknown service: {service!r}")
+    username = username or (_username_from_filepath(service, filepath) if filepath else None)
+    active_creds = _active_credentials(service, username)
+    if not active_creds.username or not active_creds.password:
+        logger.warning("%s credentials not found, skipping remote changes.", service)
+        return None
+    if service == "garmin":
+        from src.core.services.garmin import GarminAdapter
+        return GarminAdapter(active_creds.username, active_creds.password,
+                             token_dir=layout.garmin_token_dir(active_creds.username, active_creds.token_dir))
+    from src.core.services.divelogs import DivelogsAdapter
+    return DivelogsAdapter(active_creds.username, active_creds.password)
+
+
+def push_remote_update(service: str, filepath: str, username: Optional[str] = None, adapter=None) -> bool:
     """Push a cached dive file's current contents to the remote service.
-    Call after update_dive_fields() has written the file."""
+    Call after update_dive_fields() has written the file. ``adapter`` (from
+    remote_adapter) reuses one signed-in session across a batch."""
     if is_unified_cache(service):
         from src.core.models import UnifiedDive
         with open(filepath, "r") as f:
@@ -1257,10 +1282,8 @@ def push_remote_update(service: str, filepath: str, username: Optional[str] = No
             logger.error("%s remote update failed.", service.capitalize())
         return success
 
-    username = username or _username_from_filepath(service, filepath)
-    active_creds = _active_credentials(service, username)
-    if not active_creds.username or not active_creds.password:
-        logger.warning("%s credentials not found, skipping remote update.", service)
+    adapter = adapter or remote_adapter(service, username, filepath)
+    if adapter is None:
         return False
 
     with open(filepath, "r") as f:
@@ -1274,8 +1297,6 @@ def push_remote_update(service: str, filepath: str, username: Optional[str] = No
             logger.error("No Garmin activityId found in cache for %s; cannot update remotely.", filepath)
             return False
 
-        from src.core.services.garmin import GarminAdapter
-        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=layout.garmin_token_dir(active_creds.username, active_creds.token_dir))
         unified_dive = adapter._map_to_unified(summary, details)
         logger.info("Updating Garmin Connect for Activity ID %s...", activity_id)
         success = adapter.update_dive(str(activity_id), unified_dive)
@@ -1285,8 +1306,6 @@ def push_remote_update(service: str, filepath: str, username: Optional[str] = No
             logger.error("No Divelogs ID found in cache for %s; cannot update remotely.", filepath)
             return False
 
-        from src.core.services.divelogs import DivelogsAdapter
-        adapter = DivelogsAdapter(active_creds.username, active_creds.password)
         unified_dive = adapter._map_to_unified(dive_data)
         logger.info("Updating Divelogs.org for Dive ID %s...", dive_id)
         success = adapter.update_dive(str(dive_id), unified_dive)
@@ -1300,7 +1319,8 @@ def push_remote_update(service: str, filepath: str, username: Optional[str] = No
     return success
 
 
-def push_remote_delete(service: str, external_id: str, username: Optional[str] = None, filepath: Optional[str] = None) -> bool:
+def push_remote_delete(service: str, external_id: str, username: Optional[str] = None, filepath: Optional[str] = None,
+                       adapter=None) -> bool:
     if is_unified_cache(service):
         adapter = _unified_adapter(service, username or (_username_from_filepath(service, filepath) if filepath else None))
         if not adapter.login():
@@ -1312,20 +1332,9 @@ def push_remote_delete(service: str, external_id: str, username: Optional[str] =
         finally:
             adapter.finish()
 
-    username = username or (_username_from_filepath(service, filepath) if filepath else None)
-    active_creds = _active_credentials(service, username)
-    if not active_creds.username or not active_creds.password:
-        logger.warning("%s credentials not found, skipping remote delete.", service)
+    adapter = adapter or remote_adapter(service, username, filepath)
+    if adapter is None:
         return False
-
-    if service == "garmin":
-        from src.core.services.garmin import GarminAdapter
-        adapter = GarminAdapter(active_creds.username, active_creds.password, token_dir=layout.garmin_token_dir(active_creds.username, active_creds.token_dir))
-    elif service == "divelogs":
-        from src.core.services.divelogs import DivelogsAdapter
-        adapter = DivelogsAdapter(active_creds.username, active_creds.password)
-    else:
-        raise ValueError(f"Unknown service: {service!r}")
 
     logger.info("Deleting %s remotely for ID %s...", service, external_id)
     success = adapter.delete_dive(str(external_id))

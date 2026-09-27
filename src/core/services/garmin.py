@@ -105,7 +105,6 @@ class GarminAdapter(BaseDiveAdapter):
             self.client.login(self.tokenstore_path)
             self.logged_in = True
             logger.info("Successfully authenticated with Garmin Connect for user '%s'.", self.username)
-            self._fetch_user_preferences()
             return True
         except GarminConnectTooManyRequestsError as e:
             logger.error("Failed to authenticate with Garmin Connect for user '%s': Rate limit exceeded (HTTP 429). "
@@ -123,37 +122,6 @@ class GarminAdapter(BaseDiveAdapter):
             else:
                 logger.error("Failed to authenticate with Garmin Connect for user '%s': %s", self.username, e)
             return False
-
-    def _fetch_user_preferences(self) -> None:
-        try:
-            logger.info("Fetching Garmin user profile settings for user '%s'...", self.username)
-            
-            start = 0
-            limit = 50
-            all_dives = []
-
-            while True:
-                response = self.client.get_activities(start, limit, activitytype="diving")
-                if not response:
-                    break
-                
-                dives_batch = [
-                    act for act in response 
-                    if act.get("activityType", {}).get("typeKey") == "diving" or 
-                       (act.get("activityTypeDTO", {}).get("typeKey") or "").endswith("diving") or
-                       "diving" in (act.get("activityType", {}).get("typeKey") or "")
-                ]
-                all_dives.extend(dives_batch)
-                
-                if len(response) < limit:
-                    break
-                start += limit
-                time.sleep(self.cooldown_seconds)
-            
-            dives_count = len(all_dives)
-            logger.info("Fetching Garmin user profile settings for user '%s'... - %d dives found", self.username, dives_count)
-        except Exception as e:
-            logger.warning("Error fetching Garmin user preferences: %s", e)
 
     def _list_dive_activities(self) -> List[Dict[str, Any]]:
         """Page through the activity list and keep the diving ones."""

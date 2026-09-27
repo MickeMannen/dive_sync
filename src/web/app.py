@@ -5,7 +5,7 @@ import logging
 import asyncio
 import threading
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
@@ -589,6 +589,40 @@ def resolve_conflict(conflict_id: str, data: ResolveRequest):
     except Exception as e:
         logger.error("Conflict resolution failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class ResolveDecision(BaseModel):
+    id: str
+    winner: str
+    pair: Optional[str] = None
+
+
+class ResolveBatchRequest(BaseModel):
+    decisions: List[ResolveDecision]
+
+
+@app.post("/api/conflicts/resolve")
+def resolve_conflicts(data: ResolveBatchRequest):
+    """Apply the picks the Conflicts page staged, in one request: one engine
+    (one login) per pair, every decision attempted even when an earlier one
+    fails, and a per-decision outcome so the page can keep the failed picks
+    staged for another try."""
+    if scheduler.is_sync_running:
+        raise HTTPException(status_code=409, detail="A synchronization run is in progress; try again when it has finished.")
+    engines: Dict[str, Any] = {}
+    results = []
+    for decision in data.decisions:
+        key = decision.pair or "default"
+        try:
+            if key not in engines:
+                engines[key] = _engine_for_pair_id(decision.pair)
+            engines[key].resolve_conflict(decision.id, decision.winner)
+            results.append({"id": decision.id, "status": "resolved"})
+        except Exception as e:
+            logger.error("Conflict resolution of %s failed: %s", decision.id, e)
+            results.append({"id": decision.id, "status": "failed", "detail": str(e)})
+    resolved = sum(1 for r in results if r["status"] == "resolved")
+    return {"resolved": resolved, "failed": len(results) - resolved, "results": results}
 
 
 @app.post("/api/sync/full-compare")

@@ -24,6 +24,7 @@ class ConflictsController(QObject):
     conflictsChanged = Signal()
     messageChanged = Signal()
     busyChanged = Signal()
+    stagedChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -31,6 +32,10 @@ class ConflictsController(QObject):
         self._message = ""
         self._busy = False
         self._worker = None
+        # Picks made on the page wait here until Save changes writes them all
+        # at once; Undo on a conflict, or Discard picks, takes them back.
+        # conflict id -> {"pair_id", "winner"}
+        self._staged: Dict[str, Dict[str, str]] = {}
 
     @Property("QVariantList", notify=conflictsChanged)
     def groups(self):
@@ -54,6 +59,16 @@ class ConflictsController(QObject):
     @Property(bool, notify=busyChanged)
     def busy(self) -> bool:
         return self._busy
+
+    @Property("QVariantMap", notify=stagedChanged)
+    def staged(self):
+        """conflict id -> the side picked to win ("source" / "target"), for
+        every pick not yet saved."""
+        return {cid: pick["winner"] for cid, pick in self._staged.items()}
+
+    @Property(int, notify=stagedChanged)
+    def stagedCount(self) -> int:
+        return len(self._staged)
 
     def _set_message(self, text: str) -> None:
         self._message = text
@@ -158,6 +173,11 @@ class ConflictsController(QObject):
                            "conflicts": conflicts})
         self._groups = groups
         self.conflictsChanged.emit()
+        # a pick for a conflict that a sync meanwhile re-evaluated away is dropped
+        present = {c["id"] for g in groups for c in g["conflicts"]}
+        if any(cid not in present for cid in self._staged):
+            self._staged = {cid: pick for cid, pick in self._staged.items() if cid in present}
+            self.stagedChanged.emit()
         if problems:
             self._set_message("Could not read conflicts for " + "; ".join(problems))
         else:
@@ -193,6 +213,86 @@ class ConflictsController(QObject):
 
         worker = Worker(work, parent=self)
         worker.finished_ok.connect(done)
+        worker.failed.connect(fail)
+        self._worker = worker
+        worker.start()
+
+    @Slot(str, str, str)
+    def stage(self, pair_id: str, conflict_id: str, winner: str) -> None:
+        """Pick a side for one conflict; nothing is written until save()."""
+        if self._busy or winner not in ("source", "target"):
+            return
+        self._staged[conflict_id] = {"pair_id": pair_id, "winner": winner}
+        self.stagedChanged.emit()
+
+    @Slot(str)
+    def unstage(self, conflict_id: str) -> None:
+        """Undo one pick."""
+        if self._busy or conflict_id not in self._staged:
+            return
+        del self._staged[conflict_id]
+        self.stagedChanged.emit()
+
+    @Slot()
+    def discard(self) -> None:
+        """Take back every pick."""
+        if self._busy or not self._staged:
+            return
+        self._staged = {}
+        self.stagedChanged.emit()
+        self._set_message("")
+
+    @Slot()
+    def save(self) -> None:
+        """Write every staged pick to the losing service: one engine (one
+        login) per pair, every pick attempted even when an earlier one fails.
+        Picks that failed stay staged for another try."""
+        if self._busy or not self._staged:
+            return
+        decisions = [(cid, pick["pair_id"], pick["winner"]) for cid, pick in self._staged.items()]
+        self._busy = True
+        self.busyChanged.emit()
+        n = len(decisions)
+        self._set_message(f"Updating the services for {n} {'pick' if n == 1 else 'picks'}…")
+
+        def work():
+            credentials.begin_operation()
+            engines: Dict[str, Any] = {}
+            done, failures = [], []
+            try:
+                for cid, pair_id, winner in decisions:
+                    try:
+                        if pair_id not in engines:
+                            engines[pair_id] = self._engine(pair_id)
+                        engines[pair_id].resolve_conflict(cid, winner)
+                        done.append(cid)
+                    except Exception as e:
+                        failures.append((cid, str(e)))
+            finally:
+                credentials.end_operation()
+            return done, failures
+
+        def finished(result):
+            done, failures = result
+            for cid in done:
+                self._staged.pop(cid, None)
+            self.stagedChanged.emit()
+            self._busy = False
+            self.busyChanged.emit()
+            self.load()
+            parts = [f"Saved {len(done)} of {n}."]
+            if failures:
+                parts.append(f"{len(failures)} failed and {'is' if len(failures) == 1 else 'are'} still staged: "
+                             + "; ".join(detail for _, detail in failures))
+            self._set_message(" ".join(parts))
+
+        def fail(message):
+            self._busy = False
+            self.busyChanged.emit()
+            self._set_message(f"Failed: {message}")
+
+        worker = Worker(work, parent=self)
+        worker.finished_ok.connect(finished)
         worker.failed.connect(fail)
         self._worker = worker
         worker.start()

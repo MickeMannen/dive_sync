@@ -1689,6 +1689,12 @@ async function testBoard() {
 
 // ---------------------------------------------------------------- conflicts
 
+// Picks made on the Conflicts page wait here until Save changes writes them
+// all at once; Undo on a conflict, or Discard picks, takes them back. Keyed by
+// conflict id: {pairId, winner}.
+const stagedPicks = new Map();
+let conflictsSaving = false;
+
 async function loadConflicts() {
   const box = $("conflict-groups");
   let data;
@@ -1700,6 +1706,9 @@ async function loadConflicts() {
     $("conflicts-message").textContent = `Could not load conflicts: ${e.message || e}`;
     return;
   }
+  // a pick for a conflict that a sync meanwhile re-evaluated away is dropped
+  const present = new Set(data.groups.flatMap((g) => g.conflicts.map((c) => c.id)));
+  [...stagedPicks.keys()].filter((id) => !present.has(id)).forEach((id) => stagedPicks.delete(id));
   box.innerHTML = "";
   $("conflicts-message").textContent = data.groups.length ? "" : "No conflicts waiting.";
   data.groups.forEach((group) => {
@@ -1709,31 +1718,99 @@ async function loadConflicts() {
     group.conflicts.forEach((c) => {
       const item = document.createElement("div");
       item.className = "conflict";
-      item.innerHTML = `<div><strong>${escapeHtml(c.field_label)}</strong> <span class="muted">dive ${escapeHtml(c.dive_time)}</span></div>
-        <table class="about-table">
-          <tr><th>${escapeHtml(c.source_name)}</th><td>${escapeHtml(c.source_text)}</td>
-              <td><button type="button" class="secondary keep-source" title="Writes this value to ${escapeHtml(c.target_name)}">Keep this</button></td></tr>
-          <tr><th>${escapeHtml(c.target_name)}</th><td>${escapeHtml(c.target_text)}</td>
-              <td><button type="button" class="secondary keep-target" title="Writes this value to ${escapeHtml(c.source_name)}">Keep this</button></td></tr>
-        </table>`;
-      item.querySelector(".keep-source").addEventListener("click", () => resolveConflict(c.pair_id, c.id, "source"));
-      item.querySelector(".keep-target").addEventListener("click", () => resolveConflict(c.pair_id, c.id, "target"));
+      item.dataset.id = c.id;
+      renderConflict(item, c);
       section.appendChild(item);
     });
     box.appendChild(section);
   });
+  updateConflictsToolbar();
 }
 
-async function resolveConflict(pairId, id, winner) {
-  $("conflicts-message").textContent = "Updating the service…";
-  const res = await fetch(`/api/conflicts/${encodeURIComponent(id)}/resolve`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ winner, pair: pairId }),
+function renderConflict(item, c) {
+  const pick = stagedPicks.get(c.id);
+  const winner = pick ? pick.winner : null;
+  const side = (which, name, text, other) => {
+    const cls = winner ? (winner === which ? "chosen" : "loser") : "";
+    const cell = winner === which
+      ? `<span class="pick"><span class="pick-mark">✓ Keeping this</span><button type="button" class="secondary undo" title="Take this pick back">Undo</button></span>`
+      : winner ? ""
+      : `<button type="button" class="secondary keep" data-winner="${which}" title="Stages this value for ${escapeHtml(other)}; nothing is written until Save changes">Keep this</button>`;
+    return `<tr class="${cls}"><th>${escapeHtml(name)}</th><td>${escapeHtml(text)}</td><td>${cell}</td></tr>`;
+  };
+  item.classList.toggle("staged", !!winner);
+  item.innerHTML = `<div><strong>${escapeHtml(c.field_label)}</strong> <span class="muted">dive ${escapeHtml(c.dive_time)}</span></div>
+    <table class="about-table">
+      ${side("source", c.source_name, c.source_text, c.target_name)}
+      ${side("target", c.target_name, c.target_text, c.source_name)}
+    </table>`;
+  item.querySelectorAll(".keep").forEach((btn) => btn.addEventListener("click", () => {
+    if (conflictsSaving) return;
+    stagedPicks.set(c.id, { pairId: c.pair_id, winner: btn.dataset.winner });
+    renderConflict(item, c);
+    updateConflictsToolbar();
+  }));
+  const undo = item.querySelector(".undo");
+  if (undo) undo.addEventListener("click", () => {
+    if (conflictsSaving) return;
+    stagedPicks.delete(c.id);
+    renderConflict(item, c);
+    updateConflictsToolbar();
   });
-  const data = await res.json();
+}
+
+function updateConflictsToolbar() {
+  const n = stagedPicks.size;
+  $("conflicts-staged").textContent = n ? `${n} ${n === 1 ? "pick" : "picks"} waiting to be saved` : "";
+  $("conflicts-save").disabled = conflictsSaving || n === 0;
+  $("conflicts-discard").disabled = conflictsSaving || n === 0;
+  $("conflicts-reload").disabled = conflictsSaving;
+  document.querySelectorAll("#conflict-groups button").forEach((b) => { b.disabled = conflictsSaving; });
+}
+
+function discardConflictPicks() {
+  if (conflictsSaving || !stagedPicks.size) return;
+  stagedPicks.clear();
+  $("conflicts-message").textContent = "";
+  loadConflicts();
+}
+
+async function saveConflictPicks() {
+  if (conflictsSaving || !stagedPicks.size) return;
+  const decisions = [...stagedPicks.entries()].map(([id, pick]) => ({ id, winner: pick.winner, pair: pick.pairId }));
+  conflictsSaving = true;
+  updateConflictsToolbar();
+  $("conflicts-message").textContent = "";
+  $("conflicts-progress").hidden = false;
+  $("conflicts-progress-bar").removeAttribute("value");
+  $("conflicts-progress-text").textContent = `Updating the services for ${decisions.length} ${decisions.length === 1 ? "pick" : "picks"}…`;
+  let data, ok;
+  try {
+    const res = await fetch("/api/conflicts/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decisions }),
+    });
+    ok = res.ok;
+    data = await res.json();
+  } catch (e) {
+    ok = false;
+    data = { detail: e.message || String(e) };
+  }
+  conflictsSaving = false;
+  $("conflicts-progress").hidden = true;
+  if (!ok) {
+    // nothing was written: every pick stays staged for another try
+    updateConflictsToolbar();
+    $("conflicts-message").textContent = data.detail || "Saving failed.";
+    return;
+  }
+  const failed = data.results.filter((r) => r.status === "failed");
+  data.results.filter((r) => r.status === "resolved").forEach((r) => stagedPicks.delete(r.id));
   await loadConflicts();
-  $("conflicts-message").textContent = res.ok ? "Resolved." : (data.detail || "Failed.");
+  const parts = [`Saved ${data.resolved} of ${decisions.length}.`];
+  if (failed.length) parts.push(`${failed.length} failed and ${failed.length === 1 ? "is" : "are"} still staged: ` + failed.map((r) => r.detail).join("; "));
+  $("conflicts-message").textContent = parts.join(" ");
 }
 
 // ---------------------------------------------------------------- profile
@@ -1804,6 +1881,8 @@ async function init() {
   $("job-new").addEventListener("click", () => openJobEditor(-1));
   $("job-cancel").addEventListener("click", () => { editingJob = -1; showJobEditor(false); });
   $("conflicts-reload").addEventListener("click", loadConflicts);
+  $("conflicts-save").addEventListener("click", saveConflictPicks);
+  $("conflicts-discard").addEventListener("click", discardConflictPicks);
   $("history-reload").addEventListener("click", loadHistory);
   $("history-job").addEventListener("change", renderHistory);
   $("history-filter").addEventListener("change", renderHistory);
@@ -1857,7 +1936,7 @@ async function init() {
   $("profile-apply").addEventListener("click", () => checkProfile(true));
   window.addEventListener("resize", () => requestAnimationFrame(drawLines));
   window.addEventListener("beforeunload", (e) => {
-    if (isDirty()) {
+    if (isDirty() || stagedPicks.size) {
       e.preventDefault();
       e.returnValue = "";
     }

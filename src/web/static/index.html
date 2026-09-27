@@ -204,10 +204,21 @@
     </div>
 
     <div class="page" data-page="conflicts" hidden>
-    <section class="card">
+    <section class="card conflicts-toolbar">
       <h2>Conflicts <button type="button" class="secondary" id="conflicts-reload">Reload</button></h2>
-      <p class="muted">A rule with the policy "Fill blanks, ask about real differences" waits here when both sides hold a different value. Pick the value to keep; the other service is updated.</p>
+      <p class="muted">A rule with the policy "Fill blanks, ask about real differences" waits here when both sides hold a different value. Pick the value to keep on each conflict (Undo takes a pick back), then Save changes: the other service is updated for every pick.</p>
+      <div class="actions conflicts-actions">
+        <button type="button" id="conflicts-save" disabled>Save changes</button>
+        <button type="button" class="secondary" id="conflicts-discard" disabled>Discard picks</button>
+        <span id="conflicts-staged" class="muted"></span>
+      </div>
+      <div id="conflicts-progress" class="job-progress" hidden>
+        <progress id="conflicts-progress-bar"></progress>
+        <span id="conflicts-progress-text" class="muted"></span>
+      </div>
       <span id="conflicts-message" class="muted"></span>
+    </section>
+    <section class="card">
       <div id="conflict-groups"></div>
     </section>
     </div>

@@ -162,12 +162,13 @@ ApplicationWindow {
                     clip: true
                     ColumnLayout { width: mappingScroll.availableWidth; MappingPage { Layout.fillWidth: true } }
                 }
-                ScrollView {
-                    id: conflictsScroll
-                    padding: 16
-                    contentWidth: availableWidth
-                    clip: true
-                    ColumnLayout { width: conflictsScroll.availableWidth; ConflictsPage { Layout.fillWidth: true } }
+                // Fills the viewport: its header (Save changes, progress,
+                // message) stays put while the list scrolls under it.
+                Item {
+                    ColumnLayout {
+                        anchors { fill: parent; margins: 16 }
+                        ConflictsPage { Layout.fillWidth: true; Layout.fillHeight: true }
+                    }
                 }
                 ScrollView {
                     id: settingsScroll

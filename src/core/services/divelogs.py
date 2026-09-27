@@ -96,23 +96,9 @@ class DivelogsAdapter(BaseDiveAdapter):
             logger.info("Fetching Divelogs user profile settings for user '%s'...", self.username)
             url = "https://divelogs.de/api/user"
             response = self.session.get(url, timeout=20)
-            
-            # Fetch dives list to count dives
-            dives_count = 0
-            try:
-                dives_url = "https://divelogs.de/api/dives"
-                dives_res = self.session.get(dives_url, timeout=20)
-                if dives_res.status_code == 200:
-                    dives_list = dives_res.json()
-                    if isinstance(dives_list, list):
-                        dives_count = len(dives_list)
-            except Exception as e:
-                logger.warning("Failed to fetch dives list for counting: %s", e)
-
             if response.status_code == 200:
                 profile = response.json()
                 self.imperial_units = bool(profile.get("imperial", False))
-                logger.info("Fetching Divelogs user profile settings for user '%s'... - %d dives found", self.username, dives_count)
                 logger.info("User preferences loaded. Imperial system active: %s", self.imperial_units)
             else:
                 logger.warning("Failed to load user profile settings (status: %d). Defaulting to Metric.", response.status_code)
