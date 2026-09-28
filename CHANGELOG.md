@@ -4,7 +4,32 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
-## 0.3.0 - Unreleased
+## Unreleased
+
+- Conflicts page: a pick on a Subsurface dive that the same sync run had
+  renumbered (Garmin's dive number changed, so `Dive-7` became `Dive-8`)
+  failed with "was not found on subsurface; it may have been deleted".
+  The dive is now found by its start-time folder, and later runs replace
+  the pair's waiting conflicts instead of adding a duplicate per renumber.
+- Conflicts page: saving picks reports progress ("n of m done"), locks the
+  other buttons until the save and the reload after it have finished, and
+  refuses a second concurrent save. Each dive a save writes to is fetched
+  once, and Garmin is asked for that one dive instead of paging the history.
+
+## 0.3.3 - 2026-09-27
+
+- Conflicts page: more fixes to the conflict logic.
+- Desktop app: fixed the app version not being able to contact Subsurface.
+
+## 0.3.2 - 2026-09-27
+
+- Conflicts page: green toggle picks, one Save button per receiving service.
+
+## 0.3.1 - 2026-09-27
+
+- Conflicts page rework, desktop dive list fixes, Gitea test builds.
+
+## 0.3.0 - 2026-09-26
 
 **Breaking: new data folder and layout. This version starts fresh** - it
 does not read the data of earlier versions, and never touches it. Enter

@@ -16,7 +16,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -198,11 +198,15 @@ class ConflictStore:
         return gone
 
     def replace_for_pairs(self, seen_pairs: Set[Tuple[Tuple[str, Optional[str]], ...]],
-                          new_conflicts: List[Conflict]) -> List[Conflict]:
+                          new_conflicts: List[Conflict],
+                          key: Optional[Callable[["Conflict"], Tuple[Tuple[str, Optional[str]], ...]]] = None) -> List[Conflict]:
         """Drop every stored entry belonging to a matched pair this run looked
         at, then add this run's conflicts. Entries for pairs outside the run's
-        date window are kept. Returns the stored list."""
-        kept = [c for c in self.load() if c.pair_key not in seen_pairs]
+        date window are kept. ``key`` maps a stored entry to the pair key it
+        is compared on (default: its ``pair_key``; the engine passes one built
+        on canonical ids). Returns the stored list."""
+        key = key or (lambda c: c.pair_key)
+        kept = [c for c in self.load() if key(c) not in seen_pairs]
         merged = kept + list(new_conflicts)
         self.save(merged)
         return merged

@@ -355,6 +355,13 @@ class SyncEngine:
         canon = getattr(adapter, "canonical_id", None)
         return canon(external_id) if callable(canon) else str(external_id).strip()
 
+    def _canon_pair_key(self, conflict: Conflict) -> Tuple[Tuple[str, Optional[str]], ...]:
+        """A stored conflict's pair as this run's ``seen_pairs`` are keyed:
+        canonical ids, so an entry recorded before the dive was renumbered
+        still belongs to the pair and is replaced rather than stacked."""
+        return pair_key({service: None if ext is None else self._canon(service, ext)
+                         for service, ext in conflict.dive_ids.items()})
+
     def request_full_compare(self, on: bool = True) -> None:
         """Set (or clear) the one-shot flag that makes the next run compare
         every matched dive regardless of the incremental window."""
@@ -1189,7 +1196,7 @@ class SyncEngine:
             advance(f"Comparing dive {a_dive.date_time}")
             a_id = a_dive.external_ids.get(src)
             b_id = b_dive.external_ids.get(tgt)
-            seen_pairs.add(pair_key({src: a_id, tgt: b_id}))
+            seen_pairs.add(pair_key({src: self._canon(src, a_id), tgt: self._canon(tgt, b_id)}))
 
             needs_update = {src: False, tgt: False}
             is_linking = {src: False, tgt: False}
@@ -1253,7 +1260,7 @@ class SyncEngine:
                 # hand, Docker) no longer raises go too; the apps drop them
                 # on save (conflicts.prune_stale_conflicts).
                 store.prune(rule_conflict_keys(self.rules), {self.source_id, self.target_id})
-                stored = store.replace_for_pairs(seen_pairs, run_conflicts)
+                stored = store.replace_for_pairs(seen_pairs, run_conflicts, key=self._canon_pair_key)
                 if stored:
                     logger.info("%d conflict(s) waiting for manual resolution in %s", len(stored), self.conflicts_file)
             self.save_state(dt=datetime.now(), links=known_links, clear_full_compare=full_compare_once)
@@ -1276,10 +1283,13 @@ class SyncEngine:
         ``_resolving``), asked for by id where the adapter can, and otherwise
         found in a two-day ``fetch_dives`` window around ``around``, whose
         other dives are kept for the picks that follow."""
-        key = (service_id, str(external_id))
+        # ids are compared in their canonical form: a conflict holds the id
+        # the dive had when it was read, and a Subsurface id changes with
+        # the dive number (Dive-7 -> Dive-8) when the same run renumbers it
+        adapter = self.adapter_for(service_id)
+        key = (service_id, adapter.canonical_id(external_id))
         if key in self._resolving:
             return self._resolving[key]
-        adapter = self.adapter_for(service_id)
         try:
             dive = adapter.fetch_dive(str(external_id))
         except NotImplementedError:
@@ -1294,8 +1304,8 @@ class SyncEngine:
             for found in adapter.fetch_dives(date_from=date_from, date_to=date_to):
                 found_id = found.external_ids.get(service_id)
                 if found_id is not None:
-                    self._resolving.setdefault((service_id, str(found_id)), found)
-                if str(found_id) == str(external_id):
+                    self._resolving.setdefault((service_id, adapter.canonical_id(found_id)), found)
+                if found_id is not None and adapter.canonical_id(found_id) == key[1]:
                     dive = found
         if dive is not None:
             self._resolving[key] = dive
@@ -1346,7 +1356,7 @@ class SyncEngine:
         except BaseException:
             # the copy now carries a value the service never took: the next
             # pick on this dive starts from a fresh fetch instead
-            self._resolving.pop((loser_service, str(loser_ext)), None)
+            self._resolving.pop((loser_service, adapter.canonical_id(loser_ext)), None)
             raise
         finish = getattr(adapter, "finish", None)
         if callable(finish):

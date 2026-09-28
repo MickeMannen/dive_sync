@@ -424,3 +424,40 @@ def test_links_survive_a_renumbered_subsurface_dive(repo_copy, tmp_path):
     garmin[0].dive_number = None
     res = _engine_to(repo_copy, tmp_path, garmin).run_sync(dry_run=False)
     assert res["updated_on_subsurface"] == [] and os.path.exists(os.path.join(repo_copy, "2025/02/08-Sat-13=51=24/Dive-24"))
+
+
+def test_conflicts_survive_a_renumbered_subsurface_dive(repo_copy, tmp_path):
+    """The owner's case: a run pushes Garmin's new dive number to Subsurface
+    (Dive-2 becomes Dive-23) and in the same run records a manual conflict
+    on another field, holding the id the dive had when it was read. Saving
+    the pick must still find the dive by its directory, and a later run
+    must replace the entry for the pair instead of stacking a second one."""
+    from src.core.fields import FieldLink
+    from tests.test_link_engine import _dive
+    folder = "2025/02/08-Sat-13=51=24"
+    with open(os.path.join(repo_copy, folder, "Dive-2"), "w") as f:
+        f.write('duration 52:41 min\nbuddy "Bob"\n')
+    links = [FieldLink(id="number", source=["garmin.dive_number"], target="subsurface.dive_number"),
+             FieldLink(id="buddy", source=["garmin.buddy"], target="subsurface.buddy", conflict="manual")]
+    garmin = [_dive(date_time=datetime(2025, 2, 8, 13, 51, 24), external_ids={"garmin": "g23"}, dive_number=23, buddy="Anna")]
+    engine = _engine_to(repo_copy, tmp_path, garmin, field_links=links)
+    engine.run_sync(dry_run=False)
+    assert os.path.exists(os.path.join(repo_copy, folder, "Dive-23"))
+    conflicts = engine.list_conflicts()
+    assert [c.link_id for c in conflicts] == ["buddy"]
+    assert conflicts[0].target_external_id == folder + "/Dive-2"           # the id at read time
+
+    # the next run (Garmin renumbered again) replaces the pair's entry, it does not stack
+    garmin[0].dive_number = 24
+    again = _engine_to(repo_copy, tmp_path, garmin, field_links=links)
+    again.run_sync(dry_run=False)
+    assert os.path.exists(os.path.join(repo_copy, folder, "Dive-24"))
+    conflicts = again.list_conflicts()
+    assert [c.link_id for c in conflicts] == ["buddy"]
+
+    # saving the pick finds the dive under its new file name
+    saver = _engine_to(repo_copy, tmp_path, garmin, field_links=links)
+    saver.resolve_conflict(conflicts[0].id, "source")
+    assert saver.list_conflicts() == []
+    with open(os.path.join(repo_copy, folder, "Dive-24")) as f:
+        assert 'buddy "Anna"' in f.read()
