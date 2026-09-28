@@ -4,7 +4,7 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
-## Unreleased
+## 0.3.5 - 2026-09-29
 
 - Conflicts page: a pick on a Subsurface dive that the same sync run had
   renumbered (Garmin's dive number changed, so `Dive-7` became `Dive-8`)
