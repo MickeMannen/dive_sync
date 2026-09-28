@@ -1713,7 +1713,9 @@ async function testBoard() {
 // back. Keyed by conflict id: {pairId, winner, service, serviceName}, where
 // service is the side that will be updated (the loser).
 const stagedPicks = new Map();
-let conflictsSaving = false;
+// {service, name} of the service whose picks are being written right now,
+// or null: every button on the page is locked while it is set
+let conflictsSaving = null;
 
 async function loadConflicts() {
   const box = $("conflict-groups");
@@ -1799,16 +1801,21 @@ function updateConflictsToolbar() {
   pendingConflictServices().forEach((entry) => {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = `Save ${entry.count} ${entry.count === 1 ? "change" : "changes"} to ${entry.name}`;
-    btn.title = `Writes the picked values to ${entry.name}`;
-    btn.disabled = conflictsSaving;
+    const saving = !!conflictsSaving && conflictsSaving.service === entry.service;
+    btn.textContent = saving ? `Saving to ${entry.name}…`
+      : `Save ${entry.count} ${entry.count === 1 ? "change" : "changes"} to ${entry.name}`;
+    // while one service is being written every Save is locked: the one in
+    // flight so it is not sent twice, the others until it has finished
+    btn.title = conflictsSaving && !saving ? `Waiting until the save to ${conflictsSaving.name || "the other service"} has finished`
+      : `Writes the picked values to ${entry.name}`;
+    btn.disabled = !!conflictsSaving;
     btn.addEventListener("click", () => saveConflictPicks(entry.service, entry.name));
     saves.appendChild(btn);
   });
   $("conflicts-staged").textContent = n ? `${n} ${n === 1 ? "pick" : "picks"} waiting` : "";
-  $("conflicts-discard").disabled = conflictsSaving || n === 0;
-  $("conflicts-reload").disabled = conflictsSaving;
-  document.querySelectorAll("#conflict-groups button").forEach((b) => { b.disabled = conflictsSaving; });
+  $("conflicts-discard").disabled = !!conflictsSaving || n === 0;
+  $("conflicts-reload").disabled = !!conflictsSaving;
+  document.querySelectorAll("#conflict-groups button").forEach((b) => { b.disabled = !!conflictsSaving; });
 }
 
 function discardConflictPicks() {
@@ -1818,23 +1825,52 @@ function discardConflictPicks() {
   loadConflicts();
 }
 
+function conflictsProgressText(serviceName, done, total) {
+  const left = total - done;
+  return `Updating ${serviceName}: ${done} of ${total} done, ${left} left…`;
+}
+
+// While the save request is in flight the server reports each pick through
+// /api/status (progress.report in the resolve endpoint); polling it once a
+// second is what moves the bar and the "n of m done, k left" line.
+function pollConflictsProgress(serviceName, total) {
+  const bar = $("conflicts-progress-bar");
+  const text = $("conflicts-progress-text");
+  const tick = async () => {
+    try {
+      const res = await fetch("/api/status");
+      const data = await res.json();
+      const p = data.progress;
+      if (!p || p.total !== total) return;         // not ours (yet): keep what is shown
+      bar.max = p.total;
+      bar.value = p.done;
+      text.textContent = conflictsProgressText(serviceName, p.done, p.total);
+    } catch (e) { /* the save request itself reports any real failure */ }
+  };
+  const timer = setInterval(tick, 1000);
+  return () => clearInterval(timer);
+}
+
 async function saveConflictPicks(service, serviceName) {
   if (conflictsSaving) return;
   const decisions = [...stagedPicks.entries()].filter(([, pick]) => pick.service === service)
     .map(([id, pick]) => ({ id, winner: pick.winner, pair: pick.pairId }));
   if (!decisions.length) return;
-  conflictsSaving = true;
+  conflictsSaving = { service, name: serviceName };
   updateConflictsToolbar();
   $("conflicts-message").textContent = "";
+  const bar = $("conflicts-progress-bar");
   $("conflicts-progress").hidden = false;
-  $("conflicts-progress-bar").removeAttribute("value");
-  $("conflicts-progress-text").textContent = `Updating ${serviceName} with ${decisions.length} ${decisions.length === 1 ? "change" : "changes"}…`;
+  bar.max = decisions.length;
+  bar.value = 0;
+  $("conflicts-progress-text").textContent = conflictsProgressText(serviceName, 0, decisions.length);
+  const stopPolling = pollConflictsProgress(serviceName, decisions.length);
   let data, ok;
   try {
     const res = await fetch("/api/conflicts/resolve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decisions }),
+      body: JSON.stringify({ decisions, service: serviceName }),
     });
     ok = res.ok;
     data = await res.json();
@@ -1842,19 +1878,29 @@ async function saveConflictPicks(service, serviceName) {
     ok = false;
     data = { detail: e.message || String(e) };
   }
-  conflictsSaving = false;
-  $("conflicts-progress").hidden = true;
+  stopPolling();
   if (!ok) {
     // nothing was written: every pick stays staged for another try
+    conflictsSaving = null;
+    $("conflicts-progress").hidden = true;
     updateConflictsToolbar();
     $("conflicts-message").textContent = data.detail || "Saving failed.";
     return;
   }
   const failed = data.results.filter((r) => r.status === "failed");
   data.results.filter((r) => r.status === "resolved").forEach((r) => stagedPicks.delete(r.id));
+  bar.value = decisions.length;
+  $("conflicts-progress-text").textContent = `${serviceName}: ${data.resolved} of ${decisions.length} saved, reloading…`;
+  // the other services' Save buttons stay locked until the list has been
+  // reloaded, so a click cannot land on stale conflicts
   await loadConflicts();
+  conflictsSaving = null;
+  $("conflicts-progress").hidden = true;
+  updateConflictsToolbar();
   const parts = [`${serviceName}: saved ${data.resolved} of ${decisions.length}.`];
   if (failed.length) parts.push(`${failed.length} failed and ${failed.length === 1 ? "is" : "are"} still staged: ` + failed.map((r) => r.detail).join("; "));
+  const remaining = pendingConflictServices().filter((e) => e.service !== service);
+  if (remaining.length) parts.push(`Next: ${remaining.map((e) => `${e.count} to ${e.name}`).join(", ")}.`);
   $("conflicts-message").textContent = parts.join(" ");
 }
 

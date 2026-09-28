@@ -605,6 +605,38 @@ def test_garmin_update_dive_sends_minimal_summary_dto_not_full_echo():
     assert "startTimeGMT" not in summary_dto
 
 
+def test_garmin_fetch_dive_is_one_call_and_login_is_idempotent():
+    """Conflict resolution asks Garmin for the one dive it writes to: a single
+    activity call (no history page-through, no telemetry), None on a 404, and
+    login() does nothing once the session is up."""
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("u", "p", token_dir="/tmp", cooldown_seconds=0.0)
+    calls = []
+
+    class FakeClient:
+        def connectapi(self, url, params=None):
+            calls.append(url)
+            if url.endswith("/gone"):
+                raise Exception("HTTP 404 Not Found")
+            return {"activityId": "42", "activityName": "Reef", "description": "notes here",
+                    "summaryDTO": {"startTimeLocal": "2026-05-26 08:56:37", "duration": 2400.0, "maxDepth": 18.0},
+                    "diveInfo": {"buddy": "Ann"}}
+
+        def get_activities(self, *a, **k):
+            raise AssertionError("fetch_dive must not list the activity history")
+
+        def login(self, tokenstore):
+            calls.append("login")
+
+    g.client = FakeClient()
+    g.logged_in = True
+    dive = g.fetch_dive("42")
+    assert calls == ["/activity-service/activity/42"]
+    assert dive.external_ids["garmin"] == "42" and dive.notes == "notes here" and dive.buddy == "Ann"
+    assert g.fetch_dive("gone") is None
+    assert g.login() is True and "login" not in calls
+
+
 def test_garmin_update_dive_sends_depth_and_duration_changes(tmp_path):
     """rework.md G8, probed live 2026-09-23: duration, max depth, average
     depth and start time are writable through the minimal summaryDTO PUT, on

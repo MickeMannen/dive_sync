@@ -50,6 +50,14 @@ class BaseDiveAdapter(ABC):
         dives = sorted(self.fetch_dives(), key=lambda d: d.date_time, reverse=True)
         return dives[:limit]
 
+    def fetch_dive(self, external_id: str) -> Optional[UnifiedDive]:
+        """One dive by its id, for a write that needs the current record
+        (resolving a conflict). None when the service no longer has it.
+        Default: not supported, which makes the engine fall back to a dated
+        ``fetch_dives`` window; an adapter whose listing is expensive
+        (Garmin: a page-through plus three calls per dive) overrides this."""
+        raise NotImplementedError
+
     @abstractmethod
     def add_dive(self, dive: UnifiedDive) -> Optional[str]:
         """Add a new dive to the service. Returns the new external ID if successful."""

@@ -604,6 +604,11 @@ class ResolveDecision(BaseModel):
 
 class ResolveBatchRequest(BaseModel):
     decisions: List[ResolveDecision]
+    # display name of the service being written, for the progress line
+    service: Optional[str] = None
+
+
+_resolve_lock = threading.Lock()
 
 
 @app.post("/api/conflicts/resolve")
@@ -612,20 +617,38 @@ def resolve_conflicts(data: ResolveBatchRequest):
     (one login) per pair, every decision attempted even when an earlier one
     fails, and a per-decision outcome so the page can keep the failed picks
     staged for another try."""
+    from src.core import progress
     if scheduler.is_sync_running:
         raise HTTPException(status_code=409, detail="A synchronization run is in progress; try again when it has finished.")
+    # One save at a time: a second Save (another tab) waits for its 409 rather
+    # than interleaving writes and fighting over the progress slot.
+    if not _resolve_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Conflict picks are already being saved; try again when that has finished.")
     engines: Dict[str, Any] = {}
     results = []
-    for decision in data.decisions:
-        key = decision.pair or "default"
-        try:
-            if key not in engines:
-                engines[key] = _engine_for_pair_id(decision.pair)
-            engines[key].resolve_conflict(decision.id, decision.winner)
-            results.append({"id": decision.id, "status": "resolved"})
-        except Exception as e:
-            logger.error("Conflict resolution of %s failed: %s", decision.id, e)
-            results.append({"id": decision.id, "status": "failed", "detail": str(e)})
+    total = len(data.decisions)
+    try:
+        for done, decision in enumerate(data.decisions):
+            # progress.report is what the page polls for "n of m, k left"
+            # while this request runs; it raises Stopped after a Stop click.
+            progress.report(done, total, f"Saving picks to {data.service}" if data.service else "Saving conflict picks",
+                            data.service or "")
+            key = decision.pair or "default"
+            try:
+                if key not in engines:
+                    engines[key] = _engine_for_pair_id(decision.pair)
+                engines[key].resolve_conflict(decision.id, decision.winner)
+                results.append({"id": decision.id, "status": "resolved"})
+            except Exception as e:
+                logger.error("Conflict resolution of %s failed: %s", decision.id, e)
+                results.append({"id": decision.id, "status": "failed", "detail": str(e)})
+        progress.report(total, total, "Saved conflict picks", data.service or "")
+    except progress.Stopped:
+        for decision in data.decisions[len(results):]:
+            results.append({"id": decision.id, "status": "failed", "detail": "Stopped before this pick was saved."})
+    finally:
+        progress.clear()
+        _resolve_lock.release()
     resolved = sum(1 for r in results if r["status"] == "resolved")
     return {"resolved": resolved, "failed": len(results) - resolved, "results": results}
 

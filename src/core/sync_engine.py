@@ -222,6 +222,11 @@ class SyncEngine:
         self.source_name = getattr(self.source, "display_name", "") or self.source_id
         self.target_name = getattr(self.target, "display_name", "") or self.target_id
         self._slots = {self.source_id: "source", self.target_id: "target"}
+        # resolve_conflict's working copies and logins, kept for the life of
+        # the engine: the Conflicts page saves many picks through one engine,
+        # often several fields of the same dive, and each used to re-fetch it
+        self._resolving: Dict[Tuple[str, str], UnifiedDive] = {}
+        self._resolving_logins: Set[str] = set()
         self.catalog: Dict[str, FieldSpec] = build_catalog(self.source.field_catalog(), self.target.field_catalog())
         self.conflicts_file = conflicts_path_for(self.state_file)
         self.refresh_pair()
@@ -1266,20 +1271,35 @@ class SyncEngine:
         return ConflictStore(self.conflicts_file).load()
 
     def _find_dive(self, service_id: str, external_id: str, around: Optional[str]) -> Optional[UnifiedDive]:
-        """Fetch the dive with ``external_id`` from a service. Adapters have no
-        get-by-id, so this fetches a two-day window around ``around``."""
+        """The dive with ``external_id`` on a service, as the copy a
+        resolution writes to. Reused across the picks of one engine (see
+        ``_resolving``), asked for by id where the adapter can, and otherwise
+        found in a two-day ``fetch_dives`` window around ``around``, whose
+        other dives are kept for the picks that follow."""
+        key = (service_id, str(external_id))
+        if key in self._resolving:
+            return self._resolving[key]
         adapter = self.adapter_for(service_id)
-        date_from = date_to = None
-        if around:
-            try:
-                centre = datetime.fromisoformat(around)
-                date_from, date_to = centre - timedelta(days=1), centre + timedelta(days=1)
-            except ValueError:
-                pass
-        for dive in adapter.fetch_dives(date_from=date_from, date_to=date_to):
-            if str(dive.external_ids.get(service_id)) == str(external_id):
-                return dive
-        return None
+        try:
+            dive = adapter.fetch_dive(str(external_id))
+        except NotImplementedError:
+            dive = None
+            date_from = date_to = None
+            if around:
+                try:
+                    centre = datetime.fromisoformat(around)
+                    date_from, date_to = centre - timedelta(days=1), centre + timedelta(days=1)
+                except ValueError:
+                    pass
+            for found in adapter.fetch_dives(date_from=date_from, date_to=date_to):
+                found_id = found.external_ids.get(service_id)
+                if found_id is not None:
+                    self._resolving.setdefault((service_id, str(found_id)), found)
+                if str(found_id) == str(external_id):
+                    dive = found
+        if dive is not None:
+            self._resolving[key] = dive
+        return dive
 
     def resolve_conflict(self, conflict_id: str, winner: str) -> Conflict:
         """Write the chosen side's recorded value to the other side through the
@@ -1310,16 +1330,24 @@ class SyncEngine:
             loser_service, loser_ext, loser_spec = conflict.source_service, conflict.source_external_id, src_spec
 
         adapter = self.adapter_for(loser_service)
-        if not adapter.login():
-            raise RuntimeError(f"Failed to authenticate with {loser_service}.")
+        if loser_service not in self._resolving_logins:
+            if not adapter.login():
+                raise RuntimeError(f"Failed to authenticate with {loser_service}.")
+            self._resolving_logins.add(loser_service)
         dive = self._find_dive(loser_service, loser_ext, conflict.dive_time)
         if dive is None:
             raise ValueError(f"Dive {loser_ext} was not found on {loser_service}; it may have been deleted")
         set_field(dive, loser_spec, copy_value(loser_spec.type, value))
         logger.info("Resolving conflict %s: %s := %s on %s dive %s", conflict.id, loser_spec.key,
                     self._brief(loser_spec.type, value), loser_service, loser_ext)
-        if not adapter.update_dive(str(loser_ext), dive):
-            raise RuntimeError(f"{loser_service} refused the update of dive {loser_ext}")
+        try:
+            if not adapter.update_dive(str(loser_ext), dive):
+                raise RuntimeError(f"{loser_service} refused the update of dive {loser_ext}")
+        except BaseException:
+            # the copy now carries a value the service never took: the next
+            # pick on this dive starts from a fresh fetch instead
+            self._resolving.pop((loser_service, str(loser_ext)), None)
+            raise
         finish = getattr(adapter, "finish", None)
         if callable(finish):
             finish()

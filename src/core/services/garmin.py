@@ -98,6 +98,8 @@ class GarminAdapter(BaseDiveAdapter):
         self.cache_dir: Optional[str] = None
 
     def login(self) -> bool:
+        if self.logged_in:
+            return True     # one session per adapter; the client refreshes its own tokens
         logger.info("Attempting Garmin Connect login for user '%s' via python-garminconnect...", self.username)
         try:
             # garminconnect automatically checks for cached tokens in the tokenstore_path
@@ -264,6 +266,25 @@ class GarminAdapter(BaseDiveAdapter):
 
         logger.info("Found %d dive activities matching date filters.", len(target_activities))
         return self._fetch_activity_details(target_activities)
+
+    def fetch_dive(self, external_id: str) -> Optional[UnifiedDive]:
+        """The activity record alone, one API call: what update_dive compares
+        against, so a conflict resolution that only needs the record does not
+        page through the whole history and fetch the neighbouring dives'
+        telemetry. None when Garmin answers 404 (the dive was deleted)."""
+        if not self.logged_in and not self.login():
+            raise RuntimeError("Cannot fetch dive: Not authenticated with Garmin Connect.")
+        logger.info("Fetching Garmin Dive Activity ID: %s...", external_id)
+        try:
+            time.sleep(self.cooldown_seconds)
+            details = self.client.connectapi(f"/activity-service/activity/{external_id}")
+        except Exception as e:
+            if "404" in str(e):
+                return None
+            raise RuntimeError(f"Failed to fetch Garmin activity {external_id}: {e}") from e
+        if not details:
+            return None
+        return self._map_to_unified({}, details)
 
     def fetch_recent_dives(self, limit: int = 10) -> List[UnifiedDive]:
         """Newest ``limit`` dives only: one listing plus three calls per dive,

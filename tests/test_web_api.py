@@ -528,6 +528,55 @@ def test_resolve_conflicts_batch_endpoint(monkeypatch):
     assert res.status_code == 200 and res.json() == {"resolved": 0, "failed": 0, "results": []}
 
 
+def test_resolve_conflicts_batch_reports_progress(monkeypatch):
+    """While Save runs, the Conflicts page polls /api/status for how many
+    picks are done; the endpoint reports one step per pick, names the service
+    being written, clears the slot when finished and refuses a second
+    concurrent save."""
+    import src.web.app as web
+    from src.core import progress
+    client = TestClient(app)
+    seen = []
+    fake = _FakeEngine()
+
+    class Watching(_FakeEngine):
+        def resolve_conflict(self, cid, winner):
+            seen.append(progress.current())
+            return fake.resolve_conflict(cid, winner)
+    engine = Watching()
+    monkeypatch.setattr(web, "_engine_for_pair_id", lambda pair_id: engine)
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    progress.clear()
+
+    res = client.post("/api/conflicts/resolve", json={
+        "service": "Divelogs.org",
+        "decisions": [{"id": "abc123", "winner": "source"}, {"id": "nope", "winner": "target"}, {"id": "abc123", "winner": "target"}]})
+    assert res.status_code == 200 and res.json()["resolved"] == 2
+    assert [(p["done"], p["total"]) for p in seen] == [(0, 3), (1, 3), (2, 3)]
+    assert seen[0]["message"] == "Saving picks to Divelogs.org" and seen[0]["service"] == "Divelogs.org"
+    assert progress.current() is None                           # slot freed for the next job
+
+    # a stop request takes effect before the next pick and never leaks out
+    seen.clear()
+    def stopping(cid, winner):
+        seen.append(cid)
+        progress.request_stop()
+    monkeypatch.setattr(engine, "resolve_conflict", stopping)
+    res = client.post("/api/conflicts/resolve", json={"decisions": [
+        {"id": "a", "winner": "source"}, {"id": "b", "winner": "source"}, {"id": "c", "winner": "source"}]})
+    body = res.json()
+    assert res.status_code == 200 and seen == ["a"] and (body["resolved"], body["failed"]) == (1, 2)
+    assert "Stopped" in body["results"][1]["detail"] and not progress.stop_requested()
+
+    # second concurrent save is refused rather than interleaved
+    assert web._resolve_lock.acquire(blocking=False)
+    try:
+        res = client.post("/api/conflicts/resolve", json={"decisions": [{"id": "abc123", "winner": "source"}]})
+        assert res.status_code == 409 and "already being saved" in res.json()["detail"]
+    finally:
+        web._resolve_lock.release()
+
+
 def test_profile_export_and_import_endpoints(tmp_path, monkeypatch):
     import io
     import json as _json

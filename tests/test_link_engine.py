@@ -771,6 +771,75 @@ def test_resolve_conflict_writes_the_chosen_side(tmp_path):
         engine.resolve_conflict("nope", "left")
 
 
+def test_resolve_conflict_fetches_each_dive_once_per_engine(tmp_path):
+    """Saving several picks through one engine (the Conflicts page) used to
+    re-fetch the losing side's dive window for every pick, and Garmin's
+    fetch_dives pages the whole history and costs three calls per dive. The
+    engine now keeps the dive it is writing to, asks by id when the adapter
+    can, logs in once, and drops a copy the service refused."""
+    class Counting(FakeDivelogs):
+        def __init__(self, dives):
+            super().__init__(dives)
+            self.windows, self.by_id, self.logins, self.refuse = [], [], 0, False
+
+        def login(self):
+            self.logins += 1
+            return True
+
+        def fetch_dives(self, date_from=None, date_to=None):
+            self.windows.append((date_from, date_to))
+            return self.dives
+
+        def update_dive(self, external_id, dive):
+            if self.refuse:
+                return False
+            return super().update_dive(external_id, dive)
+
+    class ById(Counting):
+        def fetch_dive(self, external_id):
+            self.by_id.append(external_id)
+            return next((d for d in self.dives if d.external_ids.get("divelogs") == external_id), None)
+
+    links = [FieldLink(id="notes", source=["garmin.notes"], target="divelogs.notes", conflict="manual"),
+             FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="manual")]
+    for cls in (Counting, ById):
+        g, d = _pair({"notes": "A", "buddy": "Ann"}, {"notes": "B", "buddy": "Bob"})
+        path = _settings_file(tmp_path, field_links=links)
+        engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "c.json"),
+                            source_adapter=FakeGarmin([g]), target_adapter=cls([d]))
+        engine.run_sync(dry_run=False)
+        conflicts = {c.link_id: c for c in engine.list_conflicts()}
+        assert set(conflicts) == {"notes", "buddy"}
+        engine.target.logins, engine.target.windows = 0, []       # forget the sync run's own fetch
+        engine.resolve_conflict(conflicts["notes"].id, "source")
+        first = engine.target.updated[-1]
+        assert (first[0], first[1].notes, first[1].buddy) == ("2", "A", "Bob")
+        engine.resolve_conflict(conflicts["buddy"].id, "source")
+        # both writes went to the same working copy, so the second carries the first
+        second = engine.target.updated[-1]
+        assert second[1] is first[1] and (second[1].notes, second[1].buddy) == ("A", "Ann")
+        assert engine.target.logins == 1
+        if cls is ById:
+            assert engine.target.by_id == ["2"] and engine.target.windows == []
+        else:
+            assert len(engine.target.windows) == 1
+            assert engine.target.windows[0][0] < d.date_time < engine.target.windows[0][1]
+
+    # a refused update forgets the copy, so the retry starts from a fresh fetch
+    g, d = _pair({"notes": "A"}, {"notes": "B"})
+    path = _settings_file(tmp_path, field_links=links[:1])
+    engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "c.json"),
+                        source_adapter=FakeGarmin([g]), target_adapter=ById([d]))
+    engine.run_sync(dry_run=False)
+    cid = engine.list_conflicts()[0].id
+    engine.target.refuse = True
+    with pytest.raises(RuntimeError, match="refused"):
+        engine.resolve_conflict(cid, "source")
+    engine.target.refuse = False
+    engine.resolve_conflict(cid, "source")
+    assert engine.target.by_id == ["2", "2"] and engine.list_conflicts() == []
+
+
 def test_test_mapping_is_read_only(tmp_path):
     g = [_dive(external_ids={"garmin": "1"}, buddy="A", dive_number=1)]
     d = [_dive(external_ids={"divelogs": "2"}, buddy="B", dive_number=1),
