@@ -768,6 +768,44 @@ def refresh_garmin_dives():
     return {"status": "started"}
 
 
+@app.get("/api/dives/services")
+def cache_services():
+    """The services the Sync page's "Download dives" offers: every one with
+    credentials, as {id, label, spec}, in the order the desktop app lists them."""
+    from src.core.pairs import cache_services as services
+    return {"services": services(ConfigManager.load_credentials().configured_services())}
+
+
+class DownloadRequest(BaseModel):
+    services: List[str]
+    overwrite: bool = False
+    # {service id: username}, the accounts to download as; the only
+    # configured account otherwise (Garmin and Divelogs can have several)
+    accounts: Optional[Dict[str, str]] = None
+
+
+@app.post("/api/dives/refresh")
+def refresh_dives(request: DownloadRequest):
+    """Downloads the ticked services' dives into their caches in the
+    background (scheduler.run_download_thread); /api/status shows the
+    progress, and its last_download the outcome. ``overwrite`` fetches
+    every Garmin dive again instead of reusing the unchanged ones."""
+    from src.core.pairs import cache_services as services
+    configured = [s["id"] for s in services(ConfigManager.load_credentials().configured_services())]
+    picked = [s for s in configured if s in request.services]
+    unknown = [s for s in request.services if s not in configured]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Not a configured service: {', '.join(unknown)}")
+    if not picked:
+        raise HTTPException(status_code=400, detail="Pick at least one service to download.")
+    _require_idle()
+    accounts = {k: v for k, v in (request.accounts or {}).items() if v} or None
+    threading.Thread(target=scheduler.run_download_thread,
+                     kwargs={"overwrite": request.overwrite, "services": picked, "accounts": accounts},
+                     daemon=True).start()
+    return {"status": "started", "services": picked}
+
+
 @app.post("/api/dives/garmin/fit")
 def download_garmin_fits(request: Optional[FitDownloadRequest] = None):
     _require_idle()
@@ -814,6 +852,8 @@ def get_status():
         # How far a long job has got (rework.md E14); None when nothing runs
         "progress": progress.current(),
         "last_results": scheduler.last_sync_results,
+        # the outcome of the last "Download dives": {success} / {stopped} / {error}
+        "last_download": scheduler.last_download_results,
         # newest run per job from the persisted history: when it ran and its
         # id, so the Sync page can link a row to the History page
         "last_runs": run_history.latest_per_job(),

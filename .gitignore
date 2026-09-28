@@ -35,3 +35,4 @@ __pycache__/
 /build/
 /backups/
 /docs/
+/test_data/

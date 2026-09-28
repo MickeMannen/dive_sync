@@ -4,6 +4,16 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
+## Unreleased
+
+- Sync page, desktop app and web dashboard: "Download dives" now has one
+  tick per configured service, so one, several or all caches can be
+  refreshed in one go. The web dashboard gets the control for the first
+  time (it had no way to refresh a cache); it uses the Sync page's account
+  picks, shows the download's progress and says how it ended. A download
+  always fetches every dive again, Garmin's included; "Use cached Garmin
+  dives" now only applies to syncing.
+
 ## 0.3.5 - 2026-09-29
 
 - Conflicts page: a pick on a Subsurface dive that the same sync run had

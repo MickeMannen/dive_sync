@@ -283,4 +283,6 @@ def test_account_pickers_show_in_the_app_with_two_accounts(qapp, fake_keyring, s
     root = engine.rootObjects()[0]
     assert root.findChild(QObject, "syncSubsurfaceAccount").property("visible") is True
     assert root.findChild(QObject, "syncGarminAccount").property("visible") is False    # one account: nothing to pick
+    # Download dives: one tick per configured service, all ticked to start with
+    assert root.findChild(QObject, "downloadServices").property("picked") == 2
     assert not [w for w in warnings if "AccountPicker" in w.toString() or "SyncPage" in w.toString()]

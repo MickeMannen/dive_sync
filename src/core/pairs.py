@@ -171,6 +171,18 @@ CONFIGURED_SPECS = {"garmin": "garmin", "divelogs": "divelogs", "subsurface": "s
                     "submersion": "submersion"}
 
 
+CACHE_SERVICE_ORDER = ("garmin", "divelogs", "submersion", "subsurface")
+
+
+def cache_services(configured: List[str]) -> List[dict]:
+    """The services a "Download dives" control offers, as {id, label, spec}:
+    every configured service (credentials.configured_services()), in the
+    order the pages show them. Both the desktop Sync page and the web
+    dashboard build their pick lists from this."""
+    return [{"id": s, "label": display_name_of(CONFIGURED_SPECS[s]), "spec": CONFIGURED_SPECS[s]}
+            for s in CACHE_SERVICE_ORDER if s in configured]
+
+
 def board_pairs(settings: SettingsModel, configured: List[str]) -> List[dict]:
     """The mapping boards to offer: every saved pair, then each combination of
     the ``configured`` services (credentials.configured_services()) that no

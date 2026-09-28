@@ -736,3 +736,37 @@ def test_saving_settings_drops_conflicts_the_boards_no_longer_raise(tmp_path, mo
                    field_links=[{"id": "buddy", "source": ["garmin.buddy"], "target": "divelogs.buddy", "conflict": "source_wins"}])
     assert client.post("/api/settings", json=payload).status_code == 200
     assert store.load() == [] and os.path.exists(store.path)
+
+
+def test_download_dives_endpoints(tmp_path, monkeypatch):
+    """The Sync page's "Download dives": the pick list is every configured
+    service, and the POST downloads exactly the ticked ones (owner request
+    2026-09-29: one or several, not only all-or-one)."""
+    import threading
+    import src.core.config as config
+    from src.core.config import CredentialsModel, GarminCredentials, SubsurfaceCredentials
+    creds = CredentialsModel(garmin=[GarminCredentials(username="g@x", password="p")],
+                             subsurface=[SubsurfaceCredentials(email="s@x", password="p")])
+    monkeypatch.setattr(config.ConfigManager, "load_credentials", staticmethod(lambda path=None: creds))
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    monkeypatch.setattr(scheduler, "is_download_running", False)
+    started = threading.Event()
+    calls = []
+    monkeypatch.setattr(scheduler, "run_download_thread",
+                        lambda **kw: (calls.append(kw), started.set()))
+    client = TestClient(app)
+
+    assert [s["id"] for s in client.get("/api/dives/services").json()["services"]] == ["garmin", "subsurface"]
+    assert 'id="download-dives"' in client.get("/").text
+
+    res = client.post("/api/dives/refresh", json={"services": ["subsurface", "garmin"], "overwrite": True,
+                                                  "accounts": {"garmin": "g@x", "divelogs": ""}})
+    assert res.json() == {"status": "started", "services": ["garmin", "subsurface"]}
+    assert started.wait(5)
+    assert calls == [{"overwrite": True, "services": ["garmin", "subsurface"], "accounts": {"garmin": "g@x"}}]
+
+    assert client.post("/api/dives/refresh", json={"services": []}).status_code == 400
+    assert "divelogs" in client.post("/api/dives/refresh", json={"services": ["divelogs"]}).json()["detail"]
+    monkeypatch.setattr(scheduler, "is_download_running", True)
+    assert client.post("/api/dives/refresh", json={"services": ["garmin"]}).status_code == 409
+    assert client.get("/api/status").json()["last_download"] == scheduler.last_download_results

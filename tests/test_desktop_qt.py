@@ -413,6 +413,19 @@ def test_sync_controller_offers_every_configured_service(qapp, scratch_data_dir,
     c.download(True, "submersion")
     assert wait_until(qapp, lambda: not c.running)
     assert downloads["services"] == ["submersion"] and downloads["overwrite"] is True
+    # the page's ticks: a list, kept in the page's order, unknown ids dropped
+    c.download(False, ["subsurface", "garmin", "uddf"])
+    assert wait_until(qapp, lambda: not c.running)
+    assert downloads["services"] == ["garmin", "subsurface"]
+    # from QML the array arrives as a QJSValue (the page's onClicked)
+    from PySide6.QtQml import QJSEngine
+    js = QJSEngine()
+    c.download(False, js.toScriptValue(["divelogs"]))
+    assert wait_until(qapp, lambda: not c.running)
+    assert downloads["services"] == ["divelogs"]
+    downloads.clear()
+    c.download(False, [])
+    assert not c.running and downloads == {} and "Tick at least one" in c.status
 
 
 # ---------------------------------------------------------------- mapping controller

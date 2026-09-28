@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtQml import QJSValue
 
 from desktop import accounts, credentials
 from desktop.jobs import LogPump, Worker
@@ -50,18 +51,9 @@ class SyncController(QObject):
     def services(self):
         """The services that have credentials, as {id, label} - what the
         Download button and the built-in pair list are built from."""
-        model = credentials.load_credentials_model()
-        out = []
-        if model.get_garmin_accounts():
-            out.append({"id": "garmin", "label": "Garmin Connect", "spec": "garmin"})
-        if model.get_divelogs_accounts():
-            out.append({"id": "divelogs", "label": "Divelogs.org", "spec": "divelogs"})
-        if config.SUBMERSION_ENABLED and model.submersion.configured:
-            out.append({"id": "submersion", "label": "Submersion", "spec": "submersion"})
-        if model.get_subsurface_accounts():
-            # The cloud spec; a local checkout is a hand-written pair instead.
-            out.append({"id": "subsurface", "label": "Subsurface Cloud", "spec": "subsurface-cloud"})
-        return out
+        from src.core.pairs import cache_services
+        # Subsurface is the cloud spec; a local checkout is a hand-written pair instead.
+        return cache_services(credentials.load_credentials_model().configured_services())
 
     @Property("QVariantList", notify=pairsChanged)
     def pairs(self):
@@ -240,18 +232,29 @@ class SyncController(QObject):
         self._start("Running…", lambda: self._run_sync(dry_run, custom),
                     lambda: "Dry run complete." if dry_run else "Sync complete.")
 
-    @Slot(bool, str)
-    def download(self, overwrite: bool, service: str) -> None:
-        """``service`` is one service id, or "" for every configured one.
-        ``overwrite`` re-fetches every Garmin dive instead of reusing the
-        unchanged ones (the page's "Use cached Garmin dives" unticked); the
-        other services are always downloaded in full."""
+    @Slot(bool, "QVariant")
+    def download(self, overwrite: bool, services) -> None:
+        """``services`` is the list of service ids ticked on the page; for
+        older callers also one id as a string, or "" for every configured
+        one. ``overwrite`` re-fetches every Garmin dive instead of reusing
+        the unchanged ones; the page always passes True (a download fetches
+        every dive again, Garmin's included, whatever "Use cached Garmin
+        dives" says, which only applies to syncing). The other services are
+        always downloaded in full."""
         if self._busy():
             self._set_status("A sync or download is already running.")
             return
-        services = [service] if service else [s["id"] for s in self.services]
-        if not services:
+        configured = [s["id"] for s in self.services]
+        if isinstance(services, QJSValue):      # a JS array from QML arrives wrapped
+            services = services.toVariant()
+        if isinstance(services, str):
+            services = [services] if services else configured
+        services = [s for s in configured if s in list(services or [])]
+        if not configured:
             self._set_status("No service is configured yet - add credentials in Settings.")
+            return
+        if not services:
+            self._set_status("Tick at least one service to download.")
             return
         selection = accounts.sync_selection()
         self._start("Downloading…", lambda: self._run_download(overwrite, services, selection),

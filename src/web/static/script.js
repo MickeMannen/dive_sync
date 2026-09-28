@@ -315,6 +315,7 @@ async function loadStatus() {
     $("status-running").textContent = data.is_running ? "yes" : "no";
     $("status-next").textContent = data.next_scheduled_run ? new Date(data.next_scheduled_run).toLocaleString() : "none";
     renderProgress(data);
+    renderDownloadOutcome(data);
     renderJobResults(data.last_results, data.last_runs);
     // a run finished while the History page is open: show it
     const newest = Object.values(data.last_runs || {}).map((r) => r.id + r.finished_at).sort().join();
@@ -350,6 +351,53 @@ async function triggerSync() {
   const data = await res.json();
   $("trigger-message").textContent = res.ok ? "Sync started." : (data.detail || "Failed to start.");
   setTimeout(loadStatus, 2000);
+}
+
+// ---- Download dives: one tick per configured service, as in the app
+
+async function loadDownloadServices() {
+  let services = [];
+  try {
+    services = (await (await fetch("/api/dives/services")).json()).services || [];
+  } catch (e) { /* offline: the box stays empty */ }
+  const box = $("download-services");
+  box.innerHTML = services.map((s) =>
+    `<label class="inline-checkbox"><input type="checkbox" class="download-service" value="${escapeHtml(s.id)}" checked> ${escapeHtml(s.label)}</label>`
+  ).join("");
+  $("download-dives").disabled = services.length === 0;
+  $("download-message").textContent = services.length ? "" : "No service is configured yet - add credentials in Settings.";
+}
+
+async function downloadDives() {
+  const services = Array.from(document.querySelectorAll(".download-service:checked")).map((el) => el.value);
+  if (!services.length) {
+    $("download-message").textContent = "Tick at least one service to download.";
+    return;
+  }
+  $("download-message").textContent = "Starting…";
+  const accounts = {};
+  if ($("trigger-garmin-account").value) accounts.garmin = $("trigger-garmin-account").value;
+  if ($("trigger-divelogs-account").value) accounts.divelogs = $("trigger-divelogs-account").value;
+  const res = await fetch("/api/dives/refresh", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ services, overwrite: true, accounts }),    // always a full fetch
+  });
+  const data = await res.json();
+  $("download-message").textContent = res.ok ? "Downloading…" : (data.detail || "Failed to start.");
+  downloadDives.active = res.ok;
+  setTimeout(loadStatus, 1000);
+}
+
+// called from loadStatus: once the download this page started has ended, say how it went
+function renderDownloadOutcome(data) {
+  if (!downloadDives.active || data.is_downloading) return;
+  downloadDives.active = false;
+  const last = data.last_download || {};
+  $("download-message").textContent = last.stopped ? "Stopped; the dives fetched so far are kept."
+    : last.error ? `Failed: ${last.error}`
+    : last.success === false ? "Finished with errors — check the log."
+    : "Download complete.";
 }
 
 // ---- source / target pickers (Sync now and scheduled jobs), as in the app
@@ -506,7 +554,7 @@ async function saveCredentials(event) {
   });
   const data = await res.json();
   $("credentials-message").textContent = res.ok ? "Credentials saved." : (data.detail || "Failed to save.");
-  if (res.ok) loadCredentialsStatus();
+  if (res.ok) { loadCredentialsStatus(); loadDownloadServices(); }
 }
 
 async function testCredentials() {
@@ -1958,10 +2006,12 @@ async function init() {
   // so it must be loaded before the cron table renders.
   await loadCredentialsStatus();
   await loadEndpoints();
+  loadDownloadServices();
   loadSettings().then(loadFields);
   loadConflicts();
 
   $("trigger-sync").addEventListener("click", triggerSync);
+  $("download-dives").addEventListener("click", downloadDives);
   $("status-stop").addEventListener("click", stopRunningJob);
   $("trigger-source").addEventListener("change", () => fillTargets("trigger"));
   $("trigger-swap").addEventListener("click", () => swapEndpoints("trigger"));

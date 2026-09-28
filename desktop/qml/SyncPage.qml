@@ -135,7 +135,7 @@ ColumnLayout {
                 text: "Use cached Garmin dives"
                 checked: true
                 Tip {
-                    text: "Garmin is slow (three requests per dive), so a dive whose entry in Garmin's list is unchanged is read from the local copy instead of downloaded again - for syncing and for Download dives. Untick it to fetch every Garmin dive again, e.g. when testing or after editing only a dive's notes, buddy, weight or visibility on Garmin (not visible in that list). Other services are always downloaded in full."
+                    text: "Garmin is slow (three requests per dive), so a dive whose entry in Garmin's list is unchanged is read from the local copy instead of downloaded again when syncing. Untick it to fetch every Garmin dive again, e.g. when testing or after editing only a dive's notes, buddy, weight or visibility on Garmin (not visible in that list). Other services are always fetched in full, and Download dives below always fetches everything."
                     visible: parent.hovered
                     delay: 500
                 }
@@ -172,22 +172,44 @@ ColumnLayout {
             wrapMode: Text.WordWrap
             color: Theme.muted
             font.pixelSize: 13
-            text: "Stores each service's dives on this computer, for its Dives page - run it once per service before browsing or editing there. Garmin reuses unchanged dives while \"Use cached Garmin dives\" is ticked above; every other service is downloaded in full."
+            text: "Stores each ticked service's dives on this computer, for its Dives page - run it once per service before browsing or editing there. Every dive is fetched again, Garmin's too, whatever \"Use cached Garmin dives\" above says."
+        }
+        // one tick per configured service; all ticked to start with
+        Flow {
+            id: downloadServices
+            objectName: "downloadServices"
+            Layout.fillWidth: true
+            spacing: 4
+            property int picked: 0
+            function pickedIds() {
+                var ids = []
+                for (var i = 0; i < serviceTicks.count; i++) {
+                    var tick = serviceTicks.itemAt(i)
+                    if (tick && tick.checked) ids.push(tick.serviceId)
+                }
+                return ids
+            }
+            function recount() { picked = pickedIds().length }
+            Repeater {
+                id: serviceTicks
+                model: syncController.services
+                onItemAdded: downloadServices.recount()
+                onItemRemoved: downloadServices.recount()
+                CheckBox {
+                    required property var modelData
+                    property string serviceId: modelData.id
+                    text: modelData.label
+                    checked: true
+                    onCheckedChanged: downloadServices.recount()
+                }
+            }
         }
         RowLayout {
             spacing: 8
-            ComboBox {
-                id: downloadServiceBox
-                Layout.preferredWidth: 220
-                textRole: "label"
-                valueRole: "id"
-                // "" downloads every configured service.
-                model: [{ id: "", label: "All configured services" }].concat(syncController.services)
-            }
             Button {
                 text: "Download dives"
-                enabled: !syncController.running
-                onClicked: syncController.download(!garminCache.checked, downloadServiceBox.currentValue || "")
+                enabled: !syncController.running && downloadServices.picked > 0
+                onClicked: syncController.download(true, downloadServices.pickedIds())   // always a full fetch
             }
             Button {
                 text: "Stop"

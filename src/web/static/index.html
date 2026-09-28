@@ -60,6 +60,16 @@
         <thead><tr><th>Job</th><th>Last run</th><th>Last result</th></tr></thead>
         <tbody id="job-results-body"></tbody>
       </table>
+    </section>
+
+    <section class="card">
+      <h2>Download dives</h2>
+      <p class="muted">Stores each ticked service's dives on this server, and fetches every dive again, Garmin's too, whatever "Use cached Garmin dives" above says. A sync with that box ticked then reads unchanged Garmin dives from this copy instead of downloading them again.</p>
+      <div class="actions" id="download-services"></div>
+      <div class="actions">
+        <button type="button" id="download-dives">Download dives</button>
+        <span id="download-message" class="muted"></span>
+      </div>
       <div class="actions"><button type="button" class="link-button" id="open-history">Full history &rarr;</button></div>
 </section>
 
