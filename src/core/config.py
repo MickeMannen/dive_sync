@@ -452,6 +452,42 @@ class SubmersionCredentials(BaseModel):
             return bool(self.folder_path)
         return bool(self.endpoint_url and self.bucket and self.access_key_id and self.secret_access_key)
 
+class ShearwaterCredentials(BaseModel):
+    """One Shearwater app account's database (rework.md Track H). Not a
+    login: the desktop app keeps one SQLite file per account on the computer
+    it runs on (``users/<email>/dive_data.db``), and dive_sync reads and
+    writes metadata in that file. Several of these are several accounts,
+    like Subsurface Cloud's: the Sync page picks one per run. With none
+    saved, the app's active account on this computer is used."""
+    database: str = Field("", description="Path of the account's dive_data.db (relative to DATA_DIR when not absolute)")
+    account: str = Field("", description="Label shown in pickers; blank = the account folder's name (the email)")
+
+    @property
+    def name(self) -> str:
+        """The account as pickers and state files name it: the label, else
+        the database's folder (the app names it after the email)."""
+        if self.account.strip():
+            return self.account.strip()
+        from src.core.services.shearwater import account_of_path
+        path = self._path()
+        return account_of_path(path) if path else ""
+
+    def _path(self) -> Optional[str]:
+        if not self.database.strip():
+            return None
+        path = self.database.strip()
+        return path if os.path.isabs(path) else os.path.join(os.environ.get("DATA_DIR", "."), path)
+
+    def resolved_path(self) -> Optional[str]:
+        """The file, or None when the path is blank or does not exist."""
+        path = self._path()
+        return path if path and os.path.isfile(path) else None
+
+    @property
+    def configured(self) -> bool:
+        return self.resolved_path() is not None
+
+
 class CredentialsModel(BaseModel):
     garmin: Union[List[GarminCredentials], GarminCredentials] = Field(default_factory=GarminCredentials)
     divelogs: Union[List[DivelogsCredentials], DivelogsCredentials] = Field(default_factory=DivelogsCredentials)
@@ -459,9 +495,29 @@ class CredentialsModel(BaseModel):
     # per page); the web UI and Docker keep writing the single-account form.
     subsurface: Union[List[SubsurfaceCredentials], SubsurfaceCredentials] = Field(default_factory=SubsurfaceCredentials)
     submersion: SubmersionCredentials = Field(default_factory=SubmersionCredentials)
+    # A list (several Shearwater accounts, one picked per run, rework.md
+    # Track H) or the single form the web UI writes.
+    shearwater: Union[List[ShearwaterCredentials], ShearwaterCredentials] = Field(default_factory=list)
+
+    def saved_shearwater_accounts(self) -> List[ShearwaterCredentials]:
+        """The entries with a path, whether or not the file exists."""
+        entries = self.shearwater if isinstance(self.shearwater, list) else [self.shearwater]
+        return [a for a in entries if a.database.strip()]
+
+    def get_shearwater_accounts(self) -> List[ShearwaterCredentials]:
+        """The usable Shearwater databases: the saved ones whose file exists,
+        or, with none saved at all, the app's active account on this
+        computer (find_live_database) so a fresh install needs no setup."""
+        saved = self.saved_shearwater_accounts()
+        if saved:
+            return [a for a in saved if a.configured]
+        from src.core.services.shearwater import find_live_database
+        live = find_live_database()
+        return [ShearwaterCredentials(database=live)] if live else []
 
     def configured_services(self) -> List[str]:
-        """Service ids that have usable credentials, for status displays."""
+        """Service ids that have usable credentials (or, for Shearwater, a
+        database file), for status displays."""
         out = []
         if any(a.username for a in self.get_garmin_accounts()):
             out.append("garmin")
@@ -471,7 +527,17 @@ class CredentialsModel(BaseModel):
             out.append("subsurface")
         if SUBMERSION_ENABLED and self.submersion.configured:
             out.append("submersion")
+        if self.get_shearwater_accounts():
+            out.append("shearwater")
         return out
+
+    def configured_specs(self) -> List[str]:
+        """What the pair, board and endpoint builders (pairs.board_pairs,
+        pairs.sync_endpoints) take. Every configured service goes by its id
+        (Shearwater's account, i.e. its file, is picked per run like a
+        Subsurface Cloud account); the builders also accept a full spec such
+        as ``shearwater:<path>`` for a file named by hand."""
+        return list(self.configured_services())
 
     def get_garmin_accounts(self) -> List[GarminCredentials]:
         if isinstance(self.garmin, list):

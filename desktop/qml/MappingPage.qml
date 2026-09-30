@@ -110,7 +110,7 @@ ColumnLayout {
             wrapMode: Text.WordWrap
             color: Theme.muted
             font.pixelSize: 11
-            text: "A sync run writes one side: the board shows what the target accepts from the source (⇄ shows the other direction). To add a rule either drag a field from the left-hand list onto a field on the right, or - easier over a long list - click the left-hand field once and then click the right-hand field to take it. Do the same onto a field that already has a rule to build a composite. Drag the same text field onto a second field to split it: e.g. Activity name onto Location and then onto Dive site takes \"Gozo, Blue Hole\" apart into both. Click a rule to change its policy or template. 🔒 fields cannot be written by their service; fields without a rule are not synced."
+            text: "Each rule says what one field on the right gets from the left. Add a rule: drag a field from the left onto a field on the right (or click one, then the other). Click a rule to say what happens when the two sides differ, and what is written: the whole value, only the part before or after a separator, or text built from a template. Drop a second field onto a rule to combine both into one value; drag the same text field onto two fields to split it into both. 🔒 fields cannot be written by their service; fields without a rule are not synced."
         }
 
         Rectangle {
@@ -200,38 +200,105 @@ ColumnLayout {
                     }
                     LabeledField { id: eSep; visible: editor.rule.list_rule === true; label: "List separator"; fieldWidth: 60; text: editor.rule.separator || ", " }
                 }
-                Button {
-                    id: templateToggle
-                    visible: editor.rule.text_target === true && editor.rule.composite !== true
-                    flat: true
-                    padding: 0
-                    checkable: true
-                    checked: false
-                    text: (checked ? "▾ " : "▸ ") + "Combine or reformat with a template"
-                    font.pixelSize: 11
-                    Connections { target: mappingController; function onSelectedChanged() { templateToggle.checked = false } }
-                }
+                // ---- what to write: the whole value, part of it, or a template
                 ColumnLayout {
-                    spacing: 2
-                    visible: editor.rule.text_target === true && (editor.rule.composite === true || templateToggle.checked)
-                    Text { text: "Template ({field} placeholders; empty = plain copy)"; color: Theme.muted; font.pixelSize: 11 }
+                    id: shape
+                    spacing: 4
+                    visible: editor.rule.text_target === true
+                    property bool plainText: editor.rule.take_possible === true
+                    // the shipped default for a single text field is "the whole value"; a
+                    // composite (two or more fields) is always a template
+                    Text { text: "What to write into " + (editor.rule.target_label || "the field"); color: Theme.muted; font.pixelSize: 11 }
+                    ComboBox {
+                        id: eShape
+                        objectName: "shapeBox"
+                        visible: shape.plainText
+                        Layout.preferredWidth: 420
+                        textRole: "label"; valueRole: "value"
+                        model: [
+                            { value: "whole", label: "The whole value of " + ((editor.rule.source_labels || [""])[0] || "the field") },
+                            { value: "before", label: "Only the text before a separator (e.g. the area of \"Tenggol Island, Sawadi Wreck\")" },
+                            { value: "after", label: "Only the text after a separator (e.g. the site of \"Tenggol Island, Sawadi Wreck\")" },
+                            { value: "template", label: "Text built from a template (add words, or combine fields)" },
+                            { value: "custom", label: "Only what a custom pattern picks (regular expression)" }
+                        ]
+                        function reset() {
+                            var mode = editor.rule.template ? "template" : (editor.rule.take_mode || "whole")
+                            currentIndex = Math.max(0, indexOfValue(mode))
+                        }
+                        Component.onCompleted: reset()
+                        Connections { target: mappingController; function onSelectedChanged() { eShape.reset() } }
+                        onActivated: shape.refreshPreview()
+                    }
                     RowLayout {
+                        visible: shape.plainText && (eShape.currentValue === "before" || eShape.currentValue === "after")
+                        Text { text: "Separator"; color: Theme.muted; font.pixelSize: 11 }
                         TextField {
-                            id: eTemplate
+                            id: eTakeSep
+                            Layout.preferredWidth: 60
+                            text: editor.rule.take_separator || ","
+                            selectByMouse: true
+                            onTextEdited: shape.refreshPreview()
+                            Connections { target: mappingController; function onSelectedChanged() { eTakeSep.text = mappingController.selectedRule.take_separator || "," } }
+                        }
+                        Text { text: "(the first one in the value counts; text around it is trimmed)"; color: Theme.muted; font.pixelSize: 11 }
+                    }
+                    ColumnLayout {
+                        spacing: 2
+                        visible: shape.plainText && eShape.currentValue === "custom"
+                        TextField {
+                            id: eTake
+                            objectName: "takeField"
                             Layout.fillWidth: true
-                            text: editor.rule.template || ""
+                            text: editor.rule.take_mode === "custom" ? (editor.rule.take || "") : ""
                             font.family: "Menlo"
                             selectByMouse: true
-                            onTextEdited: mappingController.previewTemplate(text)
+                            placeholderText: "a regular expression; the part in parentheses is written, e.g. ^(\\w+)"
+                            onTextEdited: shape.refreshPreview()
+                            Connections { target: mappingController; function onSelectedChanged() { eTake.text = mappingController.selectedRule.take_mode === "custom" ? (mappingController.selectedRule.take || "") : "" } }
                         }
-                        ComboBox {
-                            id: fieldPicker
-                            Layout.preferredWidth: 200
-                            model: editor.rule.source || []
-                        }
-                        Button { text: "Insert"; onClicked: { eTemplate.insert(eTemplate.cursorPosition, "{" + fieldPicker.currentText + "}"); mappingController.previewTemplate(eTemplate.text) } }
                     }
-                    Text { text: "Preview: " + mappingController.preview; color: Theme.text; font.family: "Menlo"; font.pixelSize: 11 }
+                    Text {
+                        visible: shape.plainText && eShape.currentValue !== "whole" && eShape.currentValue !== "template"
+                        text: "A value without that part is left as it is on " + (editor.rule.receiver_name || "the receiver") + "."
+                        color: Theme.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                    }
+                    function refreshPreview() {
+                        if (eShape.currentValue === "template") mappingController.previewTemplate(eTemplate.text)
+                        else mappingController.previewTakeChoice(eShape.currentValue || "whole", eTakeSep.text, eTake.text)
+                    }
+                    // ---- template: composites always, a single field on request
+                    ColumnLayout {
+                        spacing: 2
+                        visible: editor.rule.composite === true || (shape.plainText && eShape.currentValue === "template")
+                        Text {
+                            text: editor.rule.composite === true
+                                  ? "Template: how the fields are put together. {field} stands for a field's value; anything else is written as typed, e.g. {location}, {site}"
+                                  : "Template: {field} stands for the value; anything else is written as typed, e.g. Dive {dive_number} or Logged by {buddy}"
+                            color: Theme.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                        }
+                        RowLayout {
+                            TextField {
+                                id: eTemplate
+                                Layout.fillWidth: true
+                                text: editor.rule.template || ""
+                                font.family: "Menlo"
+                                selectByMouse: true
+                                onTextEdited: mappingController.previewTemplate(text)
+                            }
+                            ComboBox {
+                                id: fieldPicker
+                                Layout.preferredWidth: 200
+                                model: editor.rule.source || []
+                            }
+                            Button { text: "Insert"; onClicked: { eTemplate.insert(eTemplate.cursorPosition, "{" + fieldPicker.currentText + "}"); mappingController.previewTemplate(eTemplate.text) } }
+                        }
+                    }
+                    Text {
+                        visible: shape.plainText ? eShape.currentValue !== "whole" : editor.rule.composite === true
+                        text: "Example with a sample dive: " + mappingController.preview
+                        color: Theme.text; font.family: "Menlo"; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                    }
                     Text { text: mappingController.previewProblems; color: Theme.danger; font.pixelSize: 11; visible: text !== ""; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                 }
                 ColumnLayout {
@@ -297,7 +364,11 @@ ColumnLayout {
                     Button {
                         text: "Apply"
                         onClicked: {
-                            var problem = mappingController.updateRule({ id: eId.text, conflict: eConflict.currentValue, separator: eSep.text, template: eTemplate.text, split: eSplitOn.checked, reverse: eReverse.text, reverse_conflict: eSplit.currentValue || "" })
+                            var mode = shape.plainText ? (eShape.currentValue || "whole") : "whole"
+                            var problem = mappingController.updateRule({ id: eId.text, conflict: eConflict.currentValue, separator: eSep.text,
+                                                                         template: (mode === "template" || editor.rule.composite === true) ? eTemplate.text : "",
+                                                                         split: eSplitOn.checked, reverse: eReverse.text, reverse_conflict: eSplit.currentValue || "",
+                                                                         take_mode: mode === "template" ? "whole" : mode, take_separator: eTakeSep.text, take: eTake.text })
                             if (problem) editorMessage.text = problem; else editorMessage.text = "Applied to the board (not saved yet)."
                         }
                     }

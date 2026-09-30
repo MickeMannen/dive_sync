@@ -30,6 +30,7 @@ link table keeps pairs across runs.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import re
@@ -379,8 +380,12 @@ class UddfDocument:
         return True
 
     def save(self, path: str) -> None:
-        root = ET.Element(self.root.tag, self.root.attrib)
-        root.extend(list(self.root))
+        # A deep copy: _restore_ns renames tags in place, and a shallow copy
+        # shared the children, so after the first save the in-memory tree was
+        # namespaced and the next write_dive of the same run could not find
+        # profiledata/repetitiongroup any more (found with a 27-dive
+        # Shearwater import, 2026-09-29).
+        root = copy.deepcopy(self.root)
         _restore_ns(root)
         ET.indent(root, space="  ")
         ET.register_namespace("", NS)

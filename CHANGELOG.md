@@ -6,6 +6,42 @@ development history and decision log.
 
 ## Unreleased
 
+- Mapping board: a rule now says what to write: the whole value, only the
+  text before or after a separator (e.g. the area or the site out of
+  "Tenggol Island, Sawadi Wreck"), text built from a template, or what a
+  custom pattern picks. The editor shows the result on a sample dive, and a
+  value without that part is left alone. The board's help is shorter and
+  explains combining, splitting and this in one place.
+- New source: the Shearwater app's database (`shearwater:<path to dive_data.db>`; the
+  app is Shearwater's "Shearwater Cloud" desktop program - DiveSync works on its
+  local file and never talks to the cloud, the app does that itself).
+  Its dives are read with time, duration, depths, temperatures, dive number,
+  gases with pressures, the metadata typed into the app (site, buddy,
+  notes, environment, weather and the other dropdowns) and the dive
+  profile decoded from the computer's own log, so they can be created on
+  Subsurface, Divelogs or a UDDF file with their profile. Every sample the
+  computer logged is carried (depth, temperature, time, and the
+  transmitter's tank pressure per sample, which Subsurface's profile
+  format holds and Divelogs' does not), including the minute the computer
+  keeps logging at the surface; a log that cannot be decoded, or that
+  disagrees with the dive's recorded depth and time, gives the dive
+  without a profile and one warning, never a failed load.
+  Metadata from the other services (site, buddy, notes, dive number,
+  weight, entry position and the app's own dropdown fields) is written into
+  the database exactly as the app writes an edit, so the app uploads it to
+  Shearwater Cloud on its next sync; dives are never added or deleted
+  there (a run says once which dives the other side has that Shearwater
+  does not, and leaves them alone). Writes are refused while the app is open, and the database is
+  copied to `backups/shearwater/` first. Several Shearwater accounts work like
+  several Garmin or Subsurface accounts: the desktop app's Settings →
+  Shearwater app lists them (Detect finds every account the app has on
+  this Mac; a path field takes a copy), the Sync page picks one per run,
+  and each pair keeps its links per account. With nothing saved, the app's
+  active account is used. The web dashboard's credentials form takes one
+  path. A known database appears on the Sync
+  page as a side and gets a mapping board with each configured service.
+- UDDF file: creating more than one dive in a single run failed after the
+  first one (the file's namespace was applied to the in-memory document).
 - Sync page, desktop app and web dashboard: "Download dives" now has one
   tick per configured service, so one, several or all caches can be
   refreshed in one go. The web dashboard gets the control for the first

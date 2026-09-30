@@ -14,6 +14,7 @@ from src.core.services.subsurface import (
     Sample,
     SubsurfaceAdapter,
     SubsurfaceRepo,
+    apply_unified,
     dive_to_unified,
     fmt_milli,
     parse_dive_dir_name,
@@ -21,6 +22,7 @@ from src.core.services.subsurface import (
     quote,
     read_logical_lines,
     render_cylinder,
+    render_dc_lines,
     render_sample,
     split_line,
 )
@@ -66,6 +68,27 @@ def test_sample_and_cylinder_round_trip():
     cyl = Cylinder(volume_l=11.094, workpressure_bar=206.843, description="AL80", o2=32.0, start_bar=200.0, end_bar=50.0, use="not used")
     assert render_cylinder(cyl) == 'cylinder vol=11.094l workpressure=206.843bar description="AL80" o2=32.0% start=200.0bar end=50.0bar use="not used"'
     assert render_cylinder(Cylinder(o2=None, he=None)) == "cylinder"  # air, nothing known
+
+
+def test_sample_pressure_round_trip(repo_copy):
+    """A per-sample tank pressure (a transmitter's, rework.md H5) is written
+    on sensor 0 and read back; a computer with several sensors gives the
+    lowest-numbered one, the same on every sample."""
+    dive = Dive(dir_path="x", when=datetime(2026, 1, 1))
+    unified = UnifiedDive(date_time=datetime(2026, 1, 1), duration=20, max_depth=10.0,
+                          samples=[UnifiedSample(depth=5.0, temp=20.0, time=10, pressure=200.0), UnifiedSample(depth=10.0, time=20)])
+    apply_unified(dive, unified, SubsurfaceRepo(repo_copy), write_samples=True)
+    assert [s.pressures for s in dive.computers[0].samples] == [{0: 200.0}, {}]
+    assert render_dc_lines(dive.computers[0])[-2:] == ["  0:10 5.0m 20.0°C 200.0bar:0", "  0:20 10.0m"]
+    assert [s.pressure for s in dive_to_unified(dive, {}).samples] == [200.0, None]
+    dive.computers[0].samples = [Sample(time_s=1, depth_m=1.0, pressures={1: 150.0}),
+                                 Sample(time_s=2, depth_m=2.0, pressures={0: 210.0, 1: 149.0})]
+    assert [s.pressure for s in dive_to_unified(dive, {}).samples] == [None, 210.0]
+    # the fixture's computer download keeps its pressures in the samples
+    repo = SubsurfaceRepo(FIXTURE).load()
+    u = dive_to_unified(repo.find("2026/08/29-Sat-12=52=59/Dive-13"), repo.sites)
+    with_pressure = [s.pressure for s in u.samples if s.pressure is not None]
+    assert with_pressure and with_pressure[0] == u.gas_mixtures[0].start_pressure
 
 
 # ---------------------------------------------------------------- reading the fixture

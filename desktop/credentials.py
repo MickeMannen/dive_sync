@@ -231,7 +231,8 @@ def _save_accounts(service: str, accounts) -> None:
 
 
 def load_credentials_model():
-    from src.core.config import CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials
+    from src.core.config import (CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials,
+                                 SubmersionCredentials, ShearwaterCredentials)
 
     submersion_secret = _get_json("submersion_secret")
     submersion_config = preferences.get_submersion_config()
@@ -265,7 +266,18 @@ def load_credentials_model():
             folder_path=submersion_config.get("folder_path", ""),
             passphrase=submersion_secret.get("passphrase", ""),
         ),
+        # not secrets: the databases (one per Shearwater account) live in desktop_prefs.json
+        shearwater=[ShearwaterCredentials(database=str(row.get("database", "")), account=str(row.get("account", "")))
+                    for row in preferences.get_shearwater_config().get("databases", [])
+                    if str(row.get("database", "")).strip()],
     )
+
+
+def save_shearwater_accounts(accounts) -> None:
+    """``accounts`` are ``ShearwaterCredentials`` (full replace, like the
+    other services' account lists); blank paths are dropped."""
+    preferences.set_shearwater_config(databases=[{"database": a.database.strip(), "account": a.account.strip()}
+                                                 for a in (accounts or []) if a.database.strip()])
 
 
 def save_submersion_credentials(submersion) -> None:
@@ -290,6 +302,7 @@ def save_credentials_model(model) -> None:
     _save_accounts("divelogs", model.get_divelogs_accounts())
     _save_accounts("subsurface", model.get_subsurface_accounts())
     save_submersion_credentials(getattr(model, "submersion", None))
+    save_shearwater_accounts(model.saved_shearwater_accounts() if hasattr(model, "saved_shearwater_accounts") else [])
     logger.info("Credentials saved to OS keychain.")
 
 

@@ -706,9 +706,14 @@ def dive_to_unified(dive: Dive, sites: Dict[str, Site]) -> UnifiedDive:
     samples = []
     max_depth = dc.maxdepth_m if dc and dc.maxdepth_m is not None else None
     if dc:
+        # UnifiedSample carries one pressure: the lowest-numbered sensor
+        # (cylinder index) that has readings in this computer's samples
+        sensors = {sensor for s in dc.samples for sensor in s.pressures}
+        primary = min(sensors) if sensors else None
         for s in dc.samples:
             if s.depth_m is not None:
-                samples.append(UnifiedSample(depth=s.depth_m, temp=s.temp_c, time=s.time_s))
+                samples.append(UnifiedSample(depth=s.depth_m, temp=s.temp_c, time=s.time_s,
+                                             pressure=s.pressures.get(primary) if primary is not None else None))
         if max_depth is None and samples:
             max_depth = max(s.depth for s in samples)
     # Computer-downloaded dives keep pressures only in the samples (one
@@ -910,7 +915,10 @@ def apply_unified(dive: Dive, unified: UnifiedDive, repo: SubsurfaceRepo, write_
             ours.meandepth_m = unified.avg_depth
             ours.watertemp_c = unified.temp_min
             ours.duration_s = int(unified.duration) if unified.duration else None
-            ours.samples = [Sample(time_s=int(s.time or 0), depth_m=s.depth, temp_c=s.temp) for s in unified.samples]
+            # a per-sample tank pressure goes on sensor 0 (the first cylinder), as Subsurface stores a transmitter's
+            ours.samples = [Sample(time_s=int(s.time or 0), depth_m=s.depth, temp_c=s.temp,
+                                   pressures={0: s.pressure} if s.pressure is not None else {})
+                            for s in unified.samples]
     target_dc = ours or dive.computers[0]
     foreign = {k: v for k, v in unified.external_ids.items() if k != SERVICE_ID and v}
     target_dc.extradata = [(k, v) for k, v in target_dc.extradata if not k.startswith(EXTERNAL_ID_PREFIX)]

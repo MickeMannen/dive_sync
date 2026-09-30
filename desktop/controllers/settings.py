@@ -191,6 +191,48 @@ class SettingsController(QObject):
     def submersionFolderPath(self) -> str:
         return self._model.submersion.folder_path
 
+    # -- Shearwater app (rework.md Track H): a database path, not a login ----
+
+    @Property("QVariantList", notify=credentialsChanged)
+    def shearwaterAccounts(self):
+        """The saved databases as {account, database, exists}; one row per
+        Shearwater account, like the other services' account rows."""
+        return [{"account": a.name, "database": a.database, "exists": a.configured}
+                for a in self._model.saved_shearwater_accounts()]
+
+    @Property(str, notify=credentialsChanged)
+    def shearwaterStatus(self) -> str:
+        """What a sync can pick: the saved databases that exist, or the app's
+        active account when none is saved, or why there is nothing."""
+        saved = self._model.saved_shearwater_accounts()
+        usable = self._model.get_shearwater_accounts()
+        if saved:
+            missing = [a.name for a in saved if not a.configured]
+            text = f"{len(usable)} account(s) ready" if usable else "No saved database exists"
+            return text + (f"; missing: {', '.join(missing)}" if missing else "") + "."
+        if usable:
+            return f"Nothing saved: using the app's active account on this computer, {usable[0].name} ({usable[0].database})."
+        return "The Shearwater app is not installed here, or has no account signed in - press Detect, or enter the path of a copy of its dive_data.db."
+
+    @Slot(result="QVariantList")
+    def detectShearwater(self):
+        """Every account the app has on this computer, as {account,
+        database}, the active one first - the Detect button adds the ones
+        not listed yet."""
+        from src.core.services.shearwater import find_live_databases
+        found = [{"account": account, "database": path} for account, path in find_live_databases()]
+        self._set("_message", f"Found {len(found)} Shearwater app account(s) on this computer." if found
+                  else "No Shearwater app database found on this computer.", self.messageChanged)
+        return found
+
+    @Slot("QVariantList")
+    def saveShearwaterAccounts(self, rows) -> None:
+        from src.core.config import ShearwaterCredentials
+        accounts = [ShearwaterCredentials(database=str(r.get("database", "")).strip(), account=str(r.get("account", "")).strip())
+                    for r in rows if str(r.get("database", "")).strip()]
+        creds_store.save_shearwater_accounts(accounts)
+        self._saved()
+
     def _set(self, attr, value, signal):
         setattr(self, attr, value)
         signal.emit()

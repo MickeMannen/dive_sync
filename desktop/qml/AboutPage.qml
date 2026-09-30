@@ -88,6 +88,25 @@ ColumnLayout {
     }
 
     Card {
+        title: "With thanks to"
+        Repeater {
+            model: aboutController.references
+            delegate: ColumnLayout {
+                required property var modelData
+                spacing: 2
+                Layout.fillWidth: true
+                Text {
+                    text: "<a href=\"" + modelData.url + "\">" + modelData.name + "</a>  <font color=\"" + Theme.muted + "\">" + modelData.license + "</font>"
+                    textFormat: Text.RichText
+                    color: Theme.text; font.pixelSize: 12
+                    onLinkActivated: (link) => Qt.openUrlExternally(link)
+                }
+                Text { text: modelData.role; color: Theme.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            }
+        }
+    }
+
+    Card {
         title: "Built with"
         Repeater {
             model: aboutController.components

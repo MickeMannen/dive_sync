@@ -36,6 +36,7 @@ class UnifiedSample(BaseModel):
     depth: float = Field(..., description="Depth in meters")
     temp: Optional[float] = Field(None, description="Temperature in Celsius")
     time: Optional[int] = Field(None, description="Time in seconds from start of dive")
+    pressure: Optional[float] = Field(None, description="Tank pressure in bar at this sample, when the computer logged one (a transmitter); None otherwise")
 
 class UnifiedDive(BaseModel):
     date_time: datetime = Field(..., description="Local start date and time of the dive (timezone-naive)")

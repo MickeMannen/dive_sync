@@ -93,6 +93,24 @@ def components() -> List[Dict[str, str]]:
     return out
 
 
+# Work this project leans on for a file format, without using its code:
+# credited on the About pages and in README.md.
+REFERENCES: List[Dict[str, str]] = [
+    {
+        "name": "libdivecomputer",
+        "role": "Reference for the Shearwater dive computer's log format: DiveSync's decoder of the Shearwater app's "
+                "profile blobs (src/core/services/shearwater_log.py) follows the field layout documented in its "
+                "shearwater_predator_parser.c, re-implemented in Python.",
+        "license": "LGPL-2.1, Jef Driesen and contributors",
+        "url": "https://github.com/libdivecomputer/libdivecomputer",
+    },
+]
+
+
+def references() -> List[Dict[str, str]]:
+    return [dict(r) for r in REFERENCES]
+
+
 def about_info() -> Dict[str, object]:
     return {
         "name": APP_NAME,
@@ -104,5 +122,6 @@ def about_info() -> Dict[str, object]:
         "releases_url": PROJECT_URL + "/releases",
         "issues_url": PROJECT_URL + "/issues",
         "components": components(),
+        "references": references(),
         "platform": f"{platform.system()} {platform.release()}",
     }

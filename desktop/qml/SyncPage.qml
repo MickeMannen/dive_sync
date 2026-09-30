@@ -92,7 +92,7 @@ ColumnLayout {
         RowLayout {
             spacing: 16
             visible: syncController.garminAccounts.length > 1 || syncController.divelogsAccounts.length > 1
-                     || syncController.subsurfaceAccounts.length > 1
+                     || syncController.subsurfaceAccounts.length > 1 || syncController.shearwaterAccounts.length > 1
             AccountPicker {
                 objectName: "syncGarminAccount"
                 label: "Garmin account"
@@ -113,6 +113,13 @@ ColumnLayout {
                 accounts: syncController.subsurfaceAccounts
                 current: syncController.selectedAccounts.subsurface || ""
                 onPicked: (account) => syncController.setSelectedAccount("subsurface", account)
+            }
+            AccountPicker {
+                objectName: "syncShearwaterAccount"
+                label: "Shearwater account"
+                accounts: syncController.shearwaterAccounts
+                current: syncController.selectedAccounts.shearwater || ""
+                onPicked: (account) => syncController.setSelectedAccount("shearwater", account)
             }
         }
         RowLayout {

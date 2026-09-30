@@ -254,3 +254,50 @@ def test_auto_reverse_is_derived_from_the_template():
     assert "text between the fields" in "\n".join(validate_reverse(glued, cat))
     assert reverse_parse(glued, "GozoBlue", cat) is None
     assert preview(link, cat)["reverse_sample"]      # the self-check round-trips
+
+
+def test_take_part_and_its_validation():
+    from src.core.fields import FieldLink
+    from src.core.templates import take_part, validate_take
+    assert take_part(r"^(.+?),", "Tenggol Island, Sawadi Wreck") == "Tenggol Island"
+    assert take_part(r",\s*(.+)$", "Tenggol Island, Sawadi Wreck") == "Sawadi Wreck"
+    assert take_part(r"(?P<take>\w+) (\w+)", "Blue Hole") == "Blue"          # the group named take wins over the first
+    assert take_part(r"Blue", "Blue Hole") == "Blue"                          # no group: the whole match
+    assert take_part(r"^(.+?),", "No comma here") is None                     # no match: left alone
+    assert take_part(r"^(.+?),", None) is None and take_part("", "x") is None
+    assert take_part(r"(unclosed", "x") is None
+    link = FieldLink(id="area", source=["garmin.activityName"], target="shearwater.location", direction="to_target", take=r"^(.+?),")
+    assert validate_take(link) == []
+    assert validate_take(link.model_copy(update={"take": None})) == []
+    assert "not a valid regex" in validate_take(link.model_copy(update={"take": "(unclosed"}))[0]
+    assert "needs a group" in validate_take(link.model_copy(update={"take": "^.+?,"}))[0]
+
+
+def test_preview_shows_what_the_take_pattern_picks():
+    from src.core.fields import FieldLink, FieldSpec
+    from src.core.templates import preview
+    from src.core.models import UnifiedDive
+    from datetime import datetime
+    catalog = {"garmin.activityName": FieldSpec(key="garmin.activityName", label="Activity name", type="text"),
+               "shearwater.location": FieldSpec(key="shearwater.location", label="Location", type="text")}
+    dive = UnifiedDive(date_time=datetime(2026, 1, 1), duration=1, max_depth=1.0, service_fields={"activityName": "Gozo, Blue Hole"})
+    link = FieldLink(id="area", source=["garmin.activityName"], target="shearwater.location", direction="to_target", take=r"^(.+?),")
+    out = preview(link, catalog, {"garmin": dive})
+    assert out["ok"] and (out["text"], out["take_sample"]) == ("Gozo, Blue Hole", "Gozo")
+    out = preview(link.model_copy(update={"take": r"\((.+)\)"}), catalog, {"garmin": dive})
+    assert out["ok"] and out["take_sample"] is None
+    out = preview(link.model_copy(update={"take": "no group"}), catalog, {"garmin": dive})
+    assert not out["ok"] and "needs a group" in out["problems"][0]
+
+
+def test_take_pattern_and_choice_are_inverse():
+    from src.core.templates import take_choice, take_pattern, take_part
+    for mode, sep in (("before", ","), ("after", ","), ("before", " - "), ("after", "|"), ("before", "/")):
+        pattern = take_pattern(mode, sep)
+        assert take_choice(pattern) == (mode, sep), (mode, sep, pattern)
+    assert take_part(take_pattern("before", ","), "Tenggol Island , Sawadi Wreck") == "Tenggol Island"
+    assert take_part(take_pattern("after", ","), "Tenggol Island, Sawadi Wreck") == "Sawadi Wreck"
+    assert take_part(take_pattern("after", " - "), "A - B - C") == "B - C"
+    assert take_pattern("whole") is None and take_choice(None) == ("whole", ",")
+    assert take_pattern("custom", ",", r"^(\w+)") == r"^(\w+)" and take_choice(r"^(\w+)") == ("custom", "")
+    assert take_pattern("custom", ",", "  ") is None

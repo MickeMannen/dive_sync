@@ -48,6 +48,8 @@ async function loadAbout() {
     $("about-license").textContent = info.license_text;
     $("about-components").innerHTML = info.components
       .map((c) => `<tr><th>${escapeHtml(c.name)}</th><td>${escapeHtml(c.version)}</td></tr>`).join("");
+    $("about-references").innerHTML = (info.references || [])
+      .map((r) => `<p><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.name)}</a> <span class="muted">${escapeHtml(r.license)}</span><br><span class="muted">${escapeHtml(r.role)}</span></p>`).join("");
   } catch (e) {
     $("about-version").textContent = "Version unknown";
   }
@@ -105,7 +107,7 @@ function renderJobResults(lastResults, lastRuns) {
 
 // ---------------------------------------------------------------- history
 
-const SERVICE_NAMES = { garmin: "Garmin", divelogs: "Divelogs", subsurface: "Subsurface", uddf: "UDDF", submersion: "Submersion" };
+const SERVICE_NAMES = { garmin: "Garmin", divelogs: "Divelogs", subsurface: "Subsurface", uddf: "UDDF", submersion: "Submersion", shearwater: "Shearwater" };
 
 function serviceName(id) {
   return SERVICE_NAMES[id] || id || "?";
@@ -526,6 +528,9 @@ async function loadCredentialsStatus() {
   }
   $("trigger-accounts").hidden = credentialsAccounts.garmin.length < 2 && credentialsAccounts.divelogs.length < 2;
   if (data.subsurface_email) $("subsurface-email").value = data.subsurface_email;
+  setBadge("shearwater-configured", data.shearwater_configured);
+  $("shearwater-database").value = data.shearwater_database || "";
+  $("shearwater-resolved").textContent = data.shearwater_resolved ? `Using ${data.shearwater_resolved}.` : "";
 }
 
 function setBadge(id, on) {
@@ -542,6 +547,7 @@ function credentialsPayload() {
   const email = $("subsurface-email").value.trim();
   const pw = $("subsurface-password").value;
   if (email && pw) payload.subsurface = { email, password: pw };
+  payload.shearwater = { database: $("shearwater-database").value.trim() };
   return payload;
 }
 
@@ -1532,11 +1538,17 @@ function openEditor(receiver, id, view) {
   $("editor-conflict").value = rule.conflict;
   $("editor-separator").value = rule.separator ?? ", ";
   const textTarget = board.catalog[rule.target]?.type === "text";
-  const composite = rule.source.length > 1 || !!rule.template;
+  const composite = rule.source.length > 1;
   $("editor-template").value = rule.template || "";
-  // a plain one-field rule shows only its policy; the template opens on request
-  $("editor-template-block").hidden = !(textTarget && composite);
-  $("editor-template-toggle").hidden = !(textTarget && !composite);
+  // what to write: a single text field into a text field offers the plain
+  // choices; a composite (two or more fields) is always a template
+  const plainText = textTarget && !composite && board.catalog[rule.source[0]]?.type === "text";
+  const choice = takeChoice(rule.take);
+  $("editor-shape-block").hidden = !plainText;
+  $("editor-shape").value = rule.template ? "template" : choice.mode;
+  $("editor-take-sep").value = choice.separator || ",";
+  $("editor-take").value = choice.mode === "custom" ? (rule.take || "") : "";
+  refreshShapeControls(rule);
   // the separator only means something where a list meets text
   $("editor-separator-label").hidden = ![...rule.source, rule.target].some((k) => board.catalog[k]?.type === "list");
   $("editor-advanced").open = false;
@@ -1562,17 +1574,49 @@ function closeEditor() {
   }
 }
 
+// The take pattern behind the plain choices (mirrors src/core/templates.py
+// take_pattern / take_choice).
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\\-\s]/g, "\\$&");
+function takePattern(mode, separator, custom) {
+  const sep = separator || ",";
+  if (mode === "before") return `^(.+?)\\s*${escapeRegex(sep)}`;
+  if (mode === "after") return `${escapeRegex(sep)}\\s*(.+)$`;
+  if (mode === "custom") return (custom || "").trim() || null;
+  return null;
+}
+function takeChoice(pattern) {
+  if (!pattern) return { mode: "whole", separator: "," };
+  const unescape = (s) => s.replace(/\\(.)/g, "$1");
+  let m = pattern.match(/^\^\(\.\+\?\)\\s\*(.+)$/);
+  if (m) return { mode: "before", separator: unescape(m[1]) };
+  m = pattern.match(/^(.+?)\\s\*\(\.\+\)\$$/);
+  if (m) return { mode: "after", separator: unescape(m[1]) };
+  return { mode: "custom", separator: "" };
+}
+function refreshShapeControls(rule) {
+  const composite = rule.source.length > 1;
+  const mode = $("editor-shape-block").hidden ? (rule.template ? "template" : "whole") : $("editor-shape").value;
+  $("editor-take-sep-label").hidden = !(mode === "before" || mode === "after");
+  $("editor-take-label").hidden = mode !== "custom";
+  $("editor-take-note").hidden = !(mode === "before" || mode === "after" || mode === "custom");
+  $("editor-template-block").hidden = !(composite || mode === "template");
+  $("editor-preview-row").hidden = mode === "whole" && !composite;
+}
+
 function editorRule() {
   const rule = selectedRule();
   if (!rule) return null;
   const reverseHidden = $("editor-reverse-block").hidden;
+  const composite = rule.source.length > 1;
+  const mode = $("editor-shape-block").hidden ? (rule.template ? "template" : "whole") : $("editor-shape").value;
   const updated = Object.assign({}, rule, {
     id: $("editor-id").value.trim() || rule.id,
     conflict: $("editor-conflict").value,
     separator: $("editor-separator").value || ", ",
-    template: $("editor-template-block").hidden ? rule.template : ($("editor-template").value.trim() || null),
+    template: (composite || mode === "template") ? ($("editor-template").value.trim() || null) : null,
     reverse: reverseHidden ? rule.reverse : ($("editor-split").checked ? ($("editor-reverse").value.trim() || "auto") : null),
     reverse_conflict: reverseHidden ? rule.reverse_conflict : ($("editor-split").checked ? ($("editor-reverse-conflict").value || null) : null),
+    take: (composite || mode === "template" || mode === "whole") ? null : takePattern(mode, $("editor-take-sep").value, $("editor-take").value),
   });
   // "same as above" on a rule that never overwrites its target would switch
   // the split off with it
@@ -1585,6 +1629,7 @@ function previewLinkFor(rule) {
   return {
     id: rule.id, source: rule.source, target: rule.target, template: rule.template, reverse: rule.reverse,
     direction: rule.reverse ? "bidirectional" : "to_target", conflict: "manual", separator: rule.separator, match_order: null, when: null,
+    take: rule.take || null,
   };
 }
 
@@ -1595,9 +1640,9 @@ function schedulePreview() {
 
 async function runPreview() {
   const rule = editorRule();
-  if (!rule || $("editor-template-block").hidden) return;
-  if (!rule.template && rule.source.length === 1) {
-    $("editor-preview").textContent = "(plain copy)";
+  if (!rule) return;
+  if (!rule.template && !rule.take && rule.source.length === 1) {
+    $("editor-preview").textContent = "(the whole value)";
     $("editor-problems").textContent = "";
     return;
   }
@@ -1612,6 +1657,9 @@ async function runPreview() {
     return;
   }
   let text = data.ok ? (data.text || "(empty)") : "–";
+  if (data.ok && "take_sample" in data) {
+    text = data.take_sample !== null ? `"${data.text}" becomes "${data.take_sample}"` : `"${data.text}" has no such part: the field would be left alone`;
+  }
   if (data.ok && "reverse_sample" in data) {
     const sample = data.reverse_sample;
     text += "  |  split back: " + (sample
@@ -1632,6 +1680,14 @@ function applyEditor() {
   }
   if (updated.reverse && !updated.template) {
     $("editor-problems").textContent = "A reverse pattern needs a template.";
+    return;
+  }
+  if (updated.take && updated.template) {
+    $("editor-problems").textContent = "Pick one: part of the value, or a template.";
+    return;
+  }
+  if ($("editor-shape").value === "custom" && !updated.take && !$("editor-shape-block").hidden) {
+    $("editor-problems").textContent = "Type the pattern, or choose another option.";
     return;
   }
   const list = rulesOf(receiver);
@@ -2061,11 +2117,9 @@ async function init() {
   $("editor-insert").addEventListener("click", insertFieldIntoTemplate);
   $("editor-template").addEventListener("input", schedulePreview);
   $("editor-reverse").addEventListener("input", schedulePreview);
-  $("editor-template-toggle").addEventListener("click", () => {
-    $("editor-template-block").hidden = false;
-    $("editor-template-toggle").hidden = true;
-    schedulePreview();
-  });
+  $("editor-shape").addEventListener("change", () => { const r = selectedRule(); if (r) refreshShapeControls(r); schedulePreview(); });
+  $("editor-take").addEventListener("input", schedulePreview);
+  $("editor-take-sep").addEventListener("input", schedulePreview);
   $("editor-split").addEventListener("change", () => {
     $("editor-split-options").hidden = !$("editor-split").checked;
     schedulePreview();

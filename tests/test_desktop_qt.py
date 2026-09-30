@@ -1364,3 +1364,99 @@ def test_mapping_save_drops_conflicts_the_board_no_longer_raises(qapp, scratch_d
     assert [c.link_id for c in store.load()] == ["notes"]         # notes' policy did not change
 
     assert m.save() == "" and m.message == "Saved."               # nothing more to drop
+
+
+def test_settings_controller_shearwater_accounts(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """The Shearwater card: databases are desktop preferences (not keychain
+    items), Detect lists every account the app has, and the Sync page
+    offers the picked account like the other services'."""
+    import shutil
+    from desktop import accounts, logging_bridge
+    from desktop.controllers.settings import SettingsController
+    from desktop.controllers.sync import SyncController
+    from tests.test_shearwater import FIXTURE, _fake_install
+    c = SettingsController()
+    assert c.shearwaterAccounts == [] and "not installed" in c.shearwaterStatus
+    assert c.detectShearwater() == []
+    users = _fake_install(scratch_data_dir, monkeypatch, ["live@x", "test@x"], active="test@x")
+    live, test = str(users / "live@x" / "dive_data.db"), str(users / "test@x" / "dive_data.db")
+    assert c.detectShearwater() == [{"account": "test@x", "database": test}, {"account": "live@x", "database": live}]
+    assert "Found 2" in c.message
+    assert "using the app's active account on this computer, test@x" in c.shearwaterStatus   # nothing saved yet
+    copy = str(scratch_data_dir / "copy.db")
+    shutil.copy(FIXTURE, copy)
+    c.saveShearwaterAccounts([{"account": "", "database": test}, {"account": "Copy", "database": copy},
+                              {"account": "", "database": str(scratch_data_dir / "missing.db")}, {"account": "x", "database": ""}])
+    folder = scratch_data_dir.name                                             # a file outside the app is named after its folder
+    assert [(r["account"], r["exists"]) for r in c.shearwaterAccounts] == [("test@x", True), ("Copy", True), (folder, False)]
+    assert c.shearwaterStatus == f"2 account(s) ready; missing: {folder}."
+    c.saveGarminAccounts([{"username": "g@x", "password": "p"}])
+    sync = SyncController(logging_bridge.install())
+    assert sync.shearwaterAccounts == ["test@x", "Copy"]
+    assert {"spec": "shearwater", "id": "shearwater", "label": "Shearwater app"} in sync.endpoints
+    sync.setSelectedAccount("shearwater", "Copy")
+    assert accounts.sync_selection()["shearwater"] == "Copy"
+    assert accounts.engine_kwargs()["shearwater_account"] == "Copy"
+    # the owner's bug (2026-09-29): Garmin -> Shearwater had no pair on the page,
+    # so Sync now answered "Pick two different services" instead of running
+    from src.core import scheduler
+    seen = {}
+    monkeypatch.setattr(scheduler, "run_sync_thread", lambda dry_run, custom=None, **kw: seen.update(custom=custom))
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    assert any({p["source"], p["target"]} == {"garmin", "shearwater"} and p["builtin"] for p in sync.pairs)
+    sync.runSyncBetween(False, "garmin", "shearwater", True, True, "", "", True, False)
+    assert wait_until(qapp, lambda: not sync.running)
+    assert (seen["custom"]["source"], seen["custom"]["target"], seen["custom"]["directionality"]) == ("garmin", "shearwater", "to_shearwater")
+    assert seen["custom"]["shearwater_account"] == "Copy" and seen["custom"]["account_scoped"] is True
+    c.saveShearwaterAccounts([])
+    assert c.shearwaterAccounts == [] and "using the app's active account" in c.shearwaterStatus
+
+
+def test_mapping_controller_take_part_of_a_value(qapp, scratch_data_dir, fake_keyring):
+    """The rule editor's 'use only part of the value' (2026-09-30)."""
+    from desktop.controllers.mapping import MappingController
+    m = MappingController()
+    assert m.createRule("garmin.activityName", "divelogs", "divelogs.location")
+    rule = m.selectedRule
+    assert rule["take_possible"] is True and rule["take"] == ""
+    assert (rule["take_mode"], rule["take_separator"]) == ("whole", ",")
+    m.previewTakeChoice("before", ",", "")
+    assert "no such part" in m.preview and m.previewProblems == ""            # the example title has no comma
+    m.previewTake("no group")
+    assert "needs a group" in m.previewProblems
+    assert m.updateRule({"take": r"^(\w+)", "template": "{garmin.activityName}"}) != ""      # not both
+    # the plain choice "before a separator" is stored as the pattern behind it
+    assert m.updateRule({"take_mode": "before", "take_separator": " of "}) == ""
+    assert m.selectedRule["take_mode"] == "before" and m.selectedRule["take_separator"] == " of "
+    assert m.preview.startswith('"Wreck of the Zenobia" becomes "Wreck"')
+    rules = m._as_models()
+    assert rules["divelogs"][-1].take == m.selectedRule["take"] and rules["divelogs"][-1].take.startswith("^(.+?)")
+    assert m.updateRule({"take_mode": "custom", "take": r"^(\w+)"}) == "" and m.selectedRule["take_mode"] == "custom"
+    assert m.updateRule({"take_mode": "whole"}) == "" and m.selectedRule["take"] == "" and m.preview == "(plain copy)"
+
+
+def test_mapping_board_of_a_shearwater_pair_saves(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """The owner's report (2026-09-30): the Garmin <-> Shearwater board could
+    never be saved (its shipped rules failed validation), so the page kept
+    saying 'unsaved changes' and the app asked about them on quit."""
+    import shutil
+    from desktop.controllers.mapping import MappingController
+    from desktop.controllers.settings import SettingsController
+    from tests.test_shearwater import FIXTURE
+    settings = SettingsController()
+    settings.saveGarminAccounts([{"username": "g@x", "password": "p"}])
+    db = str(scratch_data_dir / "dive_data.db")
+    shutil.copy(FIXTURE, db)
+    settings.saveShearwaterAccounts([{"account": "test", "database": db}])
+    m = MappingController()
+    m.selectPair("garmin_shearwater")
+    assert m.pairId == "garmin_shearwater" and not m.dirty
+    assert m.createRule("garmin.activityName", "shearwater", "shearwater.other1")   # a field with no rule yet (notes would offer a split)
+    assert m.dirty
+    assert m.save() == "" and m.message.startswith("Saved") and not m.dirty
+    # a board that cannot be saved says so up front
+    m2 = MappingController()
+    m2.selectPair("garmin_shearwater")
+    m2._rules_of("shearwater").append({"id": "bad", "target": "shearwater.tanks", "source": ["garmin.tanks"], "conflict": "source_wins",
+                                       "template": None, "reverse": None, "reverse_conflict": None, "separator": ", ", "when": None, "take": None})
+    assert m2.save() != "" and m2.message.startswith("Not saved") and "cannot be written" in m2.message

@@ -20,6 +20,11 @@ class BaseDiveAdapter(ABC):
     # (Subsurface extradata, Submersion importId). Garmin and Divelogs have no
     # such field, so their pairs are remembered in the local sync state instead.
     stores_external_ids: ClassVar[bool] = False
+    # False when the service never takes a dive from elsewhere (Shearwater
+    # Cloud: only the app's own computer download adds one). The engine then
+    # leaves the dives the service is missing alone, says so once per run,
+    # and still syncs the metadata of the dives it does have.
+    accepts_new_dives: ClassVar[bool] = True
 
     @classmethod
     def field_catalog(cls) -> List[FieldSpec]:

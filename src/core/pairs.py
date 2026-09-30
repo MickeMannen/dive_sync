@@ -6,6 +6,9 @@ A *service spec* is ``<service id>[:<argument>]``:
     divelogs               Divelogs.org (credentials.json)
     uddf:<file>            a UDDF 3.2 file
     subsurface:<directory> a Subsurface git-storage checkout
+    shearwater             the Shearwater app's database of a configured account (credentials
+                           ``shearwater``; several accounts pick one per run, none saved = the app's active one)
+    shearwater:<file>      one such database named by its path
     subsurface-cloud       Subsurface Cloud (credentials.json ``subsurface``; clone under subsurface/<account>/cloud)
     submersion             Submersion sync store (credentials.json ``submersion``: S3 bucket or folder)
 
@@ -17,15 +20,17 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 from src.core.adapter import BaseDiveAdapter
 from src.core import config, layout
 from src.core.config import SERVICE_ID_ALIASES, ConfigManager, SettingsModel, SyncPairModel
-from src.core.fields import FieldLink, common_default_links, default_field_links, submersion_default_links
+from src.core.fields import FieldLink, common_default_links, default_field_links, submersion_default_links, FieldSpec
 
-KNOWN_SERVICES = ("garmin", "divelogs", "uddf", "subsurface", "subsurface-cloud", "submersion")
+KNOWN_SERVICES = ("garmin", "divelogs", "uddf", "subsurface", "subsurface-cloud", "submersion", "shearwater")
 FILE_SERVICES = ("uddf", "subsurface")
+# takes a path or not: without one the configured account's file is used
+OPTIONAL_ARG_SERVICES = ("shearwater",)
 # spec name -> service id (the cloud adapter shares Subsurface's catalogue and ids)
 SERVICE_IDS = SERVICE_ID_ALIASES
 
@@ -45,7 +50,7 @@ def parse_service_spec(spec: str) -> Tuple[str, Optional[str]]:
     arg = arg.strip() or None
     if service in FILE_SERVICES and not arg:
         raise ValueError(f"Service {service!r} needs a path: {service}:<path>")
-    if service not in FILE_SERVICES and arg:
+    if service not in FILE_SERVICES and service not in OPTIONAL_ARG_SERVICES and arg:
         raise ValueError(f"Service {service!r} takes no argument")
     return service, arg
 
@@ -62,6 +67,8 @@ def field_catalog_of(service_id: str) -> list:
         from src.core.services.uddf import UddfAdapter as adapter
     elif service_id == "submersion":
         from src.core.services.submersion.adapter import SubmersionAdapter as adapter
+    elif service_id == "shearwater":
+        from src.core.services.shearwater import ShearwaterAdapter as adapter
     else:
         raise ValueError(f"Unknown service {service_id!r}")
     return adapter.field_catalog()
@@ -74,7 +81,7 @@ def display_name_of(spec: str) -> str:
         from src.core.services.subsurface_cloud import SubsurfaceCloudAdapter
         return SubsurfaceCloudAdapter.display_name
     return {"garmin": "Garmin Connect", "divelogs": "Divelogs.org", "subsurface": "Subsurface",
-            "uddf": "UDDF file", "submersion": "Submersion"}.get(service, service)
+            "uddf": "UDDF file", "submersion": "Submersion", "shearwater": "Shearwater app"}.get(service, service)
 
 
 def default_links_for(source_id: str, target_id: str) -> List[FieldLink]:
@@ -91,11 +98,58 @@ def default_links_for(source_id: str, target_id: str) -> List[FieldLink]:
         links = submersion_default_links(source_id, target_id, match_on_dive_number=numbered)
     else:
         links = common_default_links(source_id, target_id, match_on_dive_number=numbered)
+    if "shearwater" in (source_id, target_id):
+        links += _shearwater_site_links(source_id, target_id)
     try:
-        known = {f.key for sid in (source_id, target_id) for f in field_catalog_of(sid)}
+        catalog = {f.key: f for sid in (source_id, target_id) for f in field_catalog_of(sid)}
     except ValueError:
         return links
-    return [link for link in links if link.target in known and all(k in known for k in link.source)]
+    return _valid_for_pair(links, catalog)
+
+
+def _valid_for_pair(links: List[FieldLink], catalog: Dict[str, FieldSpec]) -> List[FieldLink]:
+    """The shipped links a pair can actually save: a link naming a field the
+    pair lacks, joining fields of different types (Shearwater's visibility
+    is text, Garmin's a number) or writing a field its service cannot
+    write (Shearwater's tanks) is dropped - a two-way link whose one side
+    is unwritable becomes one-way towards the writable side. Without this
+    the board opened with a rule the validator refused, so Save never
+    succeeded and the page stayed "unsaved" (found 2026-09-30)."""
+    from src.core.fields import validate_field_links
+    out: List[FieldLink] = []
+    for link in links:
+        if link.target not in catalog or any(k not in catalog for k in link.source):
+            continue
+        candidates = [link]
+        if link.direction == "bidirectional":
+            candidates += [link.model_copy(update={"direction": "to_target"}),
+                           link.model_copy(update={"direction": "to_source"})]
+        for candidate in candidates:
+            if not validate_field_links([candidate], catalog):
+                out.append(candidate)
+                break
+    return out
+
+
+def _shearwater_site_links(source_id: str, target_id: str) -> List[FieldLink]:
+    """The site fields of a Shearwater pair, which the generic board cannot
+    guess (rework.md Track H): the app's Site is the dive site (unified
+    ``location``) and its Location the area. Garmin's site is its location
+    name; Divelogs has the same two-level split (location + dive site);
+    Subsurface and UDDF have one site name."""
+    other = target_id if source_id == "shearwater" else source_id
+    site_of = {"garmin": "garmin.locationName", "divelogs": "divelogs.divesite", "subsurface": "subsurface.location",
+               "uddf": "uddf.location"}.get(other)
+    if not site_of:
+        return []
+    pairs = [("site", site_of, "shearwater.site")]
+    if other == "divelogs":
+        pairs.append(("area", "divelogs.location", "shearwater.location"))
+    links = []
+    for link_id, other_key, shearwater_key in pairs:
+        source, target = (shearwater_key, other_key) if source_id == "shearwater" else (other_key, shearwater_key)
+        links.append(FieldLink(id=link_id, source=[source], target=target, conflict="manual"))
+    return links
 
 
 def _resolve_path(arg: str) -> str:
@@ -107,7 +161,8 @@ def _resolve_path(arg: str) -> str:
 def build_adapter(spec: str, settings: SettingsModel, credentials_path: Optional[str] = None,
                   mock_data_dir: Optional[str] = None, garmin_username: Optional[str] = None,
                   divelogs_username: Optional[str] = None,
-                  subsurface_username: Optional[str] = None) -> BaseDiveAdapter:
+                  subsurface_username: Optional[str] = None,
+                  shearwater_account: Optional[str] = None) -> BaseDiveAdapter:
     service, arg = parse_service_spec(spec)
     if service == "uddf":
         from src.core.services.uddf import UddfAdapter
@@ -115,6 +170,17 @@ def build_adapter(spec: str, settings: SettingsModel, credentials_path: Optional
     if service == "subsurface":
         from src.core.services.subsurface import SubsurfaceAdapter
         return SubsurfaceAdapter(_resolve_path(arg))
+    if service == "shearwater":
+        from src.core.config import CREDENTIALS_FILE
+        from src.core.services.shearwater import ShearwaterAdapter
+        if arg:
+            return ShearwaterAdapter(_resolve_path(arg))
+        accounts = ConfigManager.load_credentials(credentials_path or CREDENTIALS_FILE).get_shearwater_accounts()
+        if not accounts:
+            raise ValueError("No Shearwater app database configured or found on this computer; "
+                             "add one in Settings or name the file as shearwater:<path>")
+        picked = _pick(accounts, shearwater_account, "Shearwater app", "--shearwater-account", key=lambda a: a.name)
+        return ShearwaterAdapter(picked.resolved_path())
     if service == "subsurface-cloud":
         from src.core.config import CREDENTIALS_FILE
         from src.core.services.subsurface_cloud import SubsurfaceCloudAdapter
@@ -168,7 +234,7 @@ def _pick(accounts, username: Optional[str], label: str, flag: str, key=lambda a
 
 # The spec a configured service is synced through (Subsurface: its cloud).
 CONFIGURED_SPECS = {"garmin": "garmin", "divelogs": "divelogs", "subsurface": "subsurface-cloud",
-                    "submersion": "submersion"}
+                    "submersion": "submersion", "shearwater": "shearwater"}
 
 
 CACHE_SERVICE_ORDER = ("garmin", "divelogs", "submersion", "subsurface")
@@ -183,9 +249,27 @@ def cache_services(configured: List[str]) -> List[dict]:
             for s in CACHE_SERVICE_ORDER if s in configured]
 
 
+def configured_specs(configured: List[str]) -> List[str]:
+    """The specs of ``configured`` (credentials.configured_specs(): service
+    ids, or a full spec such as ``shearwater:<path>`` for a service whose
+    spec carries a path; plain ids from the older configured_services() are
+    still accepted)."""
+    out = []
+    for entry in configured:
+        if entry in CONFIGURED_SPECS:
+            out.append(CONFIGURED_SPECS[entry])
+        elif ":" in entry:
+            try:
+                parse_service_spec(entry)
+            except ValueError:
+                continue
+            out.append(entry)
+    return out
+
+
 def board_pairs(settings: SettingsModel, configured: List[str]) -> List[dict]:
     """The mapping boards to offer: every saved pair, then each combination of
-    the ``configured`` services (credentials.configured_services()) that no
+    the ``configured`` services (credentials.configured_specs()) that no
     saved pair joins yet - with the shipped default board until it is saved,
     which adds it to ``sync_pairs``. What the Sync page runs for such a
     combination (engine_for) uses that saved pair, so both pages agree.
@@ -198,7 +282,7 @@ def board_pairs(settings: SettingsModel, configured: List[str]) -> List[dict]:
             continue            # a disabled (Submersion) or unknown service: no board to offer
         out.append({"id": p.id, "source": p.source, "target": p.target, "saved": True})
     ids = {p.id for p in settings.sync_pairs}
-    specs = [CONFIGURED_SPECS[s] for s in configured if s in CONFIGURED_SPECS]
+    specs = configured_specs(configured)
     for i, source in enumerate(specs):
         for target in specs[i + 1:]:
             if {service_id_of(source), service_id_of(target)} in joined:
@@ -216,7 +300,7 @@ def sync_endpoints(settings: SettingsModel, configured: List[str]) -> List[dict]
     """What a Source or Target picker offers: every configured service, then
     the other ends of saved pairs (e.g. a UDDF file), as {spec, id, label}."""
     out, seen = [], set()
-    specs = [CONFIGURED_SPECS[s] for s in configured if s in CONFIGURED_SPECS]
+    specs = configured_specs(configured)
     specs += [spec for p in settings.sync_pairs for spec in (p.source, p.target)]
     for spec in specs:
         if spec in seen:
@@ -255,8 +339,10 @@ def conflicts_file_for(board: dict, state_dir: str) -> str:
 
 def adapter_account(adapter) -> str:
     """The account an adapter logs in as ("" for a file, a store or a local
-    checkout): Garmin/Divelogs' username, Subsurface Cloud's email."""
-    return str(getattr(adapter, "email", None) or getattr(adapter, "username", None) or "")
+    checkout): Garmin/Divelogs' username, Subsurface Cloud's email, the
+    Shearwater database's account folder."""
+    return str(getattr(adapter, "email", None) or getattr(adapter, "username", None)
+               or getattr(adapter, "account", None) or "")
 
 
 def _safe_state_part(account: str) -> str:
@@ -298,7 +384,7 @@ def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] 
                credentials_path: Optional[str] = None, mock_data_dir: Optional[str] = None,
                garmin_username: Optional[str] = None, divelogs_username: Optional[str] = None,
                pair: Optional[SyncPairModel] = None, subsurface_username: Optional[str] = None,
-               account_scoped_state: bool = False):
+               account_scoped_state: bool = False, shearwater_account: Optional[str] = None):
     """A ``SyncEngine`` for two service specs. When the specs are exactly
     ``garmin`` and ``divelogs`` the classic constructor is used so account
     selection, state files and cache directories behave as before. With
@@ -324,9 +410,9 @@ def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] 
                             account_scoped_state=account_scoped_state)
     else:
         source = build_adapter(source_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username,
-                               subsurface_username)
+                               subsurface_username, shearwater_account)
         target = build_adapter(target_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username,
-                               subsurface_username)
+                               subsurface_username, shearwater_account)
         engine = SyncEngine(settings_path=settings_path, credentials_path=credentials_path,
                             source_adapter=source, target_adapter=target, account_scoped_state=account_scoped_state)
     if pair is not None:

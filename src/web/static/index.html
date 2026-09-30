@@ -154,16 +154,30 @@
           </label>
           <label id="editor-separator-label">List separator <input type="text" id="editor-separator" maxlength="8"></label>
         </div>
-        <button type="button" class="link-button" id="editor-template-toggle">&#9656; Combine or reformat with a template</button>
+        <div id="editor-shape-block" class="inline-form">
+          <label>What to write
+            <select id="editor-shape">
+              <option value="whole">The whole value</option>
+              <option value="before">Only the text before a separator (e.g. the area of "Tenggol Island, Sawadi Wreck")</option>
+              <option value="after">Only the text after a separator (e.g. the site of "Tenggol Island, Sawadi Wreck")</option>
+              <option value="template">Text built from a template (add words, or combine fields)</option>
+              <option value="custom">Only what a custom pattern picks (regular expression)</option>
+            </select>
+          </label>
+          <label id="editor-take-sep-label">Separator <input type="text" id="editor-take-sep" value="," maxlength="8" title="The first one in the value counts; text around it is trimmed"></label>
+          <label id="editor-take-label">Pattern <input type="text" id="editor-take" placeholder="the part in parentheses is written, e.g. ^(\w+)"></label>
+        </div>
+        <p class="muted" id="editor-take-note">A value without that part is left as it is.</p>
         <div id="editor-template-block">
           <label>Template <textarea id="editor-template" rows="2" placeholder="{field} text {other}"></textarea></label>
+          <p class="muted">{field} stands for a field's value; anything else is written as typed. <code>{location}, {site}</code> puts two fields together, <code>Dive {dive_number}</code> adds words.</p>
           <div class="actions">
             <select id="editor-field-picker"></select>
             <button type="button" class="secondary" id="editor-insert">Insert field</button>
           </div>
-          <div class="preview"><span class="label">Preview</span> <code id="editor-preview">–</code></div>
-          <div id="editor-problems" class="problems"></div>
         </div>
+        <div class="preview" id="editor-preview-row"><span class="label">Example with a sample dive</span> <code id="editor-preview">–</code></div>
+        <div id="editor-problems" class="problems"></div>
         <div id="editor-reverse-block">
           <label class="inline-checkbox"><input type="checkbox" id="editor-split"> <span id="editor-split-label">Split it back into its fields</span></label>
           <div id="editor-split-options">
@@ -252,6 +266,11 @@
           <legend>Subsurface Cloud <span id="subsurface-configured" class="badge"></span></legend>
           <label>Email <input type="text" id="subsurface-email"></label>
           <label>Password <input type="password" id="subsurface-password" placeholder="leave blank to keep the saved one"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Shearwater app <span id="shearwater-configured" class="badge"></span></legend>
+          <label>Database <input type="text" id="shearwater-database" placeholder="path of the desktop app's dive_data.db, e.g. /data/shearwater/dive_data.db"></label>
+          <p class="muted">Not a login: the database file of the Shearwater app (Shearwater's "Shearwater Cloud" desktop program), mounted or copied where this server can read it. DiveSync reads it and writes dive details into it; the app itself uploads to the cloud. Blank looks for the app on this machine. <span id="shearwater-resolved"></span></p>
         </fieldset>
         <div class="actions">
           <button type="button" id="test-credentials">Test</button>
@@ -384,9 +403,13 @@
       </details>
     </section>
     <section class="card">
+      <h2>With thanks to</h2>
+      <div id="about-references"></div>
+    </section>
+    <section class="card">
       <h2>Built with</h2>
       <table class="about-table" id="about-components"></table>
-      <p class="muted">Garmin Connect, Divelogs.org and Subsurface are the names of their owners' services; DiveSync is an independent project and not affiliated with them.</p>
+      <p class="muted">Garmin Connect, Divelogs.org, Subsurface and Shearwater are the names of their owners' products and services; DiveSync is an independent project and not affiliated with them.</p>
     </section>
     </div>
     </main>

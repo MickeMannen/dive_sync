@@ -190,13 +190,14 @@ python sync.py --backup --garmin-path my_garmin.json --divelogs-path my_divelogs
 * `--direction`: Which side this run writes: `to_garmin`, `to_divelogs`, `to_<service>`, `to_target` or `to_source`. Without it the pair's saved direction is used. `bidirectional` is no longer accepted — run each direction separately. **Deletes follow the direction**: with *propagate deletes* on, a dive gone from the sending side is deleted on the receiving side; a dive gone from the receiving side is left alone by that run (the opposite run removes it from the sender). A sync started from the desktop app's Sync page never deletes unless *Mirror* is ticked.
 * `--overwrite`: With `--save-raw-data`, fetch every Garmin dive again instead of reusing the unchanged ones (other services are always downloaded in full).
 
-### Other services: UDDF files and Subsurface
+### Other services: UDDF files, Subsurface and the Shearwater app
 
-Besides Garmin and Divelogs, a sync can target a UDDF 3.2 file (which both Subsurface and Submersion import and export) or a Subsurface git-storage directory (what Subsurface Cloud and Subsurface's git repositories contain). Name the two sides with `--source` and `--target`, or configure a pair once in `settings.json` and run it by id:
+Besides Garmin and Divelogs, a sync can target a UDDF 3.2 file (which both Subsurface and Submersion import and export) or a Subsurface git-storage directory (what Subsurface Cloud and Subsurface's git repositories contain), and it can read the Shearwater app's database (the app is Shearwater's "Shearwater Cloud" desktop program; DiveSync works on its local file and never talks to the cloud) (`dive_data.db`) as a source of dives - Perdix and other Shearwater computer downloads with their gases and the dive profile decoded from the computer's own log (every sample as logged: depth, temperature and the transmitter's tank pressure, which reaches Subsurface; Divelogs' profile has no pressure slot). A log that cannot be decoded leaves that dive without a profile and logs a warning. Dives are never created or deleted in that database, but metadata (site, buddy, notes, dive number, weight, entry position and the app's own fields such as environment, weather or platform) is written back into it the way the app writes it, so the app uploads the change to Shearwater Cloud on its next sync. Close the app before such a run: DiveSync refuses to write while it is open, and copies the database to `backups/shearwater/` first. The values of the app's dropdown fields must be one of its options. The app keeps one database per Shearwater account, and DiveSync treats them like accounts: in the desktop app, Settings → Shearwater app → *Detect* lists every account the app has on this Mac; keep the ones to sync, and the Sync page picks one per run (with nothing saved, the app's active account is used). The web dashboard's credentials form and `credentials.json` (`"shearwater": [{"database": "...", "account": "..."}]`) take a path to a copy or a mounted file. Once a database is known, "Shearwater Cloud" is offered as a Source or Target on the Sync page and gets a mapping board with every other configured service; the CLI names a file as `shearwater:<path>`. Name the two sides with `--source` and `--target`, or configure a pair once in `settings.json` and run it by id:
 
 ```bash
 python sync.py --source garmin --target uddf:garmin_export.uddf --full-sync     # file under DATA_DIR
 python sync.py --source divelogs --target subsurface:/path/to/subsurface-checkout
+python sync.py --source "shearwater:/path/to/dive_data.db" --target subsurface-cloud   # close the Shearwater app first
 python sync.py --pair to-subsurface                                             # a pair from sync_pairs
 ```
 
@@ -461,5 +462,8 @@ The web dashboard has **no authentication**. Anyone who can reach its port can r
 
 ---
 
+## 🙏 Acknowledgements
+* **[libdivecomputer](https://github.com/libdivecomputer/libdivecomputer)** (LGPL-2.1, Jef Driesen and contributors) is the reference for the Shearwater dive computer's log format. DiveSync's decoder of the Shearwater app's profile blobs (`src/core/services/shearwater_log.py`) follows the field layout documented in its `shearwater_predator_parser.c`, re-implemented in Python; the module records the upstream revision it was checked against so a change there is easy to spot. No libdivecomputer code is included.
+
 ## 📄 License
-MIT, see [LICENSE](LICENSE). The desktop app uses PySide6 (Qt for Python), which is LGPL and linked dynamically; that is compatible with the MIT licence of this project. Garmin Connect, Divelogs.org and Subsurface are the names of their owners' services; this is an independent project, not affiliated with them.
+MIT, see [LICENSE](LICENSE). The desktop app uses PySide6 (Qt for Python), which is LGPL and linked dynamically; that is compatible with the MIT licence of this project. Garmin Connect, Divelogs.org, Subsurface and Shearwater are the names of their owners' products and services; this is an independent project, not affiliated with them.

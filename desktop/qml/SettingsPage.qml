@@ -191,6 +191,63 @@ ColumnLayout {
                 Button { text: "Add another account"; flat: true; onClicked: subsurfaceAccountsModel.append({username: "", password: "", hasPassword: false}) }
             }
         }
+        Card {
+            id: shearwaterCard
+            title: "Shearwater app"
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.muted
+                font.pixelSize: 11
+                text: "The databases of the Shearwater app (Shearwater's \"Shearwater Cloud\" desktop program), one per account (dive_data.db). DiveSync reads them and writes dive details into them; the app itself uploads to the cloud. Detect lists the accounts the app has on this computer; keep the ones to sync, and the Sync page picks one per run. With nothing saved, the app's active account is used. Close the app before syncing."
+            }
+            ListModel { id: shearwaterModel }
+            function reload() {
+                shearwaterModel.clear()
+                var rows = settingsController.shearwaterAccounts
+                for (var i = 0; i < rows.length; i++)
+                    shearwaterModel.append({account: rows[i].account, database: rows[i].database, exists: rows[i].exists})
+            }
+            function addFound(found) {
+                for (var i = 0; i < found.length; i++) {
+                    var known = false
+                    for (var j = 0; j < shearwaterModel.count; j++)
+                        if (shearwaterModel.get(j).database === found[i].database) known = true
+                    if (!known) shearwaterModel.append({account: found[i].account, database: found[i].database, exists: true})
+                }
+            }
+            Component.onCompleted: reload()
+            Connections { target: settingsController; function onCredentialsChanged() { shearwaterCard.reload() } }
+            Repeater {
+                model: shearwaterModel
+                delegate: RowLayout {
+                    required property int index
+                    required property string account
+                    required property string database
+                    required property bool exists
+                    LabeledField { fieldWidth: 200; label: "Account"; text: account; onTextChanged: shearwaterModel.setProperty(index, "account", text) }
+                    LabeledField { fieldWidth: 420; label: "Database"; text: database; onTextChanged: shearwaterModel.setProperty(index, "database", text) }
+                    Button { text: "Remove"; flat: true; onClicked: shearwaterModel.remove(index) }
+                    Text { visible: !exists; text: "⚠ file not found"; color: Theme.danger; font.pixelSize: 11 }
+                }
+            }
+            Text { objectName: "shearwaterStatus"; text: settingsController.shearwaterStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+            RowLayout {
+                Button { text: "Detect"; onClicked: shearwaterCard.addFound(settingsController.detectShearwater()) }
+                Button {
+                    text: "Save"
+                    onClicked: {
+                        var rows = []
+                        for (var i = 0; i < shearwaterModel.count; i++) {
+                            var row = shearwaterModel.get(i)
+                            rows.push({account: row.account, database: row.database})
+                        }
+                        settingsController.saveShearwaterAccounts(rows)
+                    }
+                }
+                Button { text: "Add another database"; flat: true; onClicked: shearwaterModel.append({account: "", database: "", exists: false}) }
+            }
+        }
         Text { visible: text !== ""; text: settingsController.message; color: Theme.muted }
 
     Card {

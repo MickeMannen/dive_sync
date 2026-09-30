@@ -90,7 +90,7 @@ class ConflictsController(QObject):
         from src.core.config import ConfigManager
         from src.core.pairs import board_pairs
         try:
-            configured = credentials.load_credentials_model().configured_services()
+            configured = credentials.load_credentials_model().configured_specs()
         except Exception:
             configured = []
         return board_pairs(ConfigManager.load_settings(), configured)

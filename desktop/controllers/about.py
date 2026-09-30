@@ -56,6 +56,12 @@ class AboutController(QObject):
     def components(self):
         return list(self._info["components"])
 
+    @Property("QVariantList", constant=True)
+    def references(self):
+        """Work credited for a file format (libdivecomputer), About page."""
+        from src.core.about import references
+        return references()
+
     @Property(str, constant=True)
     def dataDir(self) -> str:
         return paths.data_dir()

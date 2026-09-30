@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, CredentialsModel, CronJobModel, SyncPairModel
+from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, ShearwaterCredentials, CredentialsModel, CronJobModel, SyncPairModel
 from src.core.fields import FieldLink, SyncRule, build_catalog, links_to_rules
 from src.core.templates import preview as preview_link, validate_links
 from src.core.config import ProfileError, export_profile, import_profile
@@ -127,6 +127,7 @@ class SyncTriggerRequest(BaseModel):
     use_garmin_cache: Optional[bool] = None
     garmin_username: Optional[str] = None
     divelogs_username: Optional[str] = None
+    shearwater_account: Optional[str] = None
 
 class CredentialsSchema(BaseModel):
     # Repeatable rows (rework.md A8): the Garmin/Divelogs sections of the
@@ -137,6 +138,10 @@ class CredentialsSchema(BaseModel):
     # save_credentials) rather than wiping it.
     garmin_accounts: List[GarminCredentials] = Field(default_factory=list)
     divelogs_accounts: List[DivelogsCredentials] = Field(default_factory=list)
+    # the Shearwater app's database (rework.md Track H): the web
+    # form keeps one; sent whenever the form is saved, blank = none saved
+    # (the app's active account on this machine, if any)
+    shearwater: Optional[ShearwaterCredentials] = None
     # Optional sections; omitted (None) means "leave what is stored".
     subsurface: Optional[SubsurfaceCredentials] = None
     submersion: Optional[SubmersionCredentials] = None
@@ -279,6 +284,9 @@ def _adapter_class(service_id: str):
     if service_id == "uddf":
         from src.core.services.uddf import UddfAdapter
         return UddfAdapter
+    if service_id == "shearwater":
+        from src.core.services.shearwater import ShearwaterAdapter
+        return ShearwaterAdapter
     if service_id in ("subsurface", "subsurface-cloud"):
         from src.core.services.subsurface import SubsurfaceAdapter
         return SubsurfaceAdapter
@@ -296,7 +304,7 @@ def get_fields():
     login."""
     from src.core.pairs import board_pairs, default_links_for, parse_service_spec
     settings = ConfigManager.load_settings()
-    configured = ConfigManager.load_credentials().configured_services()
+    configured = ConfigManager.load_credentials().configured_specs()
     specs = [(p["id"], p["source"], p["target"], p["saved"]) for p in board_pairs(settings, configured)]
     pairs = []
     for pair_id, source_spec, target_spec, saved in specs:
@@ -354,6 +362,10 @@ def get_credentials_status():
         "subsurface_configured": creds.first_subsurface_account().configured,
         "subsurface_email": creds.first_subsurface_account().email,
         "submersion_configured": creds.submersion.configured,
+        "shearwater_configured": bool(creds.get_shearwater_accounts()),
+        "shearwater_database": next((a.database for a in creds.saved_shearwater_accounts()), ""),
+        "shearwater_resolved": next((a.resolved_path() or "" for a in creds.get_shearwater_accounts()), ""),
+        "shearwater_accounts": [a.name for a in creds.get_shearwater_accounts()],
         "submersion_store": {
             "store_type": creds.submersion.store_type,
             "endpoint_url": creds.submersion.endpoint_url,
@@ -396,6 +408,8 @@ def save_credentials(data: CredentialsSchema):
             creds = creds.model_copy(update={"subsurface": data.subsurface})
         if data.submersion is not None:
             creds = creds.model_copy(update={"submersion": data.submersion})
+        if data.shearwater is not None:
+            creds = creds.model_copy(update={"shearwater": [data.shearwater] if data.shearwater.database.strip() else []})
         ConfigManager.save_credentials(creds)
         logger.info("Credentials updated via status page.")
         return {"status": "success", "message": "Credentials saved successfully."}
@@ -483,7 +497,7 @@ def test_credentials(data: CredentialsSchema):
 
 def _boards():
     from src.core.pairs import board_pairs
-    return board_pairs(ConfigManager.load_settings(), ConfigManager.load_credentials().configured_services())
+    return board_pairs(ConfigManager.load_settings(), ConfigManager.load_credentials().configured_specs())
 
 
 def _engine_for_pair_id(pair_id: Optional[str]):
@@ -572,7 +586,7 @@ def sync_endpoints():
     """What the Source and Target pickers offer (Sync now, scheduled jobs)."""
     from src.core.pairs import sync_endpoints as endpoints
     settings = ConfigManager.load_settings()
-    return {"endpoints": endpoints(settings, ConfigManager.load_credentials().configured_services()),
+    return {"endpoints": endpoints(settings, ConfigManager.load_credentials().configured_specs()),
             "boards": _boards()}
 
 

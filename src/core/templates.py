@@ -285,6 +285,79 @@ def reverse_parse(link: FieldLink, text: Any, catalog: Dict[str, FieldSpec]) -> 
     return out or None
 
 
+def take_part(pattern: str, text: Any) -> Optional[str]:
+    """The part of ``text`` a link's ``take`` pattern picks: the pattern is
+    searched (not anchored, so ``^`` and ``$`` are the writer's choice), and
+    the group named ``take``, else the first group, else the whole match is
+    the value, stripped. None when the value is not text or nothing matches
+    (the receiver field is then left alone)."""
+    if not pattern or not isinstance(text, str):
+        return None
+    try:
+        match = re.compile(pattern).search(text)
+    except re.error:
+        return None
+    if not match:
+        return None
+    if "take" in match.groupdict():
+        value = match.group("take")
+    elif match.re.groups:
+        value = match.group(1)
+    else:
+        value = match.group(0)
+    return value.strip() if value is not None else None
+
+
+TAKE_MODES = ("whole", "before", "after", "custom")
+
+
+def take_pattern(mode: str, separator: str = ",", custom: str = "") -> Optional[str]:
+    """The ``take`` regex behind the editors' plain choices: ``before`` =
+    the text before the first ``separator``, ``after`` = the text after
+    it, ``custom`` = the pattern as typed, ``whole`` = none."""
+    sep = separator if separator else ","
+    if mode == "before":
+        return f"^(.+?)\\s*{re.escape(sep)}"
+    if mode == "after":
+        return f"{re.escape(sep)}\\s*(.+)$"
+    if mode == "custom":
+        return custom.strip() or None
+    return None
+
+
+def take_choice(pattern: Optional[str]) -> Tuple[str, str]:
+    """Inverse of take_pattern: (mode, separator) for the editors; a pattern
+    of another shape is ("custom", "")."""
+    if not pattern:
+        return "whole", ","
+    m = re.fullmatch(r"\^\(\.\+\?\)\\s\*(.+)", pattern)
+    if m:
+        return "before", _unescape(m.group(1))
+    m = re.fullmatch(r"(.+?)\\s\*\(\.\+\)\$", pattern)
+    if m:
+        return "after", _unescape(m.group(1))
+    return "custom", ""
+
+
+def _unescape(escaped: str) -> str:
+    return re.sub(r"\\(.)", r"\1", escaped)
+
+
+def validate_take(link: FieldLink) -> List[str]:
+    """Problems with one link's take pattern; empty when it has none or it
+    compiles (the field checks are validate_field_links')."""
+    if not link.take:
+        return []
+    try:
+        compiled = re.compile(link.take)
+    except re.error as e:
+        return [f"Link '{link.id}': the 'use only part' pattern is not a valid regex ({e})"]
+    if compiled.groups == 0:
+        return [f"Link '{link.id}': the 'use only part' pattern needs a group in parentheses, e.g. ^(.+?), "
+                f"for the text before the first comma"]
+    return []
+
+
 def validate_reverse(link: FieldLink, catalog: Dict[str, FieldSpec]) -> List[str]:
     """Problems with one link's reverse pattern; empty when it has none or it
     is fine."""
@@ -355,6 +428,7 @@ def validate_links(links: List[FieldLink], catalog: Dict[str, FieldSpec]) -> Lis
             continue
         problems.extend(validate_template(link, catalog))
         problems.extend(validate_reverse(link, catalog))
+        problems.extend(validate_take(link))
     problems.extend(detect_loops([l for l in links if l.id not in bad]))
     return problems
 
@@ -398,7 +472,7 @@ def preview(link: FieldLink, catalog: Dict[str, FieldSpec],
             dive_by_service: Optional[Dict[str, UnifiedDive]] = None) -> Dict[str, Any]:
     """Validation problems plus a rendered sample for one link, for the UIs'
     live preview. Uses ``dive_by_service`` when given, else example dives."""
-    problems = validate_template(link, catalog) + validate_reverse(link, catalog)
+    problems = validate_template(link, catalog) + validate_reverse(link, catalog) + validate_take(link)
     unknown = [k for k in link.source + [link.target] if k not in catalog]
     if unknown:
         problems.insert(0, f"Link '{link.id}': unknown field(s) {', '.join(unknown)}")
@@ -410,6 +484,9 @@ def preview(link: FieldLink, catalog: Dict[str, FieldSpec],
         dives.setdefault(service, example_dive(service))
     text, warnings = render(link, dives, catalog)
     out = {"ok": True, "problems": [], "text": text, "warnings": warnings}
+    if link.take:
+        # the sample the pattern picks out of the source's example value
+        out["take_sample"] = take_part(link.take, text)
     if link.reverse:
         # Self-check: parsing the link's own rendered text should recover
         # every source the reverse pattern names, proving it actually

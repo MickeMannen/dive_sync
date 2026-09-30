@@ -32,7 +32,7 @@ from src.core.fields import (
 )
 from src.core.models import UnifiedDive, GasMixture
 from src.core.conflicts import Conflict, ConflictStore, conflicts_path_for, pair_key, rule_conflict_keys
-from src.core.templates import render, reverse_parse, validate_links
+from src.core.templates import render, reverse_parse, take_part, validate_links
 
 logger = logging.getLogger("dive_sync.sync_engine")
 
@@ -44,7 +44,7 @@ class LinkOutcome:
     def __init__(self, action: str, source_value: Any = None, target_value: Any = None,
                  modified: Optional[Set[str]] = None, conflict: Optional[Conflict] = None,
                  warnings: Optional[List[str]] = None):
-        self.action = action          # "equal" | "not_writable" | "kept" | "conflict" | "reverse_unparsed" | "write:<key>[,<key>...]"
+        self.action = action          # "equal" | "not_writable" | "kept" | "conflict" | "reverse_unparsed" | "take_unmatched" | "write:<key>[,<key>...]"
         self.source_value = source_value
         self.target_value = target_value
         self.modified = modified      # set of service ids whose dive changed, if any
@@ -553,6 +553,17 @@ class SyncEngine:
         sides = self.writable_sides()
         return next(iter(sides)) if sides else None
 
+    @staticmethod
+    def _log_no_new_dives(receiver_name: str, sender_name: str, dives: List[UnifiedDive]) -> None:
+        """One plain line per run for a receiver that never takes new dives
+        (BaseDiveAdapter.accepts_new_dives), instead of an error per dive."""
+        oldest, newest = min(d.date_time for d in dives), max(d.date_time for d in dives)
+        span = str(oldest.date()) if oldest.date() == newest.date() else f"{oldest.date()} to {newest.date()}"
+        logger.info("  %s has %d dive(s) that %s does not have (%s). They are left as they are: %s only gets "
+                    "dives from its own dive computer download, never from a sync. The dives both sides have "
+                    "still get their details synced.",
+                    sender_name, len(dives), receiver_name, span, receiver_name)
+
     def _awaits_manual_import(self, receiver_id: str, dive: UnifiedDive) -> bool:
         """True when ``dive`` must not be created on ``receiver_id`` because
         the receiver gets its dive-computer data from the diver's own file
@@ -688,6 +699,16 @@ class SyncEngine:
         else:
             snd_val = get_field(snd_dive, active.snd_spec)
             rcv_val = get_field(rcv_dive, active.rcv_spec)
+            if rule.take and not is_empty(snd_type, snd_val):
+                # "use only part of the value": the rule sends the part its
+                # pattern picks; a value the pattern does not fit is skipped
+                part = take_part(rule.take, snd_val)
+                if part is None:
+                    logger.info("  %s: %s=%r does not match the 'use only part' pattern, %s left alone [rule %s on %s]",
+                                active.rcv_spec.label, active.sender_key, self._brief(snd_type, snd_val),
+                                active.receiver_key, rule.id, active.receiver)
+                    return LinkOutcome("take_unmatched", snd_val, rcv_val, warnings=warnings)
+                snd_val = part
             snd_as_rcv = convert_value(snd_val, snd_type, rcv_type, rule.separator)
         for w in warnings:
             logger.warning("  %s (dive at %s)", w, rcv_dive.date_time)
@@ -1124,6 +1145,10 @@ class SyncEngine:
                        len(unique_source), self.source_name)
             sync_results["skipped"].extend(
                 {"reason": "create_on_garmin_off", "time": str(d.date_time)} for d in unique_source)
+        elif tgt in writable and not getattr(self.target, "accepts_new_dives", True) and unique_source:
+            self._log_no_new_dives(self.target_name, self.source_name, unique_source)
+            sync_results["skipped"].extend(
+                {"reason": "receiver_takes_no_new_dives", "time": str(d.date_time)} for d in unique_source)
         elif tgt in writable:
             for dive in unique_source:
                 advance(f"New dive {dive.date_time} -> {self.target_name}")
@@ -1160,6 +1185,10 @@ class SyncEngine:
                        len(unique_target), self.target_name)
             sync_results["skipped"].extend(
                 {"reason": "create_on_garmin_off", "time": str(d.date_time)} for d in unique_target)
+        elif src in writable and not getattr(self.source, "accepts_new_dives", True) and unique_target:
+            self._log_no_new_dives(self.source_name, self.target_name, unique_target)
+            sync_results["skipped"].extend(
+                {"reason": "receiver_takes_no_new_dives", "time": str(d.date_time)} for d in unique_target)
         elif src in writable:
             for dive in unique_target:
                 advance(f"New dive {dive.date_time} -> {self.source_name}")

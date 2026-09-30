@@ -622,6 +622,8 @@ def test_about_and_version_endpoints(monkeypatch):
     about = c.get("/api/about").json()
     assert about["license_name"] == "MIT" and "Permission is hereby granted" in about["license_text"]
     assert about["version"] and about["version"] != "local-dev" and about["project_url"].startswith("https://")
+    assert [r["name"] for r in about["references"]] == ["libdivecomputer"] and about["references"][0]["url"].startswith("https://")
+    assert 'id="about-references"' in c.get("/").text
     v = c.get("/api/version").json()                        # the keys the sidebar label reads
     assert v["current_version"] == about["version"] and "update_available" in v
 
@@ -770,3 +772,41 @@ def test_download_dives_endpoints(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "is_download_running", True)
     assert client.post("/api/dives/refresh", json={"services": ["garmin"]}).status_code == 409
     assert client.get("/api/status").json()["last_download"] == scheduler.last_download_results
+
+
+def test_credentials_api_keeps_the_shearwater_database(tmp_path, monkeypatch):
+    """The Shearwater section is a file path, not a login: saved with the
+    form, shown resolved in the status, and gone when blanked."""
+    import shutil
+    import src.core.config as config
+    from tests.test_shearwater import FIXTURE
+    creds_file = str(tmp_path / "credentials.json")
+    load_c, save_c = config.ConfigManager.load_credentials, config.ConfigManager.save_credentials
+    monkeypatch.setattr(config.ConfigManager, "load_credentials", staticmethod(lambda path=None: load_c(creds_file)))
+    monkeypatch.setattr(config.ConfigManager, "save_credentials", staticmethod(lambda creds, path=None: save_c(creds, creds_file)))
+    client = TestClient(app)
+    db = tmp_path / "dive_data.db"
+    shutil.copy(FIXTURE, db)
+    res = client.post("/api/credentials", json={"garmin_accounts": [], "divelogs_accounts": [],
+                                                "shearwater": {"database": str(db)}})
+    assert res.status_code == 200
+    status = client.get("/api/credentials/status").json()
+    assert status["shearwater_configured"] is True
+    assert (status["shearwater_database"], status["shearwater_resolved"]) == (str(db), str(db))
+    assert status["shearwater_accounts"] == [tmp_path.name]                 # a copy is named after its folder
+    assert any(e["id"] == "shearwater" for e in client.get("/api/sync/endpoints").json()["endpoints"])
+    assert 'id="shearwater-database"' in client.get("/").text
+    client.post("/api/credentials", json={"garmin_accounts": [], "divelogs_accounts": [], "shearwater": {"database": ""}})
+    status = client.get("/api/credentials/status").json()
+    assert status["shearwater_configured"] is False and status["shearwater_database"] == ""
+
+
+def test_fields_preview_shows_the_take_sample():
+    client = TestClient(app)
+    link = {"id": "area", "source": ["garmin.activityName"], "target": "divelogs.location", "direction": "to_target",
+            "conflict": "manual", "take": r"^(\w+)"}
+    data = client.post("/api/fields/preview", json={"link": link}).json()
+    assert data["ok"] and data["take_sample"] == data["text"].split(" ")[0]          # the example's first word
+    link["take"] = "^(.+?),"                                                          # the example has no comma
+    assert client.post("/api/fields/preview", json={"link": link}).json()["take_sample"] is None
+    assert 'id="editor-take"' in client.get("/").text

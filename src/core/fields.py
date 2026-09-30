@@ -98,6 +98,10 @@ class FieldLink(BaseModel):
     match_order: Optional[int] = Field(None, description="Set: this link is also a match key, tried in this order")
     separator: str = Field(", ", description="list <-> text links: join / split token")
     when: Optional[str] = Field(None, description="Reserved for conditional links")
+    take: Optional[str] = Field(None, description="Use only part of the source text: a regex searched in the value; "
+                                 "the group named 'take', else the first group, is what is written (e.g. "
+                                 "'^(.+?),' takes 'Tenggol Island' out of 'Tenggol Island, Sawadi Wreck'). No match = "
+                                 "the target is left alone. One text source, no template, one-way (to_target)")
 
     @field_validator("id")
     @classmethod
@@ -157,6 +161,9 @@ class SyncRule(BaseModel):
     reverse_conflict: Optional[ConflictPolicy] = Field(None, description="Policy of the derived reverse split; None = 'conflict'")
     separator: str = Field(", ", description="list <-> text rules: join / split token")
     when: Optional[str] = Field(None, description="Reserved for conditional rules")
+    take: Optional[str] = Field(None, description="Use only part of the sender's text: a regex searched in the value; "
+                                 "the group named 'take', else the first group, is written. No match = the receiver "
+                                 "field is left alone. One text source, no template")
 
     @field_validator("id")
     @classmethod
@@ -167,6 +174,8 @@ class SyncRule(BaseModel):
 
     @model_validator(mode="after")
     def _structure(self) -> "SyncRule":
+        if self.take and (self.is_composite or self.template):
+            raise ValueError(f"Rule '{self.id}': 'take' (use only part of the value) needs one plain source, no template")
         if not self.source:
             raise ValueError(f"Rule '{self.id}': at least one source field is required")
         if len(set(self.source)) != len(self.source):
@@ -246,6 +255,8 @@ def links_to_rules(links: Iterable[FieldLink], source_id: str, target_id: str) -
             keyed.append((link.match_order, a, b))
         d = link.direction
         extras = dict(separator=link.separator, when=link.when)
+        if link.take and d not in ("to_target", "off"):
+            raise ValueError(f"Link '{link.id}': 'take' (use only part of the value) is one-way towards its target")
         if d == "off":
             if link.conflict == "target_wins":
                 # the "never overwrite me" marker; an off link never split
@@ -279,7 +290,7 @@ def links_to_rules(links: Iterable[FieldLink], source_id: str, target_id: str) -
         if d in ("bidirectional", "to_target"):
             conflict = "source_wins" if (d == "to_target" and link.conflict == "target_wins") else link.conflict
             add(tgt_service, SyncRule(id=rule_id(link, tgt_service), target=link.target, source=[link.source[0]],
-                                      conflict=conflict, **extras))
+                                      conflict=conflict, take=link.take, **extras))
         if d in ("bidirectional", "to_source"):
             conflict = "source_wins" if link.conflict == "target_wins" else link.conflict
             add(src_service, SyncRule(id=rule_id(link, src_service), target=link.source[0], source=[link.target],
@@ -309,11 +320,12 @@ def rules_to_links(rules: Optional[Rules], match_keys: Optional[MatchKeys],
         return f"{link_id}@{receiver}"
 
     def partner_of(receiver: str, rule: SyncRule) -> Optional[Tuple[str, SyncRule]]:
-        if rule.template or rule.is_composite:
+        # a rule that takes part of its sender's value is one-way: no mirror
+        if rule.template or rule.is_composite or rule.take:
             return None
         other = _service_of(rule.source[0])
         for cand in rules.get(other, []):
-            if (other, cand.id) in used or cand.template or cand.is_composite:
+            if (other, cand.id) in used or cand.template or cand.is_composite or cand.take:
                 continue
             if cand.id == rule.id and cand.target == rule.source[0] and cand.source == [rule.target]:
                 return other, cand
@@ -370,7 +382,7 @@ def rules_to_links(rules: Optional[Rules], match_keys: Optional[MatchKeys],
             seen_ids.add(link_id)
             links.append(FieldLink(id=link_id, source=list(rule.source), target=rule.target, direction=direction,
                                    conflict=conflict, template=rule.template, reverse=rule.reverse,
-                                   separator=rule.separator, when=rule.when))
+                                   separator=rule.separator, when=rule.when, take=rule.take))
 
     for order, pair in enumerate(match_keys or [], start=1):
         if len(pair) != 2:
@@ -721,6 +733,15 @@ def validate_field_links(links: List[FieldLink], catalog: Dict[str, FieldSpec]) 
             if link.match_order is not None:
                 if src.type not in MATCH_KEY_TYPES or target.type not in MATCH_KEY_TYPES:
                     errors.append(f"Link '{link.id}': only number or datetime fields can be match keys")
+            if link.take:
+                if src.type != "text" or target.type != "text":
+                    errors.append(f"Link '{link.id}': 'use only part of the value' needs text fields on both ends")
+                if link.template:
+                    errors.append(f"Link '{link.id}': 'use only part of the value' cannot be combined with a template")
+                if link.direction not in ("to_target", "off"):
+                    errors.append(f"Link '{link.id}': 'use only part of the value' is one-way towards its target")
+        if link.take and link.is_composite:
+            errors.append(f"Link '{link.id}': 'use only part of the value' needs a single source field")
 
         writes_target = link.direction in ("bidirectional", "to_target")
         writes_source = link.direction in ("bidirectional", "to_source")

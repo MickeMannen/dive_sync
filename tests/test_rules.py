@@ -320,7 +320,8 @@ def test_settings_api_serves_rules_and_keeps_the_default_pair(tmp_path, monkeypa
     assert {r: [x["id"] for x in v] for r, v in data["sync_pairs"][0]["rules"].items()} == {"divelogs": ["buddy"], "garmin": ["buddy"]}
     assert data["sync_pairs"][1]["rules"] == {"submersion": [{"id": "notes", "target": "submersion.notes", "source": ["garmin.notes"],
                                                               "conflict": "source_wins", "template": None, "reverse": None,
-                                                              "reverse_conflict": None, "separator": ", ", "when": None}]}
+                                                              "reverse_conflict": None, "separator": ", ", "when": None,
+                                                              "take": None}]}
 
     # posting the pairs table back unchanged changes nothing
     again = dict(payload, sync_pairs=data["sync_pairs"][1:])
@@ -552,3 +553,61 @@ def test_board_saves_rules_through_sync_pairs(tmp_path, monkeypatch, submersion_
     payload["sync_pairs"] = [other]
     res = client.post("/api/settings", json=payload)
     assert res.status_code == 400 and "Pair 'g2s'" in res.text
+
+
+# ---------------------------------------------------------------- "use only part of the value" (take)
+
+def test_take_is_a_one_way_plain_rule_and_round_trips():
+    from src.core.templates import validate_links
+    from src.core.fields import validate_field_links
+    with pytest.raises(ValueError, match="needs one plain source"):
+        SyncRule(id="x", target="divelogs.location", source=["garmin.activityName", "garmin.notes"],
+                 template="{garmin.activityName}", take=r"^(.+?),")
+    with pytest.raises(ValueError, match="one-way"):
+        links_to_rules([FieldLink(id="area", source=["garmin.activityName"], target="divelogs.location",
+                                  direction="bidirectional", take=r"^(.+?),")], "garmin", "divelogs")
+    link = FieldLink(id="area", source=["garmin.activityName"], target="divelogs.location", direction="to_target",
+                     conflict="prefer_source", take=r"^(.+?),")
+    rules, keys = links_to_rules([link], "garmin", "divelogs")
+    assert rules["divelogs"][0].take == r"^(.+?)," and "garmin" not in rules
+    back = rules_to_links(rules, keys, "garmin", "divelogs")
+    assert back == [link]
+    # a mirrored plain rule never merges with a take rule into a two-way link
+    rules["garmin"] = [SyncRule(id="area", target="garmin.activityName", source=["divelogs.location"], conflict="prefer_source")]
+    back = rules_to_links(rules, keys, "garmin", "divelogs")
+    assert sorted(((l.direction, l.take or "") for l in back)) == [("to_target", ""), ("to_target", r"^(.+?),")]
+    # the field checks: text on both ends, no template, not a composite
+    from src.core.services.garmin import GarminAdapter
+    from src.core.services.divelogs import DivelogsAdapter
+    catalog = {f.key: f for f in GarminAdapter.field_catalog() + DivelogsAdapter.field_catalog()}
+    assert validate_links([link], catalog) == []
+    bad = link.model_copy(update={"source": ["garmin.weight"], "target": "divelogs.weight"})
+    assert any("text fields on both ends" in p for p in validate_field_links([bad], catalog))
+    bad = link.model_copy(update={"template": "{garmin.activityName}"})
+    assert any("cannot be combined with a template" in p for p in validate_field_links([bad], catalog))
+
+
+def test_take_writes_only_the_part_and_skips_what_does_not_match(tmp_path, caplog):
+    """The owner's case (2026-09-30): Garmin's activity name is "area, site";
+    the area alone goes into a Location field, the site is left to its own rule."""
+    rule = SyncRule(id="area", target="divelogs.location", source=["garmin.activityName"], conflict="source_wins",
+                    take=r"^(.+?),")
+    g, d = _pair({"service_fields": {"activityName": "Tenggol Island, Sawadi Wreck"}},
+                 {"service_fields": {"location": "old", "divesite": "keep"}})
+    engine = _rules_engine(tmp_path, [g], [d], {"divelogs": [rule]})
+    out = engine.test_mapping()
+    assert out["rows"][0]["result"] == "write:divelogs.location" and out["rows"][0]["source_value"] == "Tenggol Island"
+    res = engine.run_sync(dry_run=False)
+    assert d.service_fields["location"] == "Tenggol Island" and d.service_fields["divesite"] == "keep"
+    assert len(res["updated_on_divelogs"]) == 1
+    # a value the pattern does not fit leaves the receiver alone, at info level
+    import logging
+    g2, d2 = _pair({"service_fields": {"activityName": "Just a title"}}, {"service_fields": {"location": "old"}})
+    with caplog.at_level(logging.INFO):
+        res = _rules_engine(tmp_path, [g2], [d2], {"divelogs": [rule]}).run_sync(dry_run=False)
+    assert d2.service_fields["location"] == "old" and res["updated_on_divelogs"] == []
+    assert "does not match the 'use only part' pattern" in caplog.text and "ERROR" not in caplog.text
+    # equal after taking the part: nothing to do
+    g3, d3 = _pair({"service_fields": {"activityName": "Tenggol Island, Sawadi Wreck"}}, {"service_fields": {"location": "Tenggol Island"}})
+    res = _rules_engine(tmp_path, [g3], [d3], {"divelogs": [rule]}).run_sync(dry_run=False)
+    assert res["updated_on_divelogs"] == []

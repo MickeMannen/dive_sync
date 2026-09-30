@@ -18,7 +18,7 @@ from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncP
 from src.core.conflicts import prune_stale_conflicts
 from src.core.fields import FieldLink, SyncRule, build_catalog, links_to_rules, rules_to_links
 from src.core.pairs import board_pairs, default_links_for, parse_service_spec, service_id_of
-from src.core.templates import AUTO_REVERSE, preview as preview_link, validate_links
+from src.core.templates import AUTO_REVERSE, preview as preview_link, validate_links, take_choice, take_pattern
 
 STRUCTURAL = ("tanks", "samples")
 TEMPLATE_TYPES = ("text", "number", "datetime", "list")
@@ -43,6 +43,9 @@ def _adapter_class(service_id: str):
     if service_id == "uddf":
         from src.core.services.uddf import UddfAdapter
         return UddfAdapter
+    if service_id == "shearwater":
+        from src.core.services.shearwater import ShearwaterAdapter
+        return ShearwaterAdapter
     if service_id == "submersion":
         from src.core.services.submersion.adapter import SubmersionAdapter
         return SubmersionAdapter
@@ -82,7 +85,7 @@ def pairs_info(settings: SettingsModel, configured: Optional[List[str]] = None) 
 
 def _new_rule(rule_id: str, target: str, source: List[str]) -> Dict[str, Any]:
     return {"id": rule_id, "target": target, "source": list(source), "conflict": "prefer_non_empty",
-            "template": None, "reverse": None, "reverse_conflict": None, "separator": ", ", "when": None}
+            "template": None, "reverse": None, "reverse_conflict": None, "separator": ", ", "when": None, "take": None}
 
 
 class MappingController(QObject):
@@ -336,6 +339,7 @@ class MappingController(QObject):
             return {}
         out = dict(rule)
         out["receiver"] = self._selected["receiver"]
+        out["receiver_name"] = self._service_name(self._selected["receiver"])
         out["target_label"] = self._label(rule["target"])
         out["source_labels"] = [self._label(k) for k in rule["source"]]
         out["composite"] = len(rule["source"]) > 1 or bool(rule.get("template"))
@@ -344,6 +348,12 @@ class MappingController(QObject):
         out["list_rule"] = any(catalog.get(k) is not None and catalog[k].type == "list" for k in rule["source"] + [rule["target"]])
         spec = catalog.get(rule["target"])
         out["text_target"] = bool(spec and spec.type == "text")
+        # "use only part of the value": one text field into a text field, no template
+        source_spec = catalog.get(rule["source"][0]) if len(rule["source"]) == 1 else None
+        out["take_possible"] = bool(out["text_target"] and source_spec and source_spec.type == "text"
+                                    and not rule.get("template"))
+        out["take"] = rule.get("take") or ""
+        out["take_mode"], out["take_separator"] = take_choice(rule.get("take"))
         receiver = self._selected["receiver"]
         view = self._selected.get("view") or receiver
         sources = " + ".join(out["source_labels"])
@@ -401,7 +411,7 @@ class MappingController(QObject):
     @staticmethod
     def _configured() -> List[str]:
         try:
-            return credentials.load_credentials_model().configured_services()
+            return credentials.load_credentials_model().configured_specs()
         except Exception:
             return []
 
@@ -760,6 +770,14 @@ class MappingController(QObject):
             reverse = (str(values.get("reverse")).strip() or None) if values.get("reverse") is not None else rule.get("reverse")
         if reverse and not template:
             return "A split needs a template."
+        if values.get("take_mode") is not None:
+            take = take_pattern(str(values["take_mode"]), str(values.get("take_separator") or ","), str(values.get("take") or ""))
+        else:
+            take = (str(values.get("take")).strip() or None) if values.get("take") is not None else rule.get("take")
+        if take and template:
+            return "Use only part of the value, or a template - not both."
+        if take and len(rule["source"]) != 1:
+            return "Use only part of the value works on a single source field."
         split_policy = values.get("reverse_conflict")
         rule.update({
             "id": new_id,
@@ -768,6 +786,7 @@ class MappingController(QObject):
             "template": template,
             "reverse": reverse,
             "reverse_conflict": (str(split_policy) or None) if split_policy is not None else rule.get("reverse_conflict"),
+            "take": take,
         })
         if not rule["reverse"]:
             rule["reverse_conflict"] = None
@@ -829,6 +848,21 @@ class MappingController(QObject):
         if rule:
             self._render_preview(dict(rule, reverse=reverse.strip() or None))
 
+    @Slot(str)
+    def previewTake(self, take: str) -> None:
+        """Live preview while typing: what the 'use only part' pattern picks."""
+        rule = self._selected_rule()
+        if rule:
+            self._render_preview(dict(rule, take=take.strip() or None))
+
+    @Slot(str, str, str)
+    def previewTakeChoice(self, mode: str, separator: str, custom: str) -> None:
+        """Live preview of the plain choice (before / after a separator, a
+        custom pattern, or the whole value)."""
+        rule = self._selected_rule()
+        if rule:
+            self._render_preview(dict(rule, take=take_pattern(mode, separator, custom)))
+
     @Slot()
     def updatePreview(self) -> None:
         rule = self._selected_rule()
@@ -836,17 +870,20 @@ class MappingController(QObject):
             self._render_preview(rule)
 
     def _render_preview(self, rule: Dict[str, Any]) -> None:
-        if not rule.get("template") and len(rule["source"]) == 1:
+        if not rule.get("template") and not rule.get("take") and len(rule["source"]) == 1:
             self._preview, self._preview_problems = "(plain copy)", ""
         else:
             try:
                 # the preview validates a link; a rule is one aimed at its target
                 link = FieldLink(id=rule["id"], source=rule["source"], target=rule["target"], template=rule.get("template"),
                                  reverse=rule.get("reverse"), direction="bidirectional" if rule.get("reverse") else "to_target",
-                                 conflict="manual", separator=rule.get("separator") or ", ")
+                                 conflict="manual", separator=rule.get("separator") or ", ", take=rule.get("take"))
                 out = preview_link(link, self._catalog())
                 self._preview = (out["text"] or "(empty)") if out["ok"] else "–"
                 self._preview_problems = "\n".join(out["problems"] + out["warnings"])
+                if out.get("ok") and "take_sample" in out:
+                    self._preview = (f'"{out["text"]}" becomes "{out["take_sample"]}"' if out["take_sample"] is not None
+                                     else f'"{out["text"]}" has no such part: the field would be left alone')
                 if out.get("ok") and "reverse_sample" in out:
                     sample = out["reverse_sample"]
                     self._preview += "  |  split back: " + (
@@ -870,7 +907,7 @@ class MappingController(QObject):
             return self._message
         problems = self._problems()
         if problems:
-            self._set_message("\n".join(problems))
+            self._set_message("Not saved - fix these rules first:\n" + "\n".join(problems))
             return self._message
         changed = self.dirty
         settings = ConfigManager.load_settings()

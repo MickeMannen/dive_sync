@@ -128,6 +128,20 @@ SUBMERSION_NON_SECRET_FIELDS = (
 )
 
 
+def get_shearwater_config() -> dict:
+    """{database: path} - blank path = auto-detect the app's live file."""
+    prefs = _load()
+    return dict(prefs.get("shearwater", {}))
+
+
+def set_shearwater_config(**fields) -> None:
+    prefs = _load()
+    config = prefs.setdefault("shearwater", {})
+    for key, value in fields.items():
+        config[key] = value
+    _save(prefs)
+
+
 def get_submersion_config() -> dict:
     prefs = _load()
     return dict(prefs.get("submersion", {}))

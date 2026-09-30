@@ -36,3 +36,6 @@ __pycache__/
 /backups/
 /docs/
 /test_data/
+
+# Claude Code: personal permission settings stay local; .claude/agents/ is shared
+/.claude/settings.local.json

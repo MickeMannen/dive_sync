@@ -30,8 +30,33 @@ Welcome, AI Agent! This file outlines the instructions, constraints, and develop
     *   The Garmin ↔ Divelogs pair is `sync_pairs[0]` with id `garmin_divelogs` (`config.DEFAULT_PAIR_ID`); never add a second code path for it. Settings files are version 2 (`settings_version`); legacy top-level `directionality` / `field_links` and per-pair `field_links` are accepted on input and folded in by the models' validators, never written.
     *   Per-run changes go in as `SyncEngine.run_sync(...)` override arguments; `run_sync` reloads `settings.json` first, so mutating `engine.settings` beforehand does nothing.
 *   **Testing & Verification**:
-    *   Always write unit or integration test cases in the `tests/` directory for all new functions, endpoints, or adapters added.
-    *   Before concluding a task, run the test suite using `./run_tests.sh` to ensure all tests pass and no regressions are introduced.
+    *   Every function, endpoint, adapter method or controller slot has unit tests in `tests/`, in the module that covers its file (`src/core/services/shearwater.py` → `tests/test_shearwater.py`, `src/web/app.py` → `tests/test_web_api.py`, `desktop/controllers/*.py` → `tests/test_desktop_qt.py`). A change to a function is a change to its tests in the same commit.
+    *   Test against mock data, never live services: the in-memory fakes (`tests/test_link_engine.py` `FakeGarmin`/`FakeDivelogs`/`RecordingAdapter`), the fixture files under `tests/data/` (a Subsurface checkout, an anonymised Shearwater database, Submersion samples), `monkeypatch` for the network, the keychain (`fake_keyring`) and the clock. New fixture data is anonymised (no real names, sites, emails or free text) and small.
+    *   While implementing one part, run the test modules that cover it (`python -m pytest tests/test_x.py -q`) after each step; before calling the change done, and always before preparing a release, run the whole suite with `./run_tests.sh`.
+
+---
+
+## 🤖 Agent workflow
+
+Work moves through three roles, each on the model suited to it. A role runs as a subagent (`.claude/agents/<role>.md`, which fixes the model and the tools; see "Triggering a role" below) or as the session model when the owner starts the session on it.
+
+| Role | Model | Does |
+|---|---|---|
+| Research | Opus 5.5 | Investigates before code is written: reads the code, the docs and external formats, answers "what is this file / API / behaviour", proposes the design and the questions for the owner. Writes into `rework.md` (plan, decisions log) and `features.md` (backlog), never into `src/`. |
+| Implementation | Fable 5.1 | Writes the code **and the tests that pin it** (a test is the specification of the code next to it, so it is written by the same model, one part at a time), running that part's test modules as it goes. Updates `CHANGELOG.md` (Unreleased), README and the plan's step status. |
+| Verification | Sonnet 5 | Runs the applicable test modules after an implementation step, or the full suite before a release; triages failures into "the test is wrong" / "the code is wrong" with the failing assertion and log lines quoted; reviews a step's diff against these guidelines; adds boilerplate cases and fixture data. Never rewrites the code it is checking. |
+
+Triggering a role (Claude Code): the three roles are project subagents in `.claude/agents/` (`research.md`, `implement.md`, `verify.md`), each with its model and tools in the frontmatter, and they inherit CLAUDE.md and this file.
+- By name in the prompt: "use the research agent to investigate the Shearwater database", "implement H3 with the implement agent", "verify agent: run the suite". `@research`, `@implement`, `@verify` also work.
+- Automatically: the session's Claude picks a role whose `description` matches the task (the descriptions name the trigger words: investigate/plan, implement/fix/proceed with, run the tests/verify).
+- For a whole session on one role: `claude --agent implement`.
+- The model in a role's frontmatter wins over the session model; a per-invocation `model` in the prompt ("with sonnet") overrides it once. The session's own model cannot switch between steps - only subagents can.
+
+Rules of the road:
+1. Research first when the task touches a service format, an external API or an unknown part of the codebase; skip it for a bug with a known cause.
+2. Implementation is done per step of the plan (rework.md step ids), each step ending with its test modules green, so a step can be committed alone.
+3. Testing runs the applicable modules after each implementation step and the full suite before a release (`CLAUDE.md` "Changelog and releases"); a release is never prepared on a red or unrun suite.
+4. The owner does the commits, the releases and the hands-on checks against live accounts; the agents do not push, tag or run a sync against a live service.
 
 ---
 

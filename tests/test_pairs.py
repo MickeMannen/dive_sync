@@ -201,3 +201,26 @@ def test_board_pairs_leave_out_a_disabled_service():
     settings = SettingsModel()
     settings.sync_pairs.append(SyncPairModel(id="garmin_submersion", source="garmin", target="submersion"))
     assert [b["id"] for b in board_pairs(settings, ["garmin", "divelogs"])] == ["garmin_divelogs"]
+
+
+def test_every_shipped_board_can_be_saved(submersion_enabled):
+    """The board a pair opens with must pass the save-time validation: the
+    Garmin <-> Shearwater one shipped a number-to-text visibility link and a
+    tanks link into a read-only field, so Save was refused every time and
+    the page stayed 'unsaved' (owner, 2026-09-30)."""
+    from src.core.fields import links_to_rules, rules_to_links
+    from src.core.pairs import default_links_for, field_catalog_of
+    from src.core.templates import validate_links
+    services = ["garmin", "divelogs", "subsurface", "uddf", "shearwater", "submersion"]
+    for i, a in enumerate(services):
+        for b in services[i + 1:]:
+            catalog = {f.key: f for f in field_catalog_of(a) + field_catalog_of(b)}
+            links = default_links_for(a, b)
+            assert links, (a, b)
+            rules, keys = links_to_rules(links, a, b)
+            assert validate_links(rules_to_links(rules, keys, a, b), catalog) == [], (a, b)
+    # what the Shearwater board keeps: a two-way link whose Shearwater side is
+    # read-only turns one-way, a type mismatch goes
+    ids = {l.id: l for l in default_links_for("garmin", "shearwater")}
+    assert "visibility" not in ids and "tanks" not in ids
+    assert ids["buddy"].direction == "bidirectional" and ids["site"].target == "shearwater.site"

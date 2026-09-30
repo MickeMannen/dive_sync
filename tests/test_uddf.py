@@ -164,3 +164,14 @@ def test_engine_pair_garmin_to_uddf(tmp_path):
                          source_adapter=FakeGarmin(g), target_adapter=UddfAdapter(uddf_path))
     res = engine2.run_sync(dry_run=False)
     assert res["matched_count"] == 1 and res["uploaded_to_uddf"] == []
+
+
+def test_two_dives_created_in_one_run(tmp_path):
+    """save() used to namespace the in-memory tree through shared children,
+    so the second add_dive of a run failed to find the repetition group."""
+    adapter = UddfAdapter(str(tmp_path / "two.uddf"))
+    assert adapter.login()
+    first = adapter.add_dive(UnifiedDive(date_time=datetime(2026, 1, 1, 10), duration=1000, max_depth=10.0))
+    second = adapter.add_dive(UnifiedDive(date_time=datetime(2026, 1, 2, 10), duration=1100, max_depth=12.0))
+    assert first and second and first != second
+    assert sorted(d.max_depth for d in UddfAdapter(adapter.path).fetch_dives()) == [10.0, 12.0]

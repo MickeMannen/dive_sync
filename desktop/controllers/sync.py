@@ -64,7 +64,7 @@ class SyncController(QObject):
         the two specs). Garmin ↔ Divelogs keeps the empty id it has always
         had, so anything that stored that selection still resolves."""
         from src.core.config import ConfigManager
-        configured = self.services
+        configured = self._sides()
         out = []
         for i, source in enumerate(configured):
             for target in configured[i + 1:]:
@@ -82,6 +82,19 @@ class SyncController(QObject):
                             "source": pair.source, "target": pair.target, "builtin": False})
         return out
 
+    def _sides(self):
+        """The configured services a run can have as a side, as {id, label,
+        spec}: the cache-download services (``services``) plus Shearwater
+        Cloud, which has no cache download but is a side like any other
+        (its account, i.e. database, is picked on this page). The pair list
+        and the endpoints are both built from this - building the pairs
+        from ``services`` alone left Garmin ↔ Shearwater without a pair, so
+        the page answered "Pick two different services" (2026-09-29)."""
+        out = list(self.services)
+        if "shearwater" in credentials.load_credentials_model().configured_services():
+            out.append({"id": "shearwater", "label": "Shearwater app", "spec": "shearwater"})
+        return out
+
     @Property("QVariantList", notify=pairsChanged)
     def endpoints(self):
         """What the Source and Target boxes offer: every configured service,
@@ -89,7 +102,7 @@ class SyncController(QObject):
         {spec, id, label}. ``id`` is the service id, so a Target box can leave
         out the service picked as Source."""
         from src.core.pairs import service_id_of
-        out = [{"spec": s["spec"], "id": s["id"], "label": s["label"]} for s in self.services]
+        out = [{"spec": s["spec"], "id": s["id"], "label": s["label"]} for s in self._sides()]
         seen = {e["spec"] for e in out}
         for pair in self.pairs:
             for spec in (pair["source"], pair["target"]):
@@ -142,6 +155,10 @@ class SyncController(QObject):
     @Property("QVariantList", notify=accountsChanged)
     def subsurfaceAccounts(self):
         return accounts.names("subsurface")
+
+    @Property("QVariantList", notify=accountsChanged)
+    def shearwaterAccounts(self):
+        return accounts.names("shearwater")
 
     @Property("QVariantMap", notify=accountsChanged)
     def selectedAccounts(self):
@@ -225,7 +242,7 @@ class SyncController(QObject):
         if divelogs_username:
             selection["divelogs"] = divelogs_username
         for service, key in (("garmin", "garmin_username"), ("divelogs", "divelogs_username"),
-                             ("subsurface", "subsurface_username")):
+                             ("subsurface", "subsurface_username"), ("shearwater", "shearwater_account")):
             if selection.get(service):
                 custom[key] = selection[service]
         custom["account_scoped"] = True
