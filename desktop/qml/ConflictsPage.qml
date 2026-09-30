@@ -80,6 +80,31 @@ ColumnLayout {
                 text: "A rule with the policy \"Fill blanks, ask about real differences\" waits here when both sides hold a different value. Click Keep this on the value to keep (it turns green; click it again to undo). Nothing is written until you press Save for the service that gets the updates."
             }
             Button { text: "Reload"; flat: true; enabled: !conflictsController.busy; onClicked: conflictsController.load() }
+            Button {
+                text: "Clear all"
+                objectName: "clearAllButton"
+                flat: true
+                visible: conflictsController.count > 0
+                enabled: !conflictsController.busy
+                onClicked: clearAllDialog.open()
+                Tip { text: "Forgets every waiting conflict without writing anything; a later sync that finds the same difference lists it again."; visible: parent.hovered; delay: 300 }
+            }
+        }
+        Dialog {
+            id: clearAllDialog
+            objectName: "clearAllDialog"
+            title: "Clear all conflicts"
+            width: 480
+            modal: true
+            standardButtons: Dialog.Yes | Dialog.No
+            anchors.centerIn: Overlay.overlay
+            Text {
+                width: 420
+                wrapMode: Text.WordWrap
+                color: Theme.text
+                text: "Forget all " + conflictsController.count + " waiting conflict(s)? Nothing is written to any service. A later sync that finds the same difference lists it again."
+            }
+            onAccepted: conflictsController.clearAll()
         }
         RowLayout {
             Layout.fillWidth: true

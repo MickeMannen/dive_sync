@@ -595,6 +595,26 @@ class ResolveRequest(BaseModel):
     pair: Optional[str] = None
 
 
+@app.delete("/api/conflicts")
+def clear_all_conflicts():
+    """Forget every board's waiting conflicts (owner request 2026-09-30).
+    Nothing is written to any service; a later sync that finds the same
+    difference records it again."""
+    import os
+    from src.core import config
+    from src.core.conflicts import ConflictStore
+    from src.core.pairs import conflicts_file_for
+    cleared = 0
+    for board in _boards():
+        store = ConflictStore(conflicts_file_for(board, os.path.dirname(config.SETTINGS_FILE)))
+        items = store.load()
+        if items:
+            store.save([])
+            cleared += len(items)
+    logger.info("Cleared %d waiting conflict(s) from the Conflicts page.", cleared)
+    return {"cleared": cleared}
+
+
 @app.post("/api/conflicts/{conflict_id}/resolve")
 def resolve_conflict(conflict_id: str, data: ResolveRequest):
     if scheduler.is_sync_running:

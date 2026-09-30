@@ -258,6 +258,37 @@ class ConflictsController(QObject):
         self.stagedChanged.emit()
 
     @Slot()
+    def clearAll(self) -> None:
+        """Forget every waiting conflict of every pair and account combination
+        (owner request 2026-09-30). Nothing is written to any service; the
+        next sync that finds the same difference records it again."""
+        from src.core.conflicts import ConflictStore
+        try:
+            model = credentials.load_credentials_model()
+        except Exception:
+            model = None
+        cleared, problems = 0, []
+        for board in self._boards():
+            for source_account in accounts.accounts_for_spec(board["source"], model):
+                for target_account in accounts.accounts_for_spec(board["target"], model):
+                    path = self._conflicts_file(board, source_account, target_account)
+                    try:
+                        store = ConflictStore(path)
+                        items = store.load()
+                        if items:
+                            store.save([])
+                            cleared += len(items)
+                    except Exception as e:
+                        problems.append(f"{board['id']}: {e}")
+        self._staged = {}
+        self.stagedChanged.emit()
+        self.load()
+        if problems:
+            self._set_message("Could not clear " + "; ".join(problems))
+        else:
+            self._set_message(f"Cleared {cleared} waiting conflict(s)." if cleared else "No conflicts waiting.")
+
+    @Slot()
     def discard(self) -> None:
         """Take back every pick."""
         if self._busy or not self._staged:

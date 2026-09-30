@@ -6,12 +6,26 @@ development history and decision log.
 
 ## Unreleased
 
+- Conflicts page (desktop and web): a "Clear all" button forgets every
+  waiting conflict after a confirmation. Nothing is written to any
+  service; a later sync that finds the same difference lists it again.
+- Positions: two services' GPS positions of one dive within 200 m of each
+  other count as the same position (no update, no conflict). Before, a
+  difference of a few metres raised a conflict on nearly every dive.
+- Shearwater app: the dive number is the computer's own and is never
+  written from another service (a first live run had renumbered two dives).
 - Mapping board: a rule now says what to write: the whole value, only the
   text before or after a separator (e.g. the area or the site out of
   "Tenggol Island, Sawadi Wreck"), text built from a template, or what a
   custom pattern picks. The editor shows the result on a sample dive, and a
   value without that part is left alone. The board's help is shorter and
   explains combining, splitting and this in one place.
+- **Shearwater app (desktop app only, more testing ongoing)**: the Shearwater
+  app keeps its database on the computer it runs on, so this is a feature of
+  the DiveSync desktop app there, not of the Docker image. Verified against the
+  author's own account so far; keep a backup of the app's data (DiveSync
+  copies the database before every write) and use a second Shearwater account
+  to try it out.
 - New source: the Shearwater app's database (`shearwater:<path to dive_data.db>`; the
   app is Shearwater's "Shearwater Cloud" desktop program - DiveSync works on its
   local file and never talks to the cloud, the app does that itself).

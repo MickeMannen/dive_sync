@@ -119,9 +119,9 @@ def test_catalogue_covers_every_editable_column():
     assert specs["location"].unified is None and "area" in specs["location"].label     # the app's Location = the area
     assert len({f.key.lower() for f in specs.values()}) == len(specs)                   # no two keys differing by case
     assert specs["tanks"].type == "tanks" and specs["gps"].type == "gps"
-    for name in ("date_time", "duration", "max_depth", "avg_depth", "temp_min", "temp_max", "tanks"):
+    for name in ("date_time", "duration", "max_depth", "avg_depth", "temp_min", "temp_max", "tanks", "dive_number"):
         assert not specs[name].writable, name                                 # the computer's data
-    for name in ("buddy", "notes", "site", "location", "dive_number", "weight", "gps", "environment", "air_temperature", "other1"):
+    for name in ("buddy", "notes", "site", "location", "weight", "gps", "environment", "air_temperature", "other1"):
         assert specs[name].writable, name                                     # what the app lets you edit
     from src.core.services.shearwater import NAME_OF_COLUMN
     for column, options in DROPDOWN_OPTIONS.items():
@@ -378,7 +378,7 @@ def test_update_writes_columns_and_cloud_stamps(db_copy, tmp_path, monkeypatch, 
 
     dive = adapter.fetch_dive(dive_id)
     dive.buddy, dive.notes, dive.location = "Anna", "Great viz", "House Reef"
-    dive.dive_number = 500
+    dive.dive_number = 500                                      # never written: the computer's number stays
     dive.weight, dive.weight_unit = 10.0, "pound"
     dive.lat, dive.lng = 5.123456, 103.654321
     dive.service_fields.update({"location": "Tenggol", "environment": "ocean/sea", "weather": "Hailstorm",
@@ -387,13 +387,14 @@ def test_update_writes_columns_and_cloud_stamps(db_copy, tmp_path, monkeypatch, 
 
     lmst, stamps, row = _meta(db_copy, dive_id)
     assert (row["Buddy"], row["Notes"], row["Site"], row["Location"]) == ("Anna", "Great viz", "House Reef", "Tenggol")
-    assert (row["DiveNumber"], row["Weight"], row["GnssEntryLocation"]) == ("500", "4.54", "5.123456,103.654321")
+    assert (row["DiveNumber"], row["Weight"], row["GnssEntryLocation"]) == ("454", "4.54", "5.123456,103.654321")
     assert (row["Environment"], row["AirTemperature"], row["Symptoms"]) == ("Ocean/Sea", "30", "none")   # case-fixed to the app's label
     assert row["Weather"] is None and "Hailstorm" in caplog.text                                          # not an option: skipped
     assert row["LastModified"] == "2026-09-30 01:02:03" and lmst == "2026-09-30 01:02:03"
     ms = int(fixed.timestamp() * 1000)
-    for column in ("Buddy", "Notes", "Site", "Location", "DiveNumber", "Weight", "GnssEntryLocation", "Environment", "AirTemperature", "Symptoms"):
+    for column in ("Buddy", "Notes", "Site", "Location", "Weight", "GnssEntryLocation", "Environment", "AirTemperature", "Symptoms"):
         assert stamps[column] == ms, column
+    assert stamps["DiveNumber"] == before_stamps["DiveNumber"]
     assert stamps["Weather"] == DOTNET_MIN and stamps["Conditions"] == DOTNET_MIN                        # untouched columns keep their stamps
     assert stamps["TankProfileData"] == before_stamps["TankProfileData"]
     # the computer's data and the tank columns are never touched
@@ -401,7 +402,7 @@ def test_update_writes_columns_and_cloud_stamps(db_copy, tmp_path, monkeypatch, 
         assert row[column] == before_row[column], column
     # reading back agrees, and writing the same again changes nothing
     again = adapter.fetch_dive(dive_id)
-    assert (again.buddy, again.dive_number, again.weight, again.lat, again.service_fields["environment"]) == ("Anna", 500, 4.54, 5.123456, "Ocean/Sea")
+    assert (again.buddy, again.dive_number, again.weight, again.lat, again.service_fields["environment"]) == ("Anna", 454, 4.54, 5.123456, "Ocean/Sea")
     monkeypatch.setattr(sw, "_now", lambda: datetime(2026, 10, 1, tzinfo=timezone.utc))
     assert adapter.update_dive(dive_id, again) is True
     assert _meta(db_copy, dive_id)[2]["LastModified"] == "2026-09-30 01:02:03"

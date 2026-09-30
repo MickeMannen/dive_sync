@@ -463,7 +463,10 @@ class ShearwaterAdapter(BaseDiveAdapter):
         # round trip through the transmitter's own pressures would look like
         # a change on every run)
         editable = [
-            FieldSpec(key="shearwater.dive_number", label="Dive number", type="number", unified="dive_number"),
+            # the number is the computer's own log number (and the app renumbers
+            # nothing else); another service's numbering must not be written
+            # over it - a first live run did exactly that (2026-09-30)
+            FieldSpec(key="shearwater.dive_number", label="Dive number", type="number", unified="dive_number", writable=False),
             FieldSpec(key="shearwater.site", label="Site", type="text", unified="location"),
             FieldSpec(key="shearwater.buddy", label="Buddy", type="text", unified="buddy"),
             FieldSpec(key="shearwater.notes", label="Notes", type="text", unified="notes"),
@@ -565,6 +568,12 @@ class ShearwaterAdapter(BaseDiveAdapter):
         if not changes:
             logger.info("Shearwater: dive %s already up to date", external_id)
             return True
+        return self._write(str(external_id), changes)
+
+    def _write(self, external_id: str, changes: Dict[str, Optional[str]]) -> bool:
+        """Write ``changes`` ({column: text or None}) to the dive's row the way
+        the app does (stamps, LastModified, LastModifiedServerTime), after the
+        safety checks and the one backup per run."""
         problem = self._write_blocker()
         if problem:
             logger.error("Shearwater: not writing dive %s: %s", external_id, problem)
@@ -623,7 +632,6 @@ class ShearwaterAdapter(BaseDiveAdapter):
             "Site": _text(dive.location),
             "Buddy": _text(dive.buddy),
             "Notes": _text(dive.notes),
-            "DiveNumber": str(dive.dive_number) if dive.dive_number else None,
             "Weight": _weight_text(dive.weight, dive.weight_unit),
             "GnssEntryLocation": _gnss_text(dive.lat, dive.lng),
         }

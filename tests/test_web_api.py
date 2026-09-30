@@ -689,6 +689,11 @@ def test_web_jobs_with_source_and_target_and_all_conflicts(tmp_path, monkeypatch
     item = groups[0]["conflicts"][0]
     assert (item["field_label"], item["source_text"], item["target_text"]) == ("Buddy", "Anna", "Bob")
     assert (item["source_name"], item["target_name"]) == ("Garmin Connect", "Subsurface Cloud")
+    # Clear all (owner request 2026-09-30): the queue is emptied, nothing else touched
+    assert c.delete("/api/conflicts").json() == {"cleared": 1}
+    assert c.get("/api/conflicts/all").json()["groups"] == []
+    assert c.delete("/api/conflicts").json() == {"cleared": 0}
+    assert 'id="conflicts-clear"' in c.get("/").text
 
 
 def test_stop_asks_the_running_job_to_stop(monkeypatch):

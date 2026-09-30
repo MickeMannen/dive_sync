@@ -1108,6 +1108,20 @@ def test_conflicts_controller_lists_every_pair(qapp, scratch_data_dir, fake_keyr
     c.stage(gps["pair_id"], gps["id"], "source")               # picking the other side replaces the pick
     assert c.staged[gps["id"]] == "source" and c.pendingServices[1] == {"service": "subsurface", "name": "Subsurface Cloud", "count": 1}
     assert staged_signals[-1] == 2
+
+    # Clear all (owner request 2026-09-30): every file emptied, picks dropped, nothing written
+    c.clearAll()
+    assert c.count == 0 and c.staged == {} and c.message == "Cleared 2 waiting conflict(s)."
+    assert ConflictStore(os.path.join(base, "conflicts_g@x_d.json")).load() == []
+    c.clearAll()
+    assert c.message == "No conflicts waiting."
+    # re-record for the rest of the test
+    record(Pair("garmin", "divelogs", os.path.join(base, "conflicts_g@x_d.json")), "buddy", "garmin.buddy", "divelogs.buddy", "Anna", "Bob")
+    record(Pair("garmin", "subsurface", os.path.join(base, "conflicts_garmin-g@x_subsurface-me@x.org.json")),
+           "gps", "garmin.gps", "subsurface.gps", [4.7948, 103.683518], [4.805835, 103.686585])
+    c.load()
+    c.stage(buddy["pair_id"], buddy["id"], "source")
+    c.stage(gps["pair_id"], gps["id"], "source")
     c.stage(gps["pair_id"], "ghost", "target")                 # unknown conflict: ignored
     assert c.stagedCount == 2
     c.discard()

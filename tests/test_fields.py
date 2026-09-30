@@ -318,7 +318,9 @@ def test_adapters_fill_and_push_service_fields():
 
 def test_gps_equality_tolerates_service_rounding():
     assert values_equal("gps", (4.7817514557391405, 103.68850165978074), (4.781751, 103.688502))
-    assert not values_equal("gps", (4.7817514557391405, 103.68850165978074), (4.7817, 103.688502))
+    # 6 m apart: no longer a difference (positions within 200 m are the same, decision 2026-09-30)
+    assert values_equal("gps", (4.7817514557391405, 103.68850165978074), (4.7817, 103.688502))
+    assert not values_equal("gps", (4.7817514557391405, 103.68850165978074), (4.7847, 103.688502))   # 330 m
     assert values_equal("gps", (None, None), (None, None)) and not values_equal("gps", (1.0, None), (1.0, 2.0))
     assert not values_equal("gps", None, (1.0, 2.0))
 
@@ -362,3 +364,15 @@ def test_copy_value_tanks_keeps_name_and_role():
     kept = keep_tank_names([GasMixture(oxygen=32.0), GasMixture(oxygen=50.0, tank_name="Deco")],
                            [GasMixture(oxygen=21.0, tank_name="Main"), GasMixture(oxygen=21.0, tank_name="Old")])
     assert [g.tank_name for g in kept] == ["Main", "Deco"]
+
+
+def test_positions_within_200_m_are_the_same():
+    """Two services' positions of one dive rarely agree to the metre (owner's
+    first Shearwater <-> Subsurface run, 2026-09-30: a GPS conflict on
+    nearly every dive over 2-50 m); within GPS_SAME_DISTANCE_M they are equal."""
+    from src.core.fields import values_equal
+    assert values_equal("gps", (2.666829, 104.059896), (2.666827, 104.06037))     # 53 m
+    assert values_equal("gps", (4.807063, 103.676201), (4.807324, 103.675222))    # 112 m
+    assert not values_equal("gps", (2.88952, 104.067394), (2.887377, 104.065481)) # 319 m: a real difference
+    assert not values_equal("gps", (2.666829, 104.059896), None) and values_equal("gps", None, None)
+    assert not values_equal("gps", (2.666829, None), (2.666829, 104.059896))

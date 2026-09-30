@@ -1837,6 +1837,8 @@ async function loadConflicts() {
   [...stagedPicks.keys()].filter((id) => !present.has(id)).forEach((id) => stagedPicks.delete(id));
   box.innerHTML = "";
   $("conflicts-message").textContent = data.groups.length ? "" : "No conflicts waiting.";
+  conflictsTotal = data.groups.reduce((n, g) => n + g.conflicts.length, 0);
+  $("conflicts-clear").hidden = conflictsTotal === 0;
   data.groups.forEach((group) => {
     const section = document.createElement("div");
     section.className = "conflict-group";
@@ -1920,6 +1922,18 @@ function updateConflictsToolbar() {
   $("conflicts-discard").disabled = !!conflictsSaving || n === 0;
   $("conflicts-reload").disabled = !!conflictsSaving;
   document.querySelectorAll("#conflict-groups button").forEach((b) => { b.disabled = !!conflictsSaving; });
+}
+
+let conflictsTotal = 0;
+
+async function clearAllConflicts() {
+  if (conflictsSaving) return;
+  if (!confirm(`Forget all ${conflictsTotal} waiting conflict(s)? Nothing is written to any service. A later sync that finds the same difference lists it again.`)) return;
+  const res = await fetch("/api/conflicts", { method: "DELETE" });
+  const data = await res.json();
+  stagedPicks.clear();
+  $("conflicts-message").textContent = res.ok ? `Cleared ${data.cleared} waiting conflict(s).` : (data.detail || "Failed to clear.");
+  loadConflicts();
 }
 
 function discardConflictPicks() {
@@ -2079,6 +2093,7 @@ async function init() {
   $("job-cancel").addEventListener("click", () => { editingJob = -1; showJobEditor(false); });
   $("conflicts-reload").addEventListener("click", loadConflicts);
   $("conflicts-discard").addEventListener("click", discardConflictPicks);
+  $("conflicts-clear").addEventListener("click", clearAllConflicts);
   $("history-reload").addEventListener("click", loadHistory);
   $("history-job").addEventListener("change", renderHistory);
   $("history-filter").addEventListener("change", renderHistory);

@@ -553,7 +553,21 @@ def are_samples_different(list1: List[UnifiedSample], list2: List[UnifiedSample]
     return False
 
 
-GPS_TOLERANCE = 5e-6  # degrees (~0.5 m); Divelogs stores six decimals, Garmin full floats
+GPS_TOLERANCE = 5e-6  # degrees (~0.5 m) per coordinate: rounding (Divelogs six decimals, Garmin full floats)
+# Two services' positions of one dive rarely agree to the metre (a watch, a
+# phone, a site pin): within this distance they are the same position - no
+# change, no conflict (decided 2026-09-30, the same radius site matching uses).
+GPS_SAME_DISTANCE_M = 200.0
+
+
+def _positions_close(a: Any, b: Any) -> bool:
+    """Both positions complete and within GPS_SAME_DISTANCE_M of each other."""
+    try:
+        lat1, lng1, lat2, lng2 = (float(a[0]), float(a[1]), float(b[0]), float(b[1]))
+    except (TypeError, ValueError):
+        return False
+    from src.core.site_matcher import distance_m
+    return distance_m(lat1, lng1, lat2, lng2) <= GPS_SAME_DISTANCE_M
 
 
 def _coord_equal(a: Any, b: Any) -> bool:
@@ -571,7 +585,9 @@ def values_equal(field_type: str, a: Any, b: Any) -> bool:
     if field_type == "gps":
         if a is None or b is None:
             return a == b
-        return _coord_equal(a[0], b[0]) and _coord_equal(a[1], b[1])
+        if _coord_equal(a[0], b[0]) and _coord_equal(a[1], b[1]):
+            return True
+        return _positions_close(a, b)
     if field_type == "tanks":
         return not are_gas_mixtures_different(list(a or []), list(b or []))
     if field_type == "samples":
