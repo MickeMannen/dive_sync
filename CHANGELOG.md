@@ -4,7 +4,7 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
-## Unreleased
+## 0.3.6 - 2026-09-30
 
 - Conflicts page (desktop and web): a "Clear all" button forgets every
   waiting conflict after a confirmation. Nothing is written to any
