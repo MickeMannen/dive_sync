@@ -1,0 +1,101 @@
+<?xml version='1.0' encoding='utf-8'?>
+<uddf xmlns="http://www.streit.cc/uddf/3.2/" version="3.2.0">
+  <generator>
+    <name>dive_sync</name>
+    <type>logbook</type>
+  </generator>
+  <diver>
+    <buddy id="buddy-1">
+      <personal>
+        <firstname>Bo</firstname>
+        <lastname>Berg</lastname>
+      </personal>
+    </buddy>
+    <buddy id="buddy-2">
+      <personal>
+        <firstname>Cid</firstname>
+      </personal>
+    </buddy>
+  </diver>
+  <divesite>
+    <site id="site-1">
+      <name>Reef</name>
+      <geography>
+        <latitude>34.9</latitude>
+        <longitude>33.7</longitude>
+      </geography>
+    </site>
+  </divesite>
+  <gasdefinitions>
+    <mix id="mix-32-0">
+      <name>EAN32</name>
+      <o2>0.32</o2>
+      <he>0</he>
+    </mix>
+    <mix id="mix-21-35">
+      <name>TX21/35</name>
+      <o2>0.21</o2>
+      <he>0.35</he>
+    </mix>
+  </gasdefinitions>
+  <profiledata>
+    <repetitiongroup id="rg-dive_sync">
+      <dive id="dive_sync-garmin-555">
+        <informationbeforedive>
+          <link ref="site-1" />
+          <link ref="buddy-1" />
+          <link ref="buddy-2" />
+          <divenumber>14</divenumber>
+          <datetime>2026-09-01T10:30:00</datetime>
+        </informationbeforedive>
+        <tankdata id="dive_sync-garmin-555-tank0">
+          <link ref="mix-32-0" />
+          <tankvolume>0.012</tankvolume>
+          <tankpressurebegin>21000000</tankpressurebegin>
+          <tankpressureend>6000000</tankpressureend>
+        </tankdata>
+        <tankdata id="dive_sync-garmin-555-tank1">
+          <link ref="mix-21-35" />
+          <tankvolume>0.007</tankvolume>
+          <tankpressurebegin>20000000</tankpressurebegin>
+          <tankpressureend>15000000</tankpressureend>
+        </tankdata>
+        <samples>
+          <waypoint>
+            <depth>0</depth>
+            <divetime>0</divetime>
+            <temperature>298.15</temperature>
+          </waypoint>
+          <waypoint>
+            <depth>21.5</depth>
+            <divetime>600</divetime>
+            <temperature>297.15</temperature>
+          </waypoint>
+        </samples>
+        <informationafterdive>
+          <greatestdepth>21.5</greatestdepth>
+          <averagedepth>12</averagedepth>
+          <diveduration>2500</diveduration>
+          <lowesttemperature>297.15</lowesttemperature>
+          <visibility>30</visibility>
+          <rating>
+            <ratingvalue>5</ratingvalue>
+          </rating>
+          <notes>
+            <para>One</para>
+            <para>Two</para>
+          </notes>
+        </informationafterdive>
+      </dive>
+      <dive id="dive_sync-20260102T100000">
+        <informationbeforedive>
+          <datetime>2026-01-02T10:00:00</datetime>
+        </informationbeforedive>
+        <informationafterdive>
+          <greatestdepth>12</greatestdepth>
+          <diveduration>1100</diveduration>
+        </informationafterdive>
+      </dive>
+    </repetitiongroup>
+  </profiledata>
+</uddf>

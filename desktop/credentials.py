@@ -394,6 +394,57 @@ def clear_garmin_token_file(username: str, token_dir: str) -> None:
         logger.warning("Failed to remove materialized Garmin token file: %s", e)
 
 
+# --- MySSI (plans/convert.md I7): the Convert page's upload target ---------
+#
+# Not part of CredentialsModel: MySSI is no sync service (nothing in src.core
+# reads credentials.json for it), so its login is never materialised to disk.
+# One keychain item, "ssi", holding {"email", "password", "token"}: the
+# token is kept so a later upload reuses it instead of logging in again.
+
+SSI_KEY = "ssi"
+
+
+def load_ssi_credentials():
+    """The stored MySSI login (blank fields when none)."""
+    from src.core.services.ssi import SsiCredentials
+
+    raw = _get_json(SSI_KEY) or {}
+    return SsiCredentials(email=str(raw.get("email", "")), password=str(raw.get("password", "")),
+                          token=str(raw.get("token", "")))
+
+
+def save_ssi_credentials(email: str, password: str):
+    """Store the MySSI login. A blank password keeps the one already stored
+    (same rule as the other services' account forms); a blank email clears
+    everything. Changing the email drops the stored token, which belonged to
+    the old login. Returns what is now stored."""
+    from src.core.services.ssi import SsiCredentials
+
+    email = (email or "").strip()
+    previous = load_ssi_credentials()
+    if not email:
+        _set_json(SSI_KEY, None)
+        return SsiCredentials()
+    password = password or (previous.password if previous.email == email else "")
+    token = previous.token if previous.email == email else ""
+    current = SsiCredentials(email=email, password=password, token=token)
+    _set_json(SSI_KEY, {"email": current.email, "password": current.password, "token": current.token})
+    return current
+
+
+def save_ssi_token(token: str) -> None:
+    """Keep the token `SsiClient` just obtained (its ``on_token`` hook); a
+    blank token forgets the stored one. No-op without a stored login."""
+    current = load_ssi_credentials()
+    if not current.email:
+        return
+    _set_json(SSI_KEY, {"email": current.email, "password": current.password, "token": token or ""})
+
+
+def clear_ssi_credentials() -> None:
+    _set_json(SSI_KEY, None)
+
+
 _operation_lock = threading.Lock()
 _active_operations = 0
 

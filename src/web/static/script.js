@@ -528,9 +528,6 @@ async function loadCredentialsStatus() {
   }
   $("trigger-accounts").hidden = credentialsAccounts.garmin.length < 2 && credentialsAccounts.divelogs.length < 2;
   if (data.subsurface_email) $("subsurface-email").value = data.subsurface_email;
-  setBadge("shearwater-configured", data.shearwater_configured);
-  $("shearwater-database").value = data.shearwater_database || "";
-  $("shearwater-resolved").textContent = data.shearwater_resolved ? `Using ${data.shearwater_resolved}.` : "";
 }
 
 function setBadge(id, on) {
@@ -547,7 +544,6 @@ function credentialsPayload() {
   const email = $("subsurface-email").value.trim();
   const pw = $("subsurface-password").value;
   if (email && pw) payload.subsurface = { email, password: pw };
-  payload.shearwater = { database: $("shearwater-database").value.trim() };
   return payload;
 }
 

@@ -248,6 +248,38 @@ ColumnLayout {
                 Button { text: "Add another database"; flat: true; onClicked: shearwaterModel.append({account: "", database: "", exists: false}) }
             }
         }
+        // Hidden while ssi.UPLOAD_ENABLED is off (2026-10-02, until the owner's live test)
+        Card {
+            id: ssiCard
+            objectName: "ssiCard"
+            visible: settingsController.ssiEnabled
+            title: "MySSI"
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.muted
+                font.pixelSize: 11
+                text: "The login of the Convert page's \"Send to SSI\" (your MySSI app login); nothing syncs with it. " + convertController.ssiNote
+            }
+            RowLayout {
+                LabeledField { id: ssiEmail; fieldWidth: 220; label: "Email"; text: settingsController.ssiEmail }
+                LabeledField { id: ssiPass; fieldWidth: 220; label: "Password"; placeholder: settingsController.ssiHasPassword ? "saved - leave blank to keep it" : ""; secret: true }
+                Button { text: "Test"; onClicked: settingsController.testSsi(ssiEmail.text, ssiPass.text) }
+                Text {
+                    visible: settingsController.ssiEmail !== "" && !settingsController.ssiHasPassword
+                    text: "⚠ no password stored"
+                    color: Theme.danger
+                    font.pixelSize: 11
+                }
+            }
+            Connections { target: settingsController; function onCredentialsChanged() { ssiEmail.text = settingsController.ssiEmail; ssiPass.text = "" } }
+            // See the Garmin card: this line is permanent, only its text changes.
+            Text { objectName: "ssiStatus"; text: settingsController.ssiStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+            RowLayout {
+                Button { text: "Save"; onClicked: settingsController.saveSsi(ssiEmail.text, ssiPass.text) }
+                Button { text: "Remove"; flat: true; visible: settingsController.ssiEmail !== ""; onClicked: settingsController.clearSsi() }
+            }
+        }
         Text { visible: text !== ""; text: settingsController.message; color: Theme.muted }
 
     Card {

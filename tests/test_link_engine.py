@@ -451,6 +451,59 @@ def test_pre_sync_backup_snapshots_what_was_fetched(tmp_path):
     assert len(divelogs_backup) == 1
 
 
+def test_carried_computer_data_is_invisible_to_a_sync(tmp_path):
+    """plans/convert.md I1: per-sample channels, events and the dive
+    computer's settings are carried on a UnifiedDive for the file
+    conversions. A sync neither compares nor copies them: a matched pair
+    where only one side has them is in agreement, in both directions, and
+    the pre-sync backup of the side without them holds the keys it always did."""
+    from src.core.models import CARRIED_DIVE_FIELDS, DiveEvent, SampleChannels
+    profile = [UnifiedSample(depth=0.0, temp=28.0, time=0), UnifiedSample(depth=9.0, temp=27.0, time=10)]
+    rich = [UnifiedSample(depth=0.0, temp=28.0, time=0, channels=SampleChannels(pressures={0: 200.0, 1: 198.0}, ndl=5940)),
+            UnifiedSample(depth=9.0, temp=27.0, time=10, channels=SampleChannels(pressures={0: 195.0, 1: 198.0}, cns=1.0))]
+    carried = dict(events=[DiveEvent(time=5, type="gas_switch", tank=1), DiveEvent(time=8, type="alert", name="Deco")],
+                   computer_vendor="Garmin", computer_model="Descent Mk3i", computer_serial="1", computer_firmware="13.05",
+                   gf_low=45, gf_high=85, deco_model="ZHL-16C", water_type="salt", water_density=1025.0,
+                   dive_mode="oc_multi_gas", exit_lat=7.601, exit_lng=98.371, surface_interval=5400, bottom_time=2400,
+                   cns_start=2.0, cns_end=11.0)
+    assert set(carried) == set(CARRIED_DIVE_FIELDS)
+    g, d = _pair(dict(carried, samples=rich, buddy="A"), {"samples": profile, "buddy": "A"})
+
+    for direction in ("to_divelogs", "to_garmin"):
+        engine = _engine(tmp_path, [g], [d], directionality=direction)
+        res = engine.run_sync(dry_run=False)
+        assert not res["updated_on_garmin"] and not res["updated_on_divelogs"] and not res.get("conflicts")
+        assert engine.source.updated == [] and engine.target.updated == []
+        assert engine.source.added == [] and engine.target.added == []
+    assert d.events == [] and d.computer_model is None and all(s.channels is None for s in d.samples)
+    assert g.events == carried["events"] and g.samples == rich
+
+    backups_root = os.path.join(engine.data_home, "backups")
+    newest = sorted(os.listdir(backups_root))[-1]
+    with open(os.path.join(backups_root, newest, "divelogs.json")) as f:
+        plain_backup = json.load(f)[0]
+    with open(os.path.join(backups_root, newest, "garmin.json")) as f:
+        rich_backup = json.load(f)[0]
+    assert not set(plain_backup) & set(CARRIED_DIVE_FIELDS) and "channels" not in plain_backup["samples"][0]
+    assert list(rich_backup)[:len(plain_backup)] == list(plain_backup)        # the same keys first, the carried ones after
+    assert UnifiedDive(**rich_backup) == g                                    # and the backup holds the dive whole
+
+    # a board that mirrors the profile, and one that queues disagreements: the channels are no disagreement
+    for policy in ("source_wins", "manual"):
+        link = FieldLink(id="samples", source=["garmin.samples"], target="divelogs.samples", direction="to_target",
+                         conflict=policy)
+        engine = _engine(tmp_path, [g], [d], field_links=[link])
+        res = engine.run_sync(dry_run=False)
+        assert not res["updated_on_divelogs"] and not res.get("conflicts") and engine.target.updated == []
+        assert engine.list_conflicts() == []
+    # a real difference in depth still is one, and a profile that is written is written whole
+    g.samples[1].depth = 9.5
+    engine = _engine(tmp_path, [g], [d], field_links=[link.model_copy(update={"conflict": "source_wins"})])
+    assert len(engine.run_sync(dry_run=False)["updated_on_divelogs"]) == 1
+    assert d.samples == g.samples and d.samples[0].channels.pressures == {0: 200.0, 1: 198.0}
+    assert d.events == [] and d.computer_model is None
+
+
 def test_pre_sync_backup_skipped_on_dry_run(tmp_path):
     g, d = _pair({"buddy": "A"}, {"buddy": "A"})
     engine = _engine(tmp_path, [g], [d])

@@ -1,0 +1,51 @@
+<divelog program='subsurface' version='3'>
+<settings>
+<divecomputerid model='Shearwater Perdix 2' deviceid='3bb143fd' serial='1000000001' firmware='93'/>
+</settings>
+<divesites>
+<site uuid='1fe4df72' name='Test Reef &amp; Wall &apos;North&apos;' gps='-10.123456 -30.654321'>
+</site>
+</divesites>
+<dives>
+<dive number='42' rating='4' visibility='3' tags='reef, deco' divesiteid='1fe4df72' date='2026-03-14' time='09:30:05' duration='48:20 min'>
+  <divemaster>D. Master</divemaster>
+  <buddy>A. Buddy</buddy>
+  <notes>Line one &lt;with&gt; &amp; "quotes"
+line two	with a tab</notes>
+  <suit>5mm wet</suit>
+  <cylinder size='11.1 l' description='Tank 1' o2='32.0%' start='201.3 bar' end='62.0 bar' />
+  <cylinder size='7.0 l' description='Deco &lt;50&gt;' o2='50.0%' start='180.0 bar' end='150.5 bar' use='bailout' />
+  <weightsystem weight='2.994 kg' description='weight' />
+  <divecomputer model='Shearwater Perdix 2' deviceid='3bb143fd' diveid='b03fc379'>
+  <depth max='31.45 m' mean='14.2 m' />
+  <temperature water='24.0 C' />
+  <water salinity='1000 g/l' />
+  <surfacetime>90:00 min</surfacetime>
+  <extradata key='Deco model' value='ZHL-16C GF 40/85' />
+  <extradata key='Serial' value='1000000001' />
+  <extradata key='FW Version' value='93' />
+  <extradata key='Dive mode' value='oc_multi_gas' />
+  <extradata key='GPS2' value='-10.124000, -30.654000' />
+  <extradata key='Bottom time' value='40:10 min' />
+  <extradata key='CNS start' value='1.0%' />
+  <extradata key='CNS end' value='12.0%' />
+  <extradata key='dive_sync:garmin' value='123456789' />
+  <event time='0:00 min' type='25' flags='1' name='gaschange' cylinder='0' o2='32.0%' />
+  <event time='10:10 min' type='26' value='3' name='Ascent rate' />
+  <event time='21:40 min' type='8' name='Turtle' />
+  <event time='25:00 min' type='8' divemode='CCR' name='modechange' />
+  <event time='26:40 min' type='20' value='1300' name='SP change' />
+  <event time='33:20 min' type='26' name='tank pod disconnected' cylinder='0' />
+  <event time='41:40 min' type='25' flags='2' name='gaschange' cylinder='1' o2='50.0%' />
+  <sample time='0:00 min' depth='0.0 m' temp='27.5 C' pressure0='201.3 bar' pressure1='180.0 bar' ndl='99:00 min' tts='1:00 min' po2='0.32 bar' heartbeat='72' />
+  <sample time='2:00 min' depth='12.5 m' pressure0='190.0 bar' pressure1='180.0 bar' ndl='30:00 min' tts='3:00 min' rbt='60:00 min' cns='1%' po2='0.72 bar' heartbeat='80' />
+  <sample time='10:00 min' depth='31.45 m' temp='24.0 C' pressure0='150.0 bar' pressure1='180.0 bar' ndl='0:00 min' tts='15:00 min' rbt='40:00 min' in_deco='1' stoptime='3:00 min' stopdepth='6.0 m' cns='8%' po2='1.33 bar' heartbeat='88' />
+  <sample time='20:00 min' depth='21.0 m' pressure0='110.0 bar' pressure1='180.0 bar' tts='10:00 min' rbt='30:00 min' stoptime='2:00 min' cns='11%' po2='0.99 bar' heartbeat='84' />
+  <sample time='40:00 min' depth='6.0 m' temp='25.0 C' pressure0='80.0 bar' pressure1='175.0 bar' tts='4:00 min' rbt='25:00 min' stoptime='1:00 min' cns='12%' po2='0.8 bar' />
+  <sample time='43:20 min' depth='6.0 m' pressure1='160.0 bar' tts='2:00 min' stoptime='0:00 min' />
+  <sample time='46:40 min' depth='3.0 m' temp='26.0 C' pressure1='152.0 bar' ndl='99:00 min' tts='0:30 min' in_deco='0' stopdepth='0.0 m' po2='0.65 bar' />
+  <sample time='48:20 min' depth='0.0 m' pressure0='62.0 bar' />
+  </divecomputer>
+</dive>
+</dives>
+</divelog>

@@ -42,9 +42,9 @@ Work moves through three roles, each on the model suited to it. A role runs as a
 
 | Role | Model | Does |
 |---|---|---|
-| Research | Opus 5.5 | Investigates before code is written: reads the code, the docs and external formats, answers "what is this file / API / behaviour", proposes the design and the questions for the owner. Writes into `rework.md` (plan, decisions log) and `features.md` (backlog), never into `src/`. |
+| Research | Opus 5.5 | Investigates before code is written: reads the code, the docs and external formats, answers "what is this file / API / behaviour", proposes the design and the questions for the owner. Writes into the plan (`plans/`, one file per type of plan plus the decisions log, indexed by `rework.md`) and `features.md` (backlog), never into `src/`. |
 | Implementation | Fable 5.1 | Writes the code **and the tests that pin it** (a test is the specification of the code next to it, so it is written by the same model, one part at a time), running that part's test modules as it goes. Updates `CHANGELOG.md` (Unreleased), README and the plan's step status. |
-| Verification | Sonnet 5 | Runs the applicable test modules after an implementation step, or the full suite before a release; triages failures into "the test is wrong" / "the code is wrong" with the failing assertion and log lines quoted; reviews a step's diff against these guidelines; adds boilerplate cases and fixture data. Never rewrites the code it is checking. |
+| Verification | Sonnet 5.5 | Runs the applicable test modules after an implementation step, or the full suite before a release; triages failures into "the test is wrong" / "the code is wrong" with the failing assertion and log lines quoted; reviews a step's diff against these guidelines; adds boilerplate cases and fixture data. Never rewrites the code it is checking. |
 
 Triggering a role (Claude Code): the three roles are project subagents in `.claude/agents/` (`research.md`, `implement.md`, `verify.md`), each with its model and tools in the frontmatter, and they inherit CLAUDE.md and this file.
 - By name in the prompt: "use the research agent to investigate the Shearwater database", "implement H3 with the implement agent", "verify agent: run the suite". `@research`, `@implement`, `@verify` also work.

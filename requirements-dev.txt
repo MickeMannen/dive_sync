@@ -1,0 +1,10 @@
+# Development and test dependencies, on top of requirements.txt:
+#     pip install -r requirements-dev.txt
+# garmin-fit-sdk is under Garmin's FIT Protocol License, which does not clearly
+# allow redistributing it, so it is not a dependency of the app, the Docker
+# image or the desktop build (those read FIT files with fitdecode, MIT). It is
+# used only by the fixture tool tests/tools/anonymize_fit.py and by the tests
+# that cross-check the FIT fixtures with a second decoder; those tests skip
+# when it is not installed.
+-r requirements.txt
+garmin-fit-sdk>=21.217.0

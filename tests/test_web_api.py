@@ -779,9 +779,11 @@ def test_download_dives_endpoints(tmp_path, monkeypatch):
     assert client.get("/api/status").json()["last_download"] == scheduler.last_download_results
 
 
-def test_credentials_api_keeps_the_shearwater_database(tmp_path, monkeypatch):
-    """The Shearwater section is a file path, not a login: saved with the
-    form, shown resolved in the status, and gone when blanked."""
+def test_credentials_api_has_no_shearwater_section(tmp_path, monkeypatch):
+    """The Shearwater app's database is a desktop-app setting: the web form
+    and its status do not show it, and saving the form leaves an entry
+    stored in credentials.json alone (it still works as a sync side)."""
+    import json
     import shutil
     import src.core.config as config
     from tests.test_shearwater import FIXTURE
@@ -792,18 +794,16 @@ def test_credentials_api_keeps_the_shearwater_database(tmp_path, monkeypatch):
     client = TestClient(app)
     db = tmp_path / "dive_data.db"
     shutil.copy(FIXTURE, db)
+    with open(creds_file, "w") as f:
+        json.dump({"shearwater": [{"database": str(db)}]}, f)
+    assert 'id="shearwater' not in client.get("/").text
+    assert not any(key.startswith("shearwater") for key in client.get("/api/credentials/status").json())
+    # a form save (even one from an old page still sending the section) keeps the stored entry
     res = client.post("/api/credentials", json={"garmin_accounts": [], "divelogs_accounts": [],
-                                                "shearwater": {"database": str(db)}})
+                                                "shearwater": {"database": ""}})
     assert res.status_code == 200
-    status = client.get("/api/credentials/status").json()
-    assert status["shearwater_configured"] is True
-    assert (status["shearwater_database"], status["shearwater_resolved"]) == (str(db), str(db))
-    assert status["shearwater_accounts"] == [tmp_path.name]                 # a copy is named after its folder
+    assert [a.database for a in load_c(creds_file).saved_shearwater_accounts()] == [str(db)]
     assert any(e["id"] == "shearwater" for e in client.get("/api/sync/endpoints").json()["endpoints"])
-    assert 'id="shearwater-database"' in client.get("/").text
-    client.post("/api/credentials", json={"garmin_accounts": [], "divelogs_accounts": [], "shearwater": {"database": ""}})
-    status = client.get("/api/credentials/status").json()
-    assert status["shearwater_configured"] is False and status["shearwater_database"] == ""
 
 
 def test_fields_preview_shows_the_take_sample():

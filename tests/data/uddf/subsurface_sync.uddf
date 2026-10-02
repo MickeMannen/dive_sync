@@ -1,0 +1,78 @@
+<?xml version='1.0' encoding='utf-8'?>
+<uddf xmlns="http://www.streit.cc/uddf/3.2/" version="3.2.0">
+  <generator>
+    <name>dive_sync</name>
+    <type>logbook</type>
+  </generator>
+  <diver />
+  <divesite>
+    <site id="site-1">
+      <name>Reef</name>
+      <geography>
+        <latitude>7.6</latitude>
+        <longitude>98.4</longitude>
+      </geography>
+    </site>
+  </divesite>
+  <gasdefinitions>
+    <mix id="mix-21-0">
+      <name>Air</name>
+      <o2>0.21</o2>
+      <he>0</he>
+    </mix>
+  </gasdefinitions>
+  <profiledata>
+    <repetitiongroup id="rg-dive_sync">
+      <dive id="dive_sync-subsurface-2026/08/29-Sat-12=52=59/Dive-13">
+        <informationbeforedive>
+          <link ref="site-1" />
+          <divenumber>13</divenumber>
+          <datetime>2026-08-29T12:52:59</datetime>
+        </informationbeforedive>
+        <tankdata id="dive_sync-subsurface-2026/08/29-Sat-12=52=59/Dive-13-tank0">
+          <link ref="mix-21-0" />
+          <tankvolume>0.011094</tankvolume>
+          <tankpressurebegin>20400000</tankpressurebegin>
+          <tankpressureend>16000000</tankpressureend>
+        </tankdata>
+        <tankdata id="dive_sync-subsurface-2026/08/29-Sat-12=52=59/Dive-13-tank1">
+          <link ref="mix-21-0" />
+          <tankvolume>0.011094</tankvolume>
+          <tankpressurebegin>21000000</tankpressurebegin>
+          <tankpressureend>16500000</tankpressureend>
+        </tankdata>
+        <samples>
+          <waypoint>
+            <depth>1.2</depth>
+            <divetime>1</divetime>
+            <temperature>304.15</temperature>
+            <tankpressure ref="dive_sync-subsurface-2026/08/29-Sat-12=52=59/Dive-13-tank0">20400000</tankpressure>
+          </waypoint>
+          <waypoint>
+            <depth>8</depth>
+            <divetime>600</divetime>
+            <temperature>303.15</temperature>
+            <tankpressure ref="dive_sync-subsurface-2026/08/29-Sat-12=52=59/Dive-13-tank0">19050000</tankpressure>
+          </waypoint>
+          <waypoint>
+            <depth>13.82</depth>
+            <divetime>1200</divetime>
+            <temperature>303.15</temperature>
+          </waypoint>
+          <waypoint>
+            <depth>0.3</depth>
+            <divetime>4132</divetime>
+            <temperature>304.15</temperature>
+            <tankpressure ref="dive_sync-subsurface-2026/08/29-Sat-12=52=59/Dive-13-tank0">16000000</tankpressure>
+          </waypoint>
+        </samples>
+        <informationafterdive>
+          <greatestdepth>13.82</greatestdepth>
+          <averagedepth>8.545</averagedepth>
+          <diveduration>4132</diveduration>
+          <lowesttemperature>303.15</lowesttemperature>
+        </informationafterdive>
+      </dive>
+    </repetitiongroup>
+  </profiledata>
+</uddf>

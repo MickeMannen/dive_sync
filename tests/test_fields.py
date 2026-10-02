@@ -376,3 +376,36 @@ def test_positions_within_200_m_are_the_same():
     assert not values_equal("gps", (2.88952, 104.067394), (2.887377, 104.065481)) # 319 m: a real difference
     assert not values_equal("gps", (2.666829, 104.059896), None) and values_equal("gps", None, None)
     assert not values_equal("gps", (2.666829, None), (2.666829, 104.059896))
+
+
+def test_sample_channels_are_carried_not_compared():
+    """plans/convert.md I1: what a dive computer logs per sample beyond
+    depth, temperature and time (UnifiedSample.channels) rides along when a
+    profile is copied, and is no difference between two profiles, no
+    conflict and no reason to write."""
+    from src.core.fields import are_samples_different, deserialize_value, resample_profile, serialize_value
+    from src.core.models import SampleChannels
+    plain = [UnifiedSample(depth=0.0, temp=28.0, time=0), UnifiedSample(depth=9.0, temp=27.0, time=10)]
+    rich = [UnifiedSample(depth=0.0, temp=28.0, time=0, pressure=200.0,
+                          channels=SampleChannels(pressures={0: 200.0, 1: 198.0}, ndl=5940, heart_rate=70)),
+            UnifiedSample(depth=9.0, temp=27.0, time=10, pressure=195.0,
+                          channels=SampleChannels(pressures={0: 195.0, 1: 198.0}, ndl=3000, cns=1.0))]
+    assert values_equal("samples", plain, rich) and values_equal("samples", rich, plain)
+    assert not are_samples_different(rich, plain)
+    assert not is_empty("samples", rich)
+
+    copied = copy_value("samples", rich)
+    assert copied == rich and copied[0] is not rich[0]
+    assert copied[1].channels.pressures == {0: 195.0, 1: 198.0}
+
+    # conflicts.json: a profile without channels is stored as it always was, one with them comes back whole
+    assert serialize_value("samples", plain) == [{"depth": 0.0, "temp": 28.0, "time": 0, "pressure": None},
+                                                 {"depth": 9.0, "temp": 27.0, "time": 10, "pressure": None}]
+    stored = json.loads(json.dumps(serialize_value("samples", rich)))
+    assert stored[0]["channels"] == {"pressures": {"0": 200.0, "1": 198.0}, "ndl": 5940, "heart_rate": 70}
+    assert deserialize_value("samples", stored) == rich
+
+    # a profile put on a uniform grid (what Divelogs stores) is depth, temperature and time only, as before
+    irregular = rich + [UnifiedSample(depth=3.0, temp=27.0, time=25, channels=SampleChannels(ndl=60))]
+    _, grid = resample_profile(irregular)
+    assert [s.time for s in grid] == [0, 10, 20] and all(s.channels is None and s.pressure is None for s in grid)

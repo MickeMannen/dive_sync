@@ -13,6 +13,7 @@ sync_history.jsonl
 /initial_prompt.txt
 /docker.txt
 /rework.md
+/plans/
 
 # Python
 __pycache__/

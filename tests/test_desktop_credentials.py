@@ -260,3 +260,58 @@ def test_begin_operation_without_a_garmin_account_skips_token_handling(fake_keyr
     creds_store.end_operation()
 
     assert called == []
+
+
+# --- MySSI login (plans/convert.md I7) -----------------------------------------
+
+def test_ssi_credentials_round_trip_one_keychain_item(fake_keyring):
+    assert creds_store.load_ssi_credentials().configured is False
+    saved = creds_store.save_ssi_credentials(" diver@example.com ", "pw1")
+    assert saved.email == "diver@example.com" and saved.password == "pw1" and saved.token == ""
+    loaded = creds_store.load_ssi_credentials()
+    assert loaded.configured and (loaded.email, loaded.password) == ("diver@example.com", "pw1")
+    # one item, under the app identity, holding all three fields
+    assert list(fake_keyring.store) == [(creds_store.SERVICE_NAME, "ssi")]
+    # the SSI login is no sync credential: it never reaches credentials.json
+    assert creds_store.has_any_credentials() is False
+    assert not hasattr(creds_store.load_credentials_model(), "ssi")
+
+
+def test_ssi_token_kept_with_the_login_and_dropped_on_email_change(fake_keyring):
+    creds_store.save_ssi_token("orphan")                      # no login stored: nothing happens
+    assert fake_keyring.store == {}
+    creds_store.save_ssi_credentials("diver@example.com", "pw1")
+    creds_store.save_ssi_token("tok-1")
+    assert creds_store.load_ssi_credentials().token == "tok-1"
+    # a blank password keeps the stored one and the token
+    kept = creds_store.save_ssi_credentials("diver@example.com", "")
+    assert kept.password == "pw1" and kept.token == "tok-1"
+    # a new password keeps the token (SSI's token is not tied to it that we know), a new email drops it
+    assert creds_store.save_ssi_credentials("diver@example.com", "pw2").token == "tok-1"
+    changed = creds_store.save_ssi_credentials("other@example.com", "")
+    assert changed.email == "other@example.com" and changed.password == "" and changed.token == ""
+    creds_store.save_ssi_token("")
+    assert creds_store.load_ssi_credentials().token == ""
+
+
+def test_ssi_credentials_cleared(fake_keyring):
+    creds_store.save_ssi_credentials("diver@example.com", "pw1")
+    creds_store.save_ssi_credentials("", "whatever")
+    assert fake_keyring.store == {} and creds_store.load_ssi_credentials().configured is False
+    creds_store.save_ssi_credentials("diver@example.com", "pw1")
+    creds_store.clear_ssi_credentials()
+    assert fake_keyring.store == {}
+    creds_store.clear_ssi_credentials()                       # idempotent
+
+
+def test_ssi_client_token_hook_stores_the_token(fake_keyring):
+    from src.core.services.ssi import HttpResponse, SsiClient
+
+    creds_store.save_ssi_credentials("diver@example.com", "pw1")
+    def transport(method, url, params, data, timeout):
+        return HttpResponse(200, b'{"authenticated": true, "token": "tok-9", "mid": "1"}')
+    stored = creds_store.load_ssi_credentials()
+    client = SsiClient(stored.email, stored.password, stored.token or None, transport=transport,
+                       on_token=creds_store.save_ssi_token, sleep=lambda s: None)
+    assert client.authenticate() == "tok-9"
+    assert creds_store.load_ssi_credentials().token == "tok-9"

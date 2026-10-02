@@ -4,6 +4,31 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
+## Unreleased
+
+- Desktop app: a new **Convert** page (between Conflicts and Settings) converts
+  dive-computer files offline, without any account: open one or several
+  Garmin `.fit` files (or Garmin Connect's "export original" zip), UDDF files
+  or Subsurface `.ssrf` files, see each dive's summary, tanks, depth profile
+  and which extra channels the file holds (tank pressures, NDL, CNS, PO2,
+  heart rate, ...), and save the selected dives as UDDF or Subsurface `.ssrf`.
+  One dive is saved through a Save-as dialog; several give one file per dive
+  (named `<date> <time> dive <number>`) in a folder you pick. The page says
+  what the chosen format cannot hold. The dialogs open in Documents the
+  first time and then in the last folder used.
+- Dives pages: the depth profile is drawn by the same component as on the
+  Convert page; it looks and behaves as before.
+
+- UDDF files: a dive's lead weight is now written (as `leadquantity` under
+  the equipment used), so a sync to a UDDF file no longer loses it. Dives
+  without a weight are written exactly as before.
+- UDDF files: dives from Subsurface, the Shearwater app or Submersion now
+  carry their tank-pressure profile (one reading per sample, on the first
+  tank), so a logbook that imports the file draws the pressure graph.
+- Web dashboard: the Shearwater settings are gone. The Shearwater app is a
+  desktop-app feature, since the Docker image cannot reach the app's
+  database.
+
 ## 0.3.6 - 2026-09-30
 
 - Conflicts page (desktop and web): a "Clear all" button forgets every

@@ -11,6 +11,7 @@
         garmin/<account>/tokens/        the account's Garmin login tokens
         subsurface/<account>/cloud/     the account's Subsurface Cloud checkout
         submersion/                     Submersion device identity and clock
+        ssi/APP_CACHE_SITES.zip         the SSI site database the Convert page downloads on request
 
 Everything that belongs to one account sits in one folder, so removing an
 account's data is removing one folder. A side without accounts (a
@@ -34,6 +35,8 @@ FIT_SUBDIR = "fit"
 TOKENS_SUBDIR = "tokens"
 CLOUD_SUBDIR = "cloud"
 SYNC_SUBDIR = "sync"
+SSI_SUBDIR = "ssi"
+SSI_SITES_FILE = "APP_CACHE_SITES.zip"
 # credentials.json's token_dir before E21. It named one shared folder; it now
 # means "the account's own tokens folder", like a blank token_dir.
 LEGACY_TOKEN_DIR = "tokens/garmin"
@@ -101,6 +104,16 @@ def account_of_path(service: str, path: str) -> Optional[str]:
     if len(parts) >= 4 and parts[-4] == service and parts[-2] == DATA_SUBDIR:
         return None if parts[-3] == DEFAULT_ACCOUNT else parts[-3]
     return None
+
+
+def ssi_sites_file(base_dir: Optional[str] = None) -> str:
+    """``<data root>/ssi/APP_CACHE_SITES.zip``: the public SSI site database
+    the Convert page's MySSI upload picks sites from (plans/convert.md I8).
+    Downloaded only when the diver asks or first sends; the folder is
+    created here so the download can write straight into it."""
+    folder = os.path.join(data_root(base_dir), SSI_SUBDIR)
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, SSI_SITES_FILE)
 
 
 def sync_dir(settings_dir: str) -> str:

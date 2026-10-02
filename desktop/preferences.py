@@ -170,3 +170,23 @@ def set_selected_account(page: str, service: str, account: str) -> None:
     prefs = _load()
     prefs.setdefault("selected_accounts", {}).setdefault(page, {})[service] = account
     _save(prefs)
+
+
+# -- the Convert page's file dialogs (plans/convert.md I8, decision Q11) -----
+#
+# The Open, Save-as and folder dialogs start in Documents the first time and
+# then in the last folder used; the folder is remembered here, not in
+# settings.json (it is UI state of this computer).
+
+def get_convert_folder(default: str) -> str:
+    """The folder the Convert page's dialogs open in: the last one used when
+    it still exists, else ``default`` (the caller's Documents folder)."""
+    prefs = _load()
+    folder = prefs.get("convert", {}).get("last_folder") or ""
+    return folder if folder and os.path.isdir(folder) else default
+
+
+def set_convert_folder(folder: str) -> None:
+    prefs = _load()
+    prefs.setdefault("convert", {})["last_folder"] = folder or ""
+    _save(prefs)

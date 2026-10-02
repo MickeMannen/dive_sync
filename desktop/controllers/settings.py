@@ -2,6 +2,7 @@
 profile export / import (rework.md D5, C11)."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
@@ -10,6 +11,8 @@ from desktop import credentials as creds_store
 from desktop.jobs import Worker
 from src.core import layout
 
+logger = logging.getLogger("dive_sync.desktop.settings")
+
 
 class SettingsController(QObject):
     messageChanged = Signal()
@@ -17,6 +20,7 @@ class SettingsController(QObject):
     divelogsStatusChanged = Signal()
     subsurfaceStatusChanged = Signal()
     submersionStatusChanged = Signal()
+    ssiStatusChanged = Signal()
     credentialsChanged = Signal()
     profileSummaryChanged = Signal()
 
@@ -27,10 +31,13 @@ class SettingsController(QObject):
         self._divelogs_status = ""
         self._subsurface_status = ""
         self._submersion_status = ""
+        self._ssi_status = ""
         self._profile_summary = ""
         self._pending_profile = None
         self._workers = []
         self._model = creds_store.load_credentials_model()
+        # tests give the MySSI test login a fake transport; the app uses the defaults
+        self._ssi_client_kwargs = {}
 
     # -- properties -------------------------------------------------------
 
@@ -232,6 +239,83 @@ class SettingsController(QObject):
                     for r in rows if str(r.get("database", "")).strip()]
         creds_store.save_shearwater_accounts(accounts)
         self._saved()
+
+    # -- MySSI (plans/convert.md I7/I8): the Convert page's upload login ----
+    #
+    # One login, not an account list: MySSI is no sync service, so it is kept
+    # apart from CredentialsModel (desktop/credentials.py's ssi functions) and
+    # never materialised to credentials.json. The whole card is hidden behind
+    # `ssi.UPLOAD_ENABLED` (off since 2026-10-02, until the owner's live
+    # test); the slots refuse through `_ssi_allowed` while it is off.
+
+    @Property(bool, constant=True)
+    def ssiEnabled(self) -> bool:
+        """Whether the MySSI card is shown at all (`ssi.UPLOAD_ENABLED`)."""
+        from src.core.services import ssi
+        return bool(ssi.UPLOAD_ENABLED)
+
+    def _ssi_allowed(self, action: str) -> bool:
+        """False, with one log line, when the SSI upload is switched off."""
+        if self.ssiEnabled:
+            return True
+        logger.info("Send to SSI is switched off (ssi.UPLOAD_ENABLED): %s ignored", action)
+        return False
+
+    @Property(str, notify=credentialsChanged)
+    def ssiEmail(self) -> str:
+        return creds_store.load_ssi_credentials().email
+
+    @Property(bool, notify=credentialsChanged)
+    def ssiHasPassword(self) -> bool:
+        return bool(creds_store.load_ssi_credentials().password)
+
+    @Property(str, notify=ssiStatusChanged)
+    def ssiStatus(self) -> str:
+        if self._ssi_status:
+            return self._ssi_status
+        login = creds_store.load_ssi_credentials()
+        if not login.email:
+            return "No MySSI login saved yet. Used by the Convert page's Send to SSI only."
+        if not login.password:
+            return f"No password stored for {login.email} - enter it and save."
+        return f"Saved: {login.email}. Press Test to check the login."
+
+    @Slot(str, str)
+    def saveSsi(self, email: str, password: str) -> None:
+        """Store the MySSI login; a blank password keeps the stored one, a
+        blank email removes the login."""
+        if not self._ssi_allowed("saveSsi"):
+            return
+        creds_store.save_ssi_credentials(email, password)
+        self._saved()
+        self._set("_ssi_status", "", self.ssiStatusChanged)
+
+    @Slot()
+    def clearSsi(self) -> None:
+        if not self._ssi_allowed("clearSsi"):
+            return
+        creds_store.clear_ssi_credentials()
+        self._saved()
+        self._set("_ssi_status", "", self.ssiStatusChanged)
+
+    @Slot(str, str)
+    def testSsi(self, email: str, password: str) -> None:
+        """Log in to MySSI (off the GUI thread); the token it gets is not kept
+        - only a save does that. The route is unofficial (ssi.UNOFFICIAL_NOTE)."""
+        if not self._ssi_allowed("testSsi"):
+            return
+        stored = creds_store.load_ssi_credentials()
+        email = (email or "").strip() or stored.email
+        password = password or (stored.password if stored.email == email else "")
+        if not email or not password:
+            self._set("_ssi_status", "Enter an email and password first.", self.ssiStatusChanged)
+            return
+        self._set("_ssi_status", "Testing…", self.ssiStatusChanged)
+
+        def work():
+            from src.core.services.ssi import SsiAdapter
+            return "Login OK." if SsiAdapter(email, password, **self._ssi_client_kwargs).login() else "Login failed."
+        self._run(work, lambda text: self._set("_ssi_status", str(text), self.ssiStatusChanged))
 
     def _set(self, attr, value, signal):
         setattr(self, attr, value)

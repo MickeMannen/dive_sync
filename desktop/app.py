@@ -21,6 +21,7 @@ from desktop import logging_bridge
 from desktop.paths import WINDOWS_COMPANY
 from desktop.controllers.about import AboutController
 from desktop.controllers.conflicts import ConflictsController
+from desktop.controllers.convert import ConvertController
 from desktop.controllers.dives import DivesController
 from desktop.controllers.mapping import MappingController
 from desktop.controllers.settings import SettingsController
@@ -41,12 +42,15 @@ def build_controllers(log_queue) -> Dict[str, object]:
         "settingsController": SettingsController(),
         "mappingController": MappingController(),
         "conflictsController": ConflictsController(),
+        "convertController": ConvertController(),
         "aboutController": AboutController(),
     }
     # An account added or removed in Settings shows up in every picker at once.
     settings = controllers["settingsController"]
     for name in ("syncController", "garminDives", "divelogsDives", "subsurfaceDives"):
         settings.credentialsChanged.connect(controllers[name].reloadAccounts)
+    # the MySSI login saved in Settings is what the Convert page sends with
+    settings.credentialsChanged.connect(controllers["convertController"].reloadSsiLogin)
     return controllers
 
 

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<divelog program='subsurface' version='3'>
+<settings>
+<fingerprint model='02e4e9ef' serial='deadbeef' deviceid='aaaa0001' diveid='4e7721a5' data='00'/>
+<divecomputerid model='Suunto EON Steel' deviceid='bbbb0002' serial='EON-000001' firmware='2.5.4'/>
+<divecomputerid model='Shearwater Petrel 2' deviceid='cccc0003' serial='5555AAAA' firmware='71'/>
+</settings>
+<divesites>
+<site uuid='11110001' name='Invented Wall'>
+<notes>a made-up site</notes>
+</site>
+<site uuid='11110002' name='Imperial Pinnacle' gps='1.500000 2.500000'>
+</site>
+</divesites>
+<dives>
+<filterpresets>
+ <filterpreset name='2025'>
+  <constraint type='year' range_mode='greater'>2025,2026</constraint>
+ </filterpreset>
+</filterpresets>
+<trip date='2025-07-01' time='08:00:00' location='Invented Islands'>
+<notes>trip notes are not read</notes>
+<dive number='101' sac='10.034 l/min' otu='5' cns='2%' divesiteid='11110001' date='2025-07-01' time='08:12:30' duration='42:10 min'>
+  <buddy>B. Uddy</buddy>
+  <notes>Garmin import as Subsurface writes it</notes>
+  <cylinder size='11.1 l' workpressure='232.0 bar' description='Steel 12' o2='32.0%' />
+  <divecomputer model='Garmin Descent Mk2(i)/Mk3(i)(S)/G1/G2/X50i' deviceid='aaaa0001' diveid='e57ec076'>
+  <depth max='23.125 m' mean='11.267 m' />
+  <temperature water='30.0 C' />
+  <surface pressure='1.013 bar' />
+  <water salinity='1025 g/l' />
+  <extradata key='Deco model' value='Buhlmann ZHL-16C 40/85' />
+  <extradata key='Serial' value='1000000001' />
+  <extradata key='FW Version' value='5.12' />
+  <extradata key='Model' value='Descent X50i' />
+  <extradata key='GPS1' value='1.400000, 2.400000' />
+  <extradata key='GPS2' value='1.401000, 2.401000' />
+  <extradata key='Sensor 1' value='d5461f8c' />
+  <event time='0:01 min' type='11' flags='0' value='32' name='gaschange' />
+  <event time='26:25 min' type='26' flags='12' name='Ascent speed critical' />
+  <event time='40:00 min' type='26' flags='4' name='Surface' />
+  <sample time='0:01 min' depth='1.233 m' temp='30.0 C' pressure0='201.0 bar' po2='0.7 bar' heartbeat='70' />
+  <sample time='0:10 min' depth='5.0 m' tts='0:09 min' ndl='99:00 min' heartbeat='75' />
+  <sample time='0:20 min' depth='10.0 m' pressure0='195.0 bar' ndl='40:00 min' />
+  <sample time='0:30 min' depth='15.0 m' temp='29.0 C' po2='1.0 bar' />
+  <sample time='42:10 min' depth='0.0 m' pressure0='60.0 bar' tts='0:00 min' />
+  </divecomputer>
+  <divecomputer model='Shearwater Perdix' deviceid='dddd0004' diveid='0badf00d'>
+  <depth max='23.0 m' mean='11.0 m' />
+  <sample time='0:00 min' depth='0.0 m' />
+  <sample time='42:00 min' depth='0.0 m' />
+  </divecomputer>
+</dive>
+<dive number='102' rating='3' visibility='4' tags='training, wreck' divesiteid='11110002' date='2025-07-01' time='10:45:00' duration='35:00 min'>
+  <divemaster>D. Master</divemaster>
+  <suit>3mm shorty</suit>
+  <cylinder size='80.0 cuft' workpressure='3000.0 psi' description='AL80' o2='32.0%' start='2900.0 psi' end='700.0 psi' />
+  <weightsystem weight='6.0 lbs' description='belt' />
+  <weightsystem weight='2.0 lbs' description='trim' />
+  <divecomputer model='Suunto EON Steel' deviceid='bbbb0002' diveid='00000102'>
+  <depth max='98.4 ft' mean='60.0 ft' />
+  <temperature water='82.4 F' />
+  <sample time='0:00 min' depth='0.0 ft' temp='86.0 F' pressure='2900.0 psi' />
+  <sample time='1:00 min' depth='32.8 ft' pressure='2800.0 psi' ndl='60' />
+  <sample time='2:00 min' depth='98.4 ft' temp='82.4 F' pressure='2600.0 psi' ndl='12' />
+  <sample time='35:00 min' depth='0.0 ft' pressure='700.0 psi' />
+  </divecomputer>
+</dive>
+</trip>
+<dive number='103' divesiteid='11110002' date='2025-07-02' time='09:00:00' duration='60:00 min' watersalinity='1030 g/l'>
+  <cylinder size='3.0 l' description='Diluent' o2='21.0%' start='200.0 bar' use='diluent' />
+  <cylinder size='3.0 l' description='Oxygen' o2='100.0%' use='oxygen' />
+  <cylinder size='11.1 l' description='Bailout' o2='50.0%' use='bailout' />
+  <cylinder size='11.1 l' description='Spare' use='not used' />
+  <divecomputer model='Shearwater Petrel 2' deviceid='cccc0003' diveid='00000103' dctype='CCR' no_o2sensors='3'>
+  <depth max='40.0 m' mean='25.0 m' />
+  <temperature water='12.0 C' />
+  <extradata key='Deco model' value='GF 45/75' />
+  <extradata key='Divemode' value='CC / BO' />
+  <extradata key='dive_sync:garmin' value='424242' />
+  <extradata key='dive_sync:divelogs' value='' />
+  <event time='0:00 min' type='25' flags='1' name='gaschange' cylinder='0' />
+  <event time='30:00 min' type='8' divemode='OC' name='modechange' />
+  <event time='30:10 min' type='25' flags='3' name='gaschange' cylinder='2' o2='50.0%' />
+  <event time='45:00 min' type='8' divemode='CCR' name='modechange' />
+  <event time='46:00 min' type='20' value='1300' name='SP change' />
+  <event time='50:00 min' type='8' name='bookmark' />
+  <event time='55:00 min' type='3' name='ascent' />
+  <event time='56:00 min' type='26' flags='2' value='7' />
+  <sample time='0:00 min' depth='0.0 m' temp='14.0 C' pressure0='150.0 bar' sensor0='2' o2pressure='180.0 bar' po2='0.7 bar' sensor1='0.69 bar' sensor2='0.71 bar' sensor3='0.70 bar' dc_supplied_ppo2='0.7 bar' />
+  <sample time='10:00 min' depth='30.0 m' pressure0='148.0 bar' o2pressure='170.0 bar' po2='1.2 bar' in_deco='1' stoptime='3:00 min' stopdepth='6.0 m' cns='5%' />
+  <sample time='30:00 min' depth='20.0 m' pressure0='140.0 bar' o2pressure='165.0 bar' po2='0.9 bar' />
+  <sample time='45:00 min' depth='10.0 m' pressure0='120.0 bar' cns='9%' />
+  <sample time='46:30 min' depth='6.0 m' po2='1.3 bar' in_deco='0' stopdepth='0.0 m' stoptime='0:00 min' />
+  <sample time='60:00 min' depth='0.0 m' pressure0='110.0 bar' o2pressure='150.0 bar' />
+  </divecomputer>
+</dive>
+<dive number='104' date='2025-07-03' time='14:00:00'>
+  <location gps='1.600000 2.600000'>Old Reef</location>
+  <cylinder size='80.0 cuft' description='rental' />
+  <depth max='12.0 m' mean='8.0 m' />
+  <temperature water='20.0 C' />
+  <sample time='0:00 min' depth='0.0 m' />
+  <sample time='5:00 min' depth='12.0 m' />
+  <sample time='25:00 min' depth='0.0 m' />
+</dive>
+<dive number='105' time='10:00:00' duration='20:00 min'>
+  <divecomputer model='manually added dive'>
+  <depth max='5.0 m' />
+  </divecomputer>
+</dive>
+<dive date='2025-07-04' time='16:30:00' duration='20:00 min'>
+  <notes>Logged by hand</notes>
+  <divecomputer model='manually added dive'>
+  <depth max='5.0 m' mean='3.0 m' />
+  </divecomputer>
+</dive>
+</dives>
+</divelog>

@@ -1,0 +1,70 @@
+<?xml version='1.0' encoding='utf-8'?>
+<uddf xmlns="http://www.streit.cc/uddf/3.2/" version="3.2.0">
+  <generator>
+    <name>dive_sync</name>
+    <type>logbook</type>
+  </generator>
+  <diver>
+    <buddy id="buddy-1">
+      <personal>
+        <firstname>Anna</firstname>
+      </personal>
+    </buddy>
+  </diver>
+  <divesite>
+    <site id="site-1">
+      <name>Reef</name>
+      <geography>
+        <latitude>34.9</latitude>
+        <longitude>33.7</longitude>
+      </geography>
+    </site>
+  </divesite>
+  <gasdefinitions>
+    <mix id="mix-32-0">
+      <name>EAN32</name>
+      <o2>0.32</o2>
+      <he>0</he>
+    </mix>
+  </gasdefinitions>
+  <profiledata>
+    <repetitiongroup id="rg-dive_sync">
+      <dive id="dive_sync-garmin-1">
+        <informationbeforedive>
+          <link ref="site-1" />
+          <link ref="buddy-1" />
+          <divenumber>3</divenumber>
+          <datetime>2026-06-22T12:00:00</datetime>
+        </informationbeforedive>
+        <tankdata id="dive_sync-garmin-1-tank0">
+          <link ref="mix-32-0" />
+          <tankvolume>0.0111</tankvolume>
+          <tankpressurebegin>20000000</tankpressurebegin>
+          <tankpressureend>5000000</tankpressureend>
+        </tankdata>
+        <samples>
+          <waypoint>
+            <depth>0</depth>
+            <divetime>0</divetime>
+            <temperature>296.15</temperature>
+          </waypoint>
+          <waypoint>
+            <depth>18</depth>
+            <divetime>300</divetime>
+            <temperature>295.15</temperature>
+          </waypoint>
+        </samples>
+        <informationafterdive>
+          <greatestdepth>20</greatestdepth>
+          <averagedepth>10</averagedepth>
+          <diveduration>3000</diveduration>
+          <lowesttemperature>295.15</lowesttemperature>
+          <visibility>20</visibility>
+          <notes>
+            <para>hello</para>
+          </notes>
+        </informationafterdive>
+      </dive>
+    </repetitiongroup>
+  </profiledata>
+</uddf>

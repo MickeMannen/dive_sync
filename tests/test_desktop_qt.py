@@ -1474,3 +1474,421 @@ def test_mapping_board_of_a_shearwater_pair_saves(qapp, scratch_data_dir, fake_k
     m2._rules_of("shearwater").append({"id": "bad", "target": "shearwater.tanks", "source": ["garmin.tanks"], "conflict": "source_wins",
                                        "template": None, "reverse": None, "reverse_conflict": None, "separator": ", ", "when": None, "take": None})
     assert m2.save() != "" and m2.message.startswith("Not saved") and "cannot be written" in m2.message
+
+
+# ---------------------------------------------------------------- Track I: Convert page
+
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+FIT_FIXTURES = os.path.join(FIXTURES, "garmin_fit")
+
+
+def _file_url(path):
+    from PySide6.QtCore import QUrl
+    return QUrl.fromLocalFile(str(path)).toString()
+
+
+def _loaded_convert(qapp, *paths):
+    """A ConvertController showing the dives of ``paths`` (read on its worker)."""
+    from desktop.controllers.convert import ConvertController
+    c = ConvertController()
+    c.openFiles([_file_url(p) for p in paths])
+    assert c.busy
+    assert wait_until(qapp, lambda: not c.busy)
+    return c
+
+
+def test_convert_controller_opens_files_and_selects(qapp, scratch_data_dir, fake_keyring):
+    """Several files at once (Q6, Q9), the dives listed in file order, one
+    selected to start with; plain click, Ctrl-click and Shift-click as in a
+    file manager; the detail pane shows the clicked dive."""
+    from desktop.controllers import convert as module
+    c = _loaded_convert(qapp, os.path.join(FIXTURES, "ssrf", "handwritten.ssrf"), os.path.join(FIXTURES, "uddf", "subsurface_sync.uddf"))
+    rows = c.dives
+    assert c.diveCount == len(rows) > 2 and c.files == ["handwritten.ssrf", "subsurface_sync.uddf"]
+    assert [r["index"] for r in rows] == list(range(len(rows)))
+    assert all(r["date"] and r["time"] and r["max_depth"].endswith(" m") and r["duration"].endswith(" min") for r in rows if r["date"] != "")
+    assert c.message.startswith(f"{len(rows)} dives from 2 files.")
+    assert isinstance(c.warnings, list)                       # the readers' lines, shown on the page
+    # a fresh read selects the first dive and shows it
+    assert c.selection == [0] and c.currentRow == 0 and c.selected["title"].startswith(rows[0]["date"])
+    sel = c.selected
+    assert {"tanks", "samples", "channels", "events", "computer", "max_depth", "duration"} <= set(sel)
+    assert sel["sample_count"] == len(sel["samples"]) and all({"time", "depth", "temp"} <= set(s) for s in sel["samples"][:3])
+    # plain click: that dive alone; Ctrl-click adds and removes; Shift-click a range
+    c.clickRow(2, False, False)
+    assert c.selection == [2] and c.currentRow == 2 and c.selectedCount == 1
+    c.clickRow(0, True, False)
+    assert c.selection == [0, 2] and c.currentRow == 0
+    c.clickRow(2, True, False)
+    assert c.selection == [0]
+    c.clickRow(0, False, False)
+    c.clickRow(3, False, True)
+    assert c.selection == [0, 1, 2, 3] and c.currentRow == 3
+    c.selectAll()
+    assert c.selectedCount == c.diveCount
+    c.clickRow(99, False, False)                               # off the list: ignored
+    assert c.selectedCount == c.diveCount
+    # the targets and the dialog filters come from the registry
+    assert [t["id"] for t in c.targets] == ["uddf", "ssrf"] and c.targets[1]["extension"] == ".ssrf"
+    assert c.openNameFilters[0].startswith("Dive files (") and c.saveNameFilters("uddf") == ["UDDF (*.uddf)"]
+    # row and detail formatting helpers
+    assert module.mix_name(21.0, 0) == "air" and module.mix_name(32.0, 0) == "EAN32" and module.mix_name(18.0, 45.0) == "TMX 18/45"
+    assert module.local_path("file:///tmp/a%20b.fit") == "/tmp/a b.fit" and module.local_path("/x/y") == "/x/y"
+    c.clear()
+    assert c.diveCount == 0 and c.selected == {} and c.message == ""
+
+
+def test_convert_controller_reads_a_garmin_fit(qapp, scratch_data_dir, fake_keyring):
+    """The two-transmitter FIT: tanks, both pressure channels, the events and
+    the computer reach the detail pane (the fixtures are untracked: skipped
+    when absent)."""
+    path = os.path.join(FIT_FIXTURES, "two_tanks.fit")
+    if not os.path.exists(path):
+        pytest.skip("FIT fixture not present")
+    c = _loaded_convert(qapp, path)
+    assert c.diveCount == 1 and c.files == ["two_tanks.fit"] and c.warnings == []
+    sel = c.selected
+    assert sel["source"] == "two_tanks.fit" and sel["external_ids"] == ""   # a cache file name would give the activity id
+    assert sel["computer"].startswith("Garmin Descent") and "serial 1000000001" in sel["computer"]
+    assert len(sel["tanks"]) == 2 and sel["tanks"][0]["mix"] == "air" and sel["tanks"][1]["index"] == 2
+    assert sel["channels"][0] == "tank pressure (tank 1, tank 2)" and "NDL" in sel["channels"]
+    assert sel["event_count"] == len(sel["events"]) > 0 and sel["gf"] == "40/85"
+    assert c.dives[0]["dive_number"] != "" and c.suggestedFileName("uddf").endswith(f" dive {c.dives[0]['dive_number']}.uddf")
+
+
+def test_convert_controller_reports_unreadable_files(qapp, scratch_data_dir, fake_keyring, tmp_path):
+    bad = tmp_path / "notes.txt"
+    bad.write_text("not a dive")
+    from desktop.controllers.convert import ConvertController
+    c = ConvertController()
+    c.openFiles([_file_url(bad)])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.diveCount == 0 and c.message.startswith("Could not read:") and "notes.txt" in c.message
+    c.openFiles([])                                            # cancelled dialog: nothing happens
+    assert not c.busy
+    # one bad file among good ones is a warning, not a failure
+    c = _loaded_convert(qapp, os.path.join(FIXTURES, "ssrf", "synthetic.ssrf"), bad)
+    assert c.diveCount >= 1 and c.files == ["synthetic.ssrf"] and any("notes.txt" in w for w in c.warnings)
+    assert c.message.endswith("1 warning.")
+
+
+def test_convert_controller_saves_one_dive_or_one_file_per_dive(qapp, scratch_data_dir, fake_keyring, tmp_path, monkeypatch):
+    """One dive selected: the Save-as dialog's suggested name is I4's
+    ``<date> <time> dive <n>.<ext>``; several: one file per dive in the
+    folder picked (Q8). The dialogs start in Documents and then in the last
+    folder used, remembered in desktop_prefs.json (Q11)."""
+    from PySide6.QtCore import QUrl
+    from desktop import preferences
+    from desktop.controllers import convert as module
+    from src.core.convert import formats
+    monkeypatch.setattr(module, "documents_folder", lambda: str(tmp_path / "Documents"))
+    assert module.ConvertController().dialogFolder == QUrl.fromLocalFile(str(tmp_path / "Documents")).toString()
+    c = _loaded_convert(qapp, os.path.join(FIXTURES, "ssrf", "handwritten.ssrf"))
+    dives = c._dives
+    # opening files makes their folder the next dialog's
+    assert c.dialogFolder == QUrl.fromLocalFile(os.path.join(FIXTURES, "ssrf")).toString()
+    # one dive: the suggested name and URL, then the write
+    c.clickRow(1, False, False)
+    name = c.suggestedFileName("uddf")
+    assert name == formats.output_file_name(dives[1], "uddf") and name.endswith(".uddf")
+    assert c.suggestedFileUrl("uddf") == QUrl.fromLocalFile(os.path.join(FIXTURES, "ssrf", name)).toString()
+    out = tmp_path / "exports"
+    out.mkdir()
+    target = out / name
+    c.saveAs("uddf", _file_url(target))
+    assert target.exists() and c.message == f"Wrote {target}"
+    assert c.saveWarnings == formats.describe_drops([dives[1]], "uddf") == c.targetDrops("uddf")
+    # the folder is remembered for the next dialog
+    assert preferences.get_convert_folder("x") == str(out) and c.dialogFolder == QUrl.fromLocalFile(str(out)).toString()
+    assert c.suggestedFileUrl("ssrf").startswith(QUrl.fromLocalFile(str(out)).toString())
+    # several dives: a file per dive into the folder, named like the single one
+    c.selectAll()
+    assert c.suggestedFileName("ssrf") == "" and c.suggestedFileUrl("ssrf") == ""
+    c.saveAs("ssrf", _file_url(out / "ignored.ssrf"))         # the page opens a folder dialog instead
+    assert "pick a folder" in c.message and not (out / "ignored.ssrf").exists()
+    batch = tmp_path / "batch"
+    c.saveEach("ssrf", _file_url(batch))
+    written = sorted(os.listdir(batch))
+    assert written == sorted(os.path.basename(p) for p in formats.output_paths(dives, "ssrf", batch, overwrite=True))
+    assert c.message == f"Wrote {len(dives)} files to {batch}" and preferences.get_convert_folder("x") == str(batch)
+    assert all(n.endswith(".ssrf") for n in written) and any(" dive " in n for n in written)
+    # writing again never overwrites: the new files get a (2) suffix
+    c.saveEach("ssrf", _file_url(batch))
+    assert len(os.listdir(batch)) == 2 * len(dives) and any("(2).ssrf" in n for n in os.listdir(batch))
+    # a write that fails is reported, not raised
+    c.saveEach("ssrf", _file_url(batch / "a-file-not-a-folder.ssrf"))
+    (batch / "blocked").write_text("x")
+    c.saveEach("ssrf", _file_url(batch / "blocked"))
+    assert c.message.startswith("Could not write into")
+
+
+@pytest.mark.parametrize("ssi_on", [False, True])
+def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir, fake_keyring, monkeypatch, ssi_on):
+    """The Convert section sits between Conflicts and Settings (Q10); the page
+    instantiates its list, detail pane and chart without a QML warning while
+    dives are shown and the selection changes. The SSI parts (the Send to SSI
+    button, its plan area, the MySSI card in Settings) follow the
+    `ssi.UPLOAD_ENABLED` switch: hidden while it is off (the shipped state
+    since 2026-10-02), shown when it is on."""
+    from PySide6.QtCore import QObject
+    from desktop import app as desktop_app
+    from desktop import logging_bridge
+    from src.core import dive_cache
+    from src.core.convert import formats
+    from src.core.services import ssi
+    monkeypatch.setattr(ssi, "UPLOAD_ENABLED", ssi_on)
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    warnings = []
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    c = controllers["convertController"]
+    c._apply_read(formats.read_files([os.path.join(FIXTURES, "ssrf", "handwritten.ssrf"), os.path.join(FIXTURES, "ssrf", "synthetic.ssrf")]))
+    engine = desktop_app.create_engine(controllers, "Convert",
+                                       on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    sections = root.property("sections").toVariant()
+    assert sections.index("Convert") == sections.index("Conflicts") + 1 == sections.index("Settings") - 1
+    assert root.property("currentSection") == sections.index("Convert")
+    page = root.findChild(QObject, "convertPage")
+    assert page is not None and page.findChild(QObject, "convertDiveList") is not None
+    assert page.findChild(QObject, "saveTargets").property("count") == 2     # Save as UDDF…, Save as Subsurface…
+    assert c.ssiEnabled is ssi_on
+    assert page.findChild(QObject, "sendToSsiButton").property("visible") is ssi_on
+    assert page.findChild(QObject, "ssiSection").property("visible") is False     # nothing planned yet, either way
+    c.clickRow(1, False, False)
+    wait(qapp, 150)
+    c.selectAll()
+    wait(qapp, 150)
+    c._set_ssi_message("would show the plan")
+    wait(qapp, 100)
+    assert page.findChild(QObject, "ssiSection").property("visible") is ssi_on   # the SSI area only when on
+    c.clear()
+    wait(qapp, 150)
+    # the Settings page has the MySSI card only when the switch is on
+    root.setProperty("currentSection", sections.index("Settings"))
+    wait(qapp, 200)
+    assert controllers["settingsController"].ssiEnabled is ssi_on
+    assert root.findChild(QObject, "ssiCard").property("visible") is ssi_on
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)
+
+
+def test_profile_chart_is_one_component_shared_by_both_pages(qapp):
+    """DivesPage draws its depth profile through ProfileChart.qml (the Canvas
+    was taken out of it for the Convert page); the component paints a sample
+    list and hides itself for fewer than two samples."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtQml import QQmlComponent, QQmlEngine
+    from desktop.app import QML_DIR
+    dives_page = open(os.path.join(QML_DIR, "DivesPage.qml"), encoding="utf-8").read()
+    convert_page = open(os.path.join(QML_DIR, "ConvertPage.qml"), encoding="utf-8").read()
+    assert "ProfileChart {" in dives_page and "ProfileChart {" in convert_page
+    assert "Canvas {" not in dives_page and "Canvas {" not in convert_page
+    assert "ProfileChart 1.0 ProfileChart.qml" in open(os.path.join(QML_DIR, "qmldir"), encoding="utf-8").read()
+    engine = QQmlEngine()
+    engine.addImportPath(QML_DIR)
+    component = QQmlComponent(engine, QUrl.fromLocalFile(os.path.join(QML_DIR, "ProfileChart.qml")))
+    assert component.status() == QQmlComponent.Status.Ready, [str(e.toString()) for e in component.errors()]
+    chart = component.create()
+    # hasProfile drives visible (an item outside a window reports its effective visibility, always false here)
+    assert chart is not None and chart.property("hasProfile") is False
+    chart.setProperty("samples", [{"time": 0, "depth": 0.0}, {"time": 60, "depth": 12.5}, {"time": 120, "depth": 0.0}])
+    wait(qapp, 50)
+    assert chart.property("hasProfile") is True
+    chart.setProperty("samples", [{"time": 0, "depth": 0.0}])
+    assert chart.property("hasProfile") is False
+    chart.deleteLater()
+    engine.deleteLater()
+    wait(qapp, 30)
+
+
+def _ssi_fake_transport(fake, sites):
+    """`tests.test_ssi.FakeSsi` plus the public site-database zip."""
+    import io
+    import json
+    import zipfile
+    from src.core.services import ssi
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("sites.json", json.dumps(sites))
+    zip_bytes = buffer.getvalue()
+
+    def transport(method, url, params, data, timeout):
+        if url == ssi.SITES_URL:
+            return ssi.HttpResponse(200, zip_bytes)
+        return fake(method, url, params, data, timeout)
+    return transport
+
+
+def test_convert_sends_to_ssi_through_a_fake_client(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """Send to SSI: the plan first (duplicates skipped, numbers after SSI's
+    highest, the nearest site within 5 km preselected, none otherwise), the
+    site changed or cleared per dive, then the upload with every dive read
+    back; the site database lands under DATA_DIR/ssi and the token in the
+    keychain. Everything against tests/test_ssi.py's fake backend: the
+    network is blocked."""
+    import requests
+    from desktop import credentials as creds_store
+    from desktop.controllers.convert import ConvertController
+    from src.core import layout
+    from src.core.convert.formats import ReadResult
+    from src.core.services import ssi
+    from tests.test_ssi import EMAIL, PASSWORD, SITES, FakeSsi, logbook_dive, make_dive
+
+    def blocked(self, method, url, *a, **k):
+        raise AssertionError(f"network blocked: {method} {url}")
+    monkeypatch.setattr(requests.sessions.Session, "request", blocked)
+    monkeypatch.setattr(ssi, "UPLOAD_ENABLED", True)        # the flow is hidden behind the switch since 2026-10-02
+
+    fake = FakeSsi(dives=[logbook_dive(7, "2026-06-27", "10:00", ref="garmin:24449823352")], sites=[])
+    c = ConvertController()
+    assert c.ssiEnabled
+    c._ssi_client_kwargs = {"transport": _ssi_fake_transport(fake, SITES), "sleep": lambda s: None}
+    dives = [make_dive(),                                                              # already in MySSI (same computer ref)
+             make_dive(start="2026-06-28 09:00", activity="24449823399"),               # near House Reef (501)
+             make_dive(start="2026-06-29 09:00", activity="24449823400", lat=None, lng=None, location="Somewhere")]
+    c._apply_read(ReadResult(dives=dives, files=[("/x/a.fit", "fit"), ("/x/b.fit", "fit"), ("/x/c.fit", "fit")]))
+    c.selectAll()
+    # no login saved: the page says where to add it, nothing is called
+    assert not c.ssiConfigured and "Settings" in c.ssiLoginStatus
+    c.prepareSsi()
+    assert "Settings" in c.ssiMessage and fake.calls == [] and not c.ssiPlanOpen
+    creds_store.save_ssi_credentials(EMAIL, PASSWORD)
+    c.reloadSsiLogin()
+    assert c.ssiConfigured and c.ssiLoginStatus == f"MySSI login: {EMAIL}"
+    assert c.ssiNote == ssi.UNOFFICIAL_NOTE and not c.ssiSitesDownloaded
+
+    c.prepareSsi()
+    assert c.ssiBusy
+    assert wait_until(qapp, lambda: not c.ssiBusy)
+    assert c.ssiPlanOpen and fake.whats() == ["authenticate", "get_divelog"]
+    assert os.path.isfile(layout.ssi_sites_file()) and c.ssiSitesDownloaded and "3 sites" in c.ssiSitesStatus
+    plan = c.ssiPlan
+    assert [p["status"] for p in plan] == ["skipped", "planned", "planned"] and c.ssiPlannedCount == 2
+    assert "already in MySSI as dive 7" in plan[0]["reason"]
+    assert plan[1]["number"] == 8 and plan[1]["site_id"] == 501 and plan[1]["site_label"] == "House Reef (South, Testland)"
+    assert plan[2]["number"] == 9 and plan[2]["site_id"] == -1 and plan[2]["site_label"] == ""
+    assert any("site name" in line for line in plan[2]["dropped"])
+    assert c.ssiMessage.startswith("2 dives to send, 1 already in MySSI (skipped).")
+    assert creds_store.load_ssi_credentials().token == "tok-1"           # the on_token hook
+    # the site picker: search, pick, clear
+    assert [s["id"] for s in c.searchSites("far")] == [502] and c.searchSites("") == []
+    c.setSite(2, 502)
+    assert c.ssiPlan[2]["site_id"] == 502 and c.ssiPlan[2]["site_label"].startswith("Far Wall")
+    c.clearSite(2)
+    assert c.ssiPlan[2]["site_id"] == -1
+    c.setSite(1, -1)
+    c.setSite(1, 501)
+    c.setSite(99, 501)                                                    # off the plan: ignored
+
+    c.sendToSsi()
+    assert wait_until(qapp, lambda: not c.ssiBusy)
+    assert not c.ssiPlanOpen
+    results = c.ssiResults
+    assert [r["status"] for r in results] == ["skipped", "sent", "sent"]
+    assert results[1]["summary"].endswith("sent as dive 8") and results[2]["summary"].endswith("sent as dive 9")
+    assert c.ssiMessage.startswith("MySSI: sent 2, skipped 1, failed 0.")
+    assert [d["odin_user_log_nr"] for d in fake.saved] == [8, 9]
+    assert [d["odin_user_log_dive_sites_id"] for d in fake.saved] == [501, None]   # sending without a site is allowed
+    assert fake.logins == 1 and fake.whats().count("save_divelog") == 2            # the token was reused
+    # selecting again closes nothing stale: a new plan starts from the results
+    c.clickRow(1, False, False)
+    assert c.ssiResults and not c.ssiPlanOpen
+    c.cancelSsi()
+    assert c.ssiMessage == ""
+    # a site database is re-downloaded on request
+    c.downloadSites()
+    assert wait_until(qapp, lambda: not c.ssiBusy)
+    assert c.ssiMessage == "SSI site database downloaded: 3 sites."
+    # a login MySSI refuses is reported on the page, not raised
+    fake.password = "changed"
+    fake.expire()
+    c.prepareSsi()
+    assert wait_until(qapp, lambda: not c.ssiBusy)
+    assert c.ssiMessage.startswith("MySSI:") and "did not accept" in c.ssiMessage and not c.ssiPlanOpen
+
+
+def test_settings_controller_ssi_login(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """The MySSI card: one login in the keychain, a blank password keeps the
+    stored one, Remove clears it, Test logs in off the GUI thread."""
+    from desktop import credentials as creds_store
+    from desktop.controllers.settings import SettingsController
+    from src.core.services import ssi
+    from tests.test_ssi import EMAIL, PASSWORD, FakeSsi
+    monkeypatch.setattr(ssi, "UPLOAD_ENABLED", True)        # the card is hidden behind the switch since 2026-10-02
+    s = SettingsController()
+    assert s.ssiEnabled
+    assert s.ssiEmail == "" and not s.ssiHasPassword and s.ssiStatus.startswith("No MySSI login saved yet.")
+    s.testSsi("", "")
+    assert s.ssiStatus == "Enter an email and password first."
+    s.saveSsi(f" {EMAIL} ", PASSWORD)
+    assert s.ssiEmail == EMAIL and s.ssiHasPassword and s.ssiStatus == f"Saved: {EMAIL}. Press Test to check the login."
+    assert s.message == "Saved to keychain." and creds_store.load_ssi_credentials().password == PASSWORD
+    s.saveSsi(EMAIL, "")                                       # blank keeps the stored password
+    assert creds_store.load_ssi_credentials().password == PASSWORD
+    fake = FakeSsi()
+    s._ssi_client_kwargs = {"transport": fake, "sleep": lambda s: None}
+    s.testSsi(EMAIL, "")
+    assert s.ssiStatus == "Testing…"
+    assert wait_until(qapp, lambda: s.ssiStatus != "Testing…")
+    assert s.ssiStatus == "Login OK." and fake.whats() == ["authenticate"]
+    assert creds_store.load_ssi_credentials().token == ""     # Test keeps no token; a send does
+    s.testSsi(EMAIL, "wrong")
+    assert wait_until(qapp, lambda: s.ssiStatus != "Testing…")
+    assert s.ssiStatus == "Login failed."
+    s.saveSsi("other@example.com", "")
+    assert s.ssiStatus == "No password stored for other@example.com - enter it and save."
+    s.clearSsi()
+    assert s.ssiEmail == "" and not creds_store.load_ssi_credentials().email
+
+
+def test_ssi_slots_refuse_while_the_switch_is_off(qapp, scratch_data_dir, fake_keyring, monkeypatch, caplog):
+    """`ssi.UPLOAD_ENABLED` is False in the tree (owner's decision 2026-10-02,
+    until the live test): every SSI slot of both controllers is a no-op with
+    one log line - no MySSI call, no plan, no keychain write - so nothing in
+    the UI can reach MySSI even if a stale page still called a slot. The
+    keychain login itself stays readable (the helpers keep their tests)."""
+    import logging
+    import requests
+    from desktop import credentials as creds_store
+    from desktop.controllers.convert import ConvertController
+    from desktop.controllers.settings import SettingsController
+    from src.core.convert.formats import ReadResult
+    from src.core.services import ssi
+    from tests.test_ssi import EMAIL, PASSWORD, FakeSsi, make_dive
+
+    def blocked(self, method, url, *a, **k):
+        raise AssertionError(f"network blocked: {method} {url}")
+    monkeypatch.setattr(requests.sessions.Session, "request", blocked)
+    assert ssi.UPLOAD_ENABLED is False                      # the shipped state
+
+    fake = FakeSsi()
+    creds_store.save_ssi_credentials(EMAIL, PASSWORD)      # a login left from before the switch
+    c = ConvertController()
+    c._ssi_client_kwargs = {"transport": fake, "sleep": lambda s: None}
+    c._apply_read(ReadResult(dives=[make_dive()], files=[("/x/a.fit", "fit")]))
+    c.selectAll()
+    assert not c.ssiEnabled and c.ssiConfigured            # configured, but switched off
+    with caplog.at_level(logging.INFO, logger="dive_sync.desktop"):
+        c.prepareSsi()
+        c.downloadSites()
+        c.sendToSsi()
+        assert c.searchSites("reef") == []
+        c.setSite(0, 501)
+        assert not c.ssiBusy and not c.ssiPlanOpen and c.ssiPlan == [] and c.ssiResults == []
+        assert c.ssiMessage == "" and fake.calls == [] and not c.ssiSitesDownloaded
+        s = SettingsController()
+        s._ssi_client_kwargs = {"transport": fake, "sleep": lambda s: None}
+        assert not s.ssiEnabled
+        s.saveSsi("other@example.com", "new")
+        assert creds_store.load_ssi_credentials().email == EMAIL           # nothing written
+        s.testSsi(EMAIL, PASSWORD)
+        assert s.ssiStatus != "Testing…" and fake.calls == []
+        s.clearSsi()
+        assert creds_store.load_ssi_credentials().email == EMAIL           # nothing cleared
+    refused = [r.getMessage() for r in caplog.records if "switched off" in r.getMessage()]
+    assert len(refused) == 8 and all("ssi.UPLOAD_ENABLED" in m for m in refused)
+    for action in ("prepareSsi", "downloadSites", "sendToSsi", "searchSites", "setSite", "saveSsi", "testSsi", "clearSsi"):
+        assert any(action in m for m in refused), action

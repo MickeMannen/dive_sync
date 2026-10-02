@@ -86,7 +86,8 @@ def components() -> List[Dict[str, str]]:
     """The main parts dive_sync runs on, with their versions where installed."""
     out = [{"name": "Python", "version": platform.python_version()}]
     for label, package in (("Qt for Python (PySide6)", "PySide6"), ("FastAPI", "fastapi"),
-                           ("garminconnect", "garminconnect"), ("pydantic", "pydantic"), ("dulwich", "dulwich")):
+                           ("garminconnect", "garminconnect"), ("pydantic", "pydantic"), ("dulwich", "dulwich"),
+                           ("fitdecode", "fitdecode")):
         version = _version_of(package)
         if version:
             out.append({"name": label, "version": version})

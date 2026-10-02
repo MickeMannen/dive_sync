@@ -63,3 +63,11 @@ def test_desktop_data_folder_per_platform(monkeypatch):
     assert seen == [(("org.christersson.dive_sync",), {"appauthor": False}),
                     (("DiveSync", "Christersson"), {"roaming": False}),
                     (("dive-sync",), {"appauthor": False})]
+
+
+def test_ssi_sites_file_lives_under_the_data_root(tmp_path):
+    """The SSI site database (plans/convert.md I8) goes to <root>/ssi/, which
+    is created on the way so the download can write into it at once."""
+    path = layout.ssi_sites_file(str(tmp_path))
+    assert path == str(tmp_path / "ssi" / "APP_CACHE_SITES.zip")
+    assert (tmp_path / "ssi").is_dir() and not os.path.exists(path)

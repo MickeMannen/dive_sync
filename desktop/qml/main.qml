@@ -22,7 +22,7 @@ ApplicationWindow {
     color: Theme.bg
 
     readonly property var sections: ["Sync", "Garmin Dives", "Divelogs Dives", "Subsurface Dives",
-                                     "Mapping", "Conflicts", "Settings", "About"]
+                                     "Mapping", "Conflicts", "Convert", "Settings", "About"]
     property int currentSection: Math.max(0, sections.indexOf(initialSection))
 
     readonly property int unsavedDives: garminDives.pendingCount + divelogsDives.pendingCount + subsurfaceDives.pendingCount
@@ -168,6 +168,14 @@ ApplicationWindow {
                     ColumnLayout {
                         anchors { fill: parent; margins: 16 }
                         ConflictsPage { Layout.fillWidth: true; Layout.fillHeight: true }
+                    }
+                }
+                // Fills the viewport: the dive list and the detail pane scroll
+                // on their own, the file and save controls stay put.
+                Item {
+                    ColumnLayout {
+                        anchors { fill: parent; margins: 16 }
+                        ConvertPage { Layout.fillWidth: true; Layout.fillHeight: true }
                     }
                 }
                 ScrollView {

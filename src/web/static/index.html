@@ -267,11 +267,6 @@
           <label>Email <input type="text" id="subsurface-email"></label>
           <label>Password <input type="password" id="subsurface-password" placeholder="leave blank to keep the saved one"></label>
         </fieldset>
-        <fieldset>
-          <legend>Shearwater app <span id="shearwater-configured" class="badge"></span></legend>
-          <label>Database <input type="text" id="shearwater-database" placeholder="path of the desktop app's dive_data.db, e.g. /data/shearwater/dive_data.db"></label>
-          <p class="muted">Not a login: the database file of the Shearwater app (Shearwater's "Shearwater Cloud" desktop program), mounted or copied where this server can read it. DiveSync reads it and writes dive details into it; the app itself uploads to the cloud. Blank looks for the app on this machine. <span id="shearwater-resolved"></span></p>
-        </fieldset>
         <div class="actions">
           <button type="button" id="test-credentials">Test</button>
           <button type="submit">Save credentials</button>

@@ -475,6 +475,61 @@ def test_unified_cache_samples_and_edits_round_trip(tmp_path):
     assert dive_cache.list_dives("subsurface", base_dir=str(tmp_path)) == []
 
 
+# What save_unified_dives wrote for _unified_dive() before UnifiedDive gained
+# the carried fields (plans/convert.md I1), captured from the model as it was
+# then; the cache file is this text with indent=2.
+PRE_I1_CACHE_JSON = (
+    '{"date_time": "2026-08-29T10:15:00", "date_time_utc": null, "timezone": null, "duration": 4129, '
+    '"max_depth": 18.3, "avg_depth": 8.196, "temp_min": 27.0, "temp_max": 29.0, "temp_avg": 28.0, '
+    '"external_ids": {"submersion": "1E5A-9"}, "gas_mixtures": [{"oxygen": 21.0, "helium": 0.0, '
+    '"start_pressure": 162.57, "end_pressure": 78.04, "tank_volume": 11.1, "tank_name": "Left", "tank_role": null}, '
+    '{"oxygen": 21.0, "helium": 0.0, "start_pressure": 160.69, "end_pressure": 106.38, "tank_volume": 11.1, '
+    '"tank_name": "Right", "tank_role": null}], "location": "Racha Yai Bay 2", "notes": "drift", "dive_number": 42, '
+    '"weight": 6.0, "weight_unit": "kilogram", "visibility": 20.0, "visibility_unit": "meter", "buddy": "Ann", '
+    '"lat": 7.6, "lng": 98.37, "samples": [{"depth": 0.0, "temp": 28.0, "time": 0, "pressure": null}, '
+    '{"depth": 18.3, "temp": 27.0, "time": 600, "pressure": null}], "device_logged": null, "service_fields": {}}'
+)
+
+
+def test_unified_cache_file_is_byte_for_byte_what_it_was(tmp_path):
+    """The carried fields (channels per sample, events, the dive computer)
+    are left out of the file when a dive has none, so a cache written now
+    for such a dive is the file an earlier version wrote."""
+    dive_cache.save_unified_dives("submersion", [_unified_dive()], base_dir=str(tmp_path))
+    path = os.path.join(dive_cache.unified_cache_dir("submersion", None, str(tmp_path)), "1E5A-9.json")
+    with open(path, "rb") as f:
+        written = f.read()
+    assert written == json.dumps(json.loads(PRE_I1_CACHE_JSON), indent=2).encode()
+    assert b"channels" not in written and b"events" not in written and b"computer" not in written
+
+
+def test_unified_cache_keeps_carried_data_out_of_the_way(tmp_path):
+    """A cached dive that does carry a computer's extra data lists, charts
+    and edits like any other, and the data is still in the file afterwards."""
+    from src.core.models import DiveEvent, SampleChannels, UnifiedDive, UnifiedSample
+    plain = _unified_dive()
+    rich = _unified_dive(
+        samples=[UnifiedSample(depth=0, temp=28, time=0, pressure=162.57,
+                               channels=SampleChannels(pressures={0: 162.57, 1: 160.69}, ndl=5940, heart_rate=72)),
+                 UnifiedSample(depth=18.3, temp=27, time=600, pressure=140.0,
+                               channels=SampleChannels(pressures={0: 140.0, 1: 150.0}, ndl=1800))],
+        events=[DiveEvent(time=300, type="gas_switch", tank=1)],
+        computer_vendor="Garmin", computer_model="Descent Mk3i", gf_low=45, gf_high=85, dive_mode="oc_multi_gas")
+    dive_cache.save_unified_dives("submersion", [plain], base_dir=str(tmp_path / "plain"))
+    dive_cache.save_unified_dives("submersion", [rich], base_dir=str(tmp_path / "rich"))
+    plain_row = dive_cache.list_dives("submersion", base_dir=str(tmp_path / "plain"))[0]
+    row = dive_cache.list_dives("submersion", base_dir=str(tmp_path / "rich"))[0]
+    assert row == plain_row
+    assert dive_cache.get_samples("submersion", row["filename"], base_dir=str(tmp_path / "rich")) == [
+        {"depth": 0.0, "temp": 28.0, "time": 0}, {"depth": 18.3, "temp": 27.0, "time": 600}]
+
+    path = dive_cache.update_dive_fields("submersion", row["filename"], base_dir=str(tmp_path / "rich"), buddy="Bo")
+    saved = UnifiedDive(**json.load(open(path)))
+    assert saved.buddy == "Bo"
+    assert saved.samples == rich.samples and saved.samples[1].channels.pressures == {0: 140.0, 1: 150.0}
+    assert saved.events == rich.events and saved.computer_model == "Descent Mk3i" and saved.gf_high == 85
+
+
 def test_unified_push_remote_update_sends_the_cached_dive(tmp_path, monkeypatch):
     from src.core.models import UnifiedDive
     dive_cache.save_unified_dives("submersion", [_unified_dive()], base_dir=str(tmp_path))
