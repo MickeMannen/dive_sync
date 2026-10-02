@@ -4,7 +4,7 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
-## Unreleased
+## 0.4.1 - 2026-10-02
 
 - Convert page: a Garmin `.fit` file (or Connect's export zip) whose dive is
   in the app's Garmin cache now gets its site, buddy, notes, weight,
