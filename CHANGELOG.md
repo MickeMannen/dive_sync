@@ -4,7 +4,10 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
-## Unreleased
+## 0.4.0 - 2026-10-02
+
+Beta: the Convert page is new and has had less testing than the sync; keep
+the original files.
 
 - Desktop app: a new **Convert** page (between Conflicts and Settings) converts
   dive-computer files offline, without any account: open one or several
@@ -18,7 +21,6 @@ development history and decision log.
   first time and then in the last folder used.
 - Dives pages: the depth profile is drawn by the same component as on the
   Convert page; it looks and behaves as before.
-
 - UDDF files: a dive's lead weight is now written (as `leadquantity` under
   the equipment used), so a sync to a UDDF file no longer loses it. Dives
   without a weight are written exactly as before.
