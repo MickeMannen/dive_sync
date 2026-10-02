@@ -535,7 +535,8 @@ class GarminAdapter(BaseDiveAdapter):
             logger.error("Error deleting Garmin Connect Activity ID %s: %s", external_id, e)
         return False
 
-    def _parse_datetime(self, dt_str: str) -> Optional[datetime]:
+    @staticmethod
+    def _parse_datetime(dt_str: str) -> Optional[datetime]:
         formats = [
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%dT%H:%M:%S",
@@ -550,6 +551,19 @@ class GarminAdapter(BaseDiveAdapter):
             except ValueError:
                 continue
         return None
+
+    @classmethod
+    def from_cached_payload(cls, payload: Dict[str, Any]) -> UnifiedDive:
+        """The `UnifiedDive` of one cached dive file (the payload
+        `garmin_files.write_cached` wrote: ``summary``, ``details``,
+        ``activityDetails``, ``tanksensor``) without a client, a login or a
+        token folder: the mapping is pure, so it runs on the class. What the
+        Convert page's enrichment from the cache reads (plans/convert.md I9)."""
+        summary = payload.get("summary") or {}
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        activity_details = payload.get("activityDetails") if isinstance(payload.get("activityDetails"), dict) else None
+        tanksensor = payload.get("tanksensor") if isinstance(payload.get("tanksensor"), dict) else None
+        return cls._map_to_unified(cls, summary, details, activity_details, tanksensor)
 
     def _map_to_unified(self, summary: Dict[str, Any], details: Dict[str, Any], 
                         activity_details: Optional[Dict[str, Any]] = None,

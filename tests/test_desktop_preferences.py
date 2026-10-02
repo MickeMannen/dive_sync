@@ -50,3 +50,17 @@ def test_convert_folder_remembers_an_existing_folder_only(tmp_path, monkeypatch)
     assert prefs.get_convert_folder("/docs") == str(used)
     used.rmdir()
     assert prefs.get_convert_folder("/docs") == "/docs"
+
+
+def test_convert_enrich_checkbox_is_on_by_default_and_remembered(tmp_path, monkeypatch):
+    """The Convert page's "fill from the Garmin cache" checkbox (plans/convert.md
+    Q7): on until the user unticks it, and the choice survives a restart."""
+    monkeypatch.setattr(prefs, "PREFS_FILE", str(tmp_path / "prefs.json"))
+    assert prefs.get_convert_enrich() is True
+    prefs.set_convert_enrich(False)
+    assert prefs.get_convert_enrich() is False
+    prefs.set_convert_enrich(True)
+    assert prefs.get_convert_enrich() is True
+    # a stray value in the file falls back to the default
+    prefs._save({"convert": {"enrich_from_garmin": "no"}})
+    assert prefs.get_convert_enrich() is True and prefs.get_convert_enrich(False) is False

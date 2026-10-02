@@ -190,3 +190,22 @@ def set_convert_folder(folder: str) -> None:
     prefs = _load()
     prefs.setdefault("convert", {})["last_folder"] = folder or ""
     _save(prefs)
+
+
+# -- fill the Convert page's dives from the Garmin cache (plans/convert.md I9, Q7)
+#
+# On by default: a FIT opened on the Convert page gets its site, buddy,
+# notes, weight, visibility and tank volumes from the cached Garmin dive
+# with the same activity id. The checkbox's state is remembered here.
+
+def get_convert_enrich(default: bool = True) -> bool:
+    """Whether the Convert page fills dives from the Garmin cache."""
+    prefs = _load()
+    value = prefs.get("convert", {}).get("enrich_from_garmin")
+    return bool(value) if isinstance(value, bool) else default
+
+
+def set_convert_enrich(enabled: bool) -> None:
+    prefs = _load()
+    prefs.setdefault("convert", {})["enrich_from_garmin"] = bool(enabled)
+    _save(prefs)

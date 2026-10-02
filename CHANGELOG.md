@@ -4,6 +4,27 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
+## Unreleased
+
+- Convert page: a Garmin `.fit` file (or Connect's export zip) whose dive is
+  in the app's Garmin cache now gets its site, buddy, notes, weight,
+  visibility and tank sizes from there - what you typed into Garmin Connect
+  but the watch's file does not hold. The dive is found by the activity id
+  in the file's name (the app's own cache names and the names Connect
+  exports, `<id>.zip` / `<id>_ACTIVITY.fit`), or else by its start time, so
+  a renamed file or one kept in your own folders is filled too; with
+  several Garmin accounts, the one the Garmin page shows is tried first.
+  Only empty fields are filled; nothing in the file is overwritten, and a
+  tank size the watch holds stays the watch's. The dive's pane says what was
+  filled in, from which account, and when it was matched by time. A "Fill
+  from Garmin cache" checkbox at the top of the page (on by default,
+  remembered) switches it off to see the file alone.
+- Convert page: the dive list is now a working list. Open adds the files'
+  dives to it (a dive already there - same file, or same start and number -
+  is skipped and counted), **Remove** (or Delete/Backspace on the list)
+  takes the selected dives off it, **Clear** empties it. The files on disk
+  are never touched.
+
 ## 0.4.0 - 2026-10-02
 
 Beta: the Convert page is new and has had less testing than the sync; keep

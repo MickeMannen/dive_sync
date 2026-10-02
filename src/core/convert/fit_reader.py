@@ -31,6 +31,7 @@ import bisect
 import io
 import logging
 import os
+import re
 import struct
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -51,6 +52,12 @@ from src.core.models import (
 )
 
 logger = logging.getLogger("dive_sync.convert.fit")
+
+# Connect exports a dive as ``<activity id>.zip`` holding ``<activity id>_ACTIVITY.fit``.
+# An activity id has had 9+ digits since Connect began (today 11), so a short
+# all-digit name (``515.fit``, a dive renamed by its number) is not one.
+CONNECT_ID_MIN_DIGITS = 8
+_CONNECT_NAME = re.compile(r"(\d{%d,})(?:_ACTIVITY)?" % CONNECT_ID_MIN_DIGITS, re.IGNORECASE)
 
 FIT_EPOCH = datetime(1989, 12, 31, tzinfo=timezone.utc)
 SENSOR_PROFILE = 147          # the transmitter profile; not in Garmin's public profile
@@ -379,9 +386,29 @@ def _model(messages: _Messages) -> Optional[str]:
     return garmin_files.FIT_PRODUCT_NAMES.get(product) if product is not None else None
 
 
-def to_unified(messages: _Messages, name: Optional[str] = None) -> UnifiedDive:
-    """The dive in ``messages``; ``name`` is the file's name, which gives the
-    Garmin activity id when the file came from dive_sync's own cache."""
+def activity_id_from_name(*names: Optional[str]) -> Optional[str]:
+    """The Garmin activity id the first of ``names`` that carries one gives:
+    the app's own cache name ``<n>_<date>_<time>_<id>``
+    (`garmin_files.activity_id_of`), Connect's export ``<id>.zip`` or its
+    member ``<id>_ACTIVITY.fit``. None when no name holds one (a dive
+    renamed by its number, ``515.fit``, holds none: see `CONNECT_ID_MIN_DIGITS`)."""
+    for name in names:
+        if not name:
+            continue
+        activity_id = garmin_files.activity_id_of(name)
+        if activity_id:
+            return activity_id
+        stem = os.path.splitext(os.path.basename(name))[0]
+        m = _CONNECT_NAME.fullmatch(stem)
+        if m:
+            return m.group(1)
+    return None
+
+
+def to_unified(messages: _Messages, name: Optional[str] = None, member: Optional[str] = None) -> UnifiedDive:
+    """The dive in ``messages``; ``name`` is the file's name and ``member``
+    the name of the entry inside Connect's zip, either of which gives the
+    Garmin activity id when it is a cache or Connect name (`activity_id_from_name`)."""
     dive_mode = _check_dive(messages)
     session, activity = messages.first("session"), messages.first("activity")
     summary = next((s for s in messages.all("dive_summary") if _value(s, "dive_number") is not None),
@@ -418,7 +445,7 @@ def to_unified(messages: _Messages, name: Optional[str] = None) -> UnifiedDive:
         max_depth = max((s.depth for s in samples), default=0.0)
 
     external_ids = {}
-    activity_id = garmin_files.activity_id_of(name) if name else None
+    activity_id = activity_id_from_name(name, member)
     if activity_id:
         external_ids["garmin"] = activity_id
 
@@ -476,10 +503,10 @@ def read_fit(source: Union[str, "os.PathLike[str]", bytes], name: Optional[str] 
         with open(path, "rb") as f:
             data = f.read()
     try:
-        data = garmin_files.extract_fit(data)
+        data, member = garmin_files.extract_fit_named(data)
     except Exception as e:  # a zip without a FIT, or not a zip at all
         raise FitReadError(f"not a FIT file this reader can decode: {e}") from e
-    dive = to_unified(decode(data), name)
+    dive = to_unified(decode(data), name, member)
     logger.debug("Read dive %s of %s: %d samples, %d tanks, %d events",
                  dive.dive_number, name or "<bytes>", len(dive.samples), len(dive.gas_mixtures), len(dive.events))
     return dive

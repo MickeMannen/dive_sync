@@ -8,8 +8,13 @@ import QtQuick.Dialogs
 // save the selected ones as UDDF or Subsurface .ssrf - one dive through a
 // Save-as dialog, several through a folder dialog with one file per dive -
 // or send them to MySSI with the login saved in Settings (the SSI parts are
-// hidden while ssi.UPLOAD_ENABLED is off, 2026-10-02). No sync account is
-// involved; nothing is written but the files chosen.
+// hidden while ssi.UPLOAD_ENABLED is off, 2026-10-02). A Garmin .fit whose
+// dive is in the app's Garmin cache (by activity id, or by start time when
+// the name holds none) gets its site, buddy, notes, weight, visibility and
+// tank volumes from there (I9, the checkbox, on by default). The list is a
+// working list (I9b): Open adds to it, Remove (or Delete/Backspace) takes
+// the selected dives off it, Clear empties it. No sync account is involved;
+// nothing is written but the files chosen.
 ColumnLayout {
     id: page
     objectName: "convertPage"
@@ -32,6 +37,14 @@ ColumnLayout {
         Layout.minimumWidth: 90
         Text { text: label; color: Theme.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
         Text { text: value; color: Theme.text; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+    }
+    component SmallButton: Button {
+        flat: true
+        font.pixelSize: 11
+        topPadding: 2
+        bottomPadding: 2
+        leftPadding: 8
+        rightPadding: 8
     }
     component Cell: Text {
         property int cellWidth: 70
@@ -62,14 +75,18 @@ ColumnLayout {
                 text: "Open files…"
                 objectName: "openFilesButton"
                 enabled: !convertController.busy
-                Tip { text: "Garmin .fit files or Connect's \"export original\" zip, UDDF and Subsurface (.ssrf) files; several at once"; visible: parent.hovered }
+                Tip { text: "Garmin .fit files or Connect's \"export original\" zip, UDDF and Subsurface (.ssrf) files; several at once. The dives are added to the list."; visible: parent.hovered }
                 onClicked: openDialog.open()
             },
-            Button {
-                text: "Select all"
-                flat: true
-                visible: convertController.diveCount > 1
-                onClicked: convertController.selectAll()
+            CheckBox {
+                objectName: "enrichCheckBox"
+                text: "Fill from Garmin cache"
+                checked: convertController.enrichFromCache
+                onToggled: convertController.setEnrichFromCache(checked)
+                Tip {
+                    text: "A Garmin .fit file holds the profile and the tanks but not what you typed into Garmin Connect. When the dive is one this app has cached (the Garmin page's dives) - found by the activity id in the file's name, or by its start time when the name holds none - its site, buddy, notes, weight, visibility and tank sizes are filled in from there, only where the file has none. Untick to show the file alone."
+                    visible: parent.hovered
+                }
             },
             Text {
                 text: convertController.files.length > 0 ? convertController.files.join(", ") : ""
@@ -86,7 +103,7 @@ ColumnLayout {
             wrapMode: Text.WordWrap
             color: Theme.muted
             font.pixelSize: 12
-            text: "Open the files of a dive computer, pick the dives (Cmd/Ctrl-click adds one, Shift-click a range) and save them as UDDF or Subsurface files"
+            text: "Open the files of a dive computer (Open adds to the list; Remove takes dives off it), pick the dives (Cmd/Ctrl-click adds one, Shift-click a range) and save them as UDDF or Subsurface files"
                   + (convertController.ssiEnabled ? ", or send them to your MySSI logbook" : "")
                   + ". Your accounts are not touched; only the files you choose are read and written."
         }
@@ -117,7 +134,40 @@ ColumnLayout {
             Layout.minimumWidth: 360
             Layout.fillHeight: true
             title: "Dives (" + convertController.diveCount + ")"
-                   + (convertController.selectedCount > 0 ? " · " + convertController.selectedCount + " selected" : "")
+            // The list's own actions sit in a compact row inside the card, not
+            // beside the title: three full-size buttons there ran past the
+            // card's edge at its preferred width.
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+                visible: convertController.diveCount > 0
+                Text {
+                    text: convertController.selectedCount > 0 ? convertController.selectedCount + " selected" : "None selected"
+                    color: Theme.muted
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                SmallButton {
+                    text: "Select all"
+                    objectName: "selectAllButton"
+                    visible: convertController.diveCount > 1
+                    onClicked: convertController.selectAll()
+                }
+                SmallButton {
+                    text: "Remove"
+                    objectName: "removeButton"
+                    enabled: convertController.selectedCount > 0
+                    Tip { text: "Takes the selected dives off the list (Delete or Backspace does the same); the files on disk are not touched"; visible: parent.hovered }
+                    onClicked: convertController.removeSelected()
+                }
+                SmallButton {
+                    text: "Clear"
+                    objectName: "clearButton"
+                    Tip { text: "Empties the list; the files on disk are not touched"; visible: parent.hovered }
+                    onClicked: convertController.clear()
+                }
+            }
             RowLayout {
                 spacing: 8
                 Layout.leftMargin: 6
@@ -143,6 +193,11 @@ ColumnLayout {
                     clip: true
                     model: convertController.dives
                     ScrollBar.vertical: ScrollBar {}
+                    // Delete or Backspace removes the selected dives from the list (I9b)
+                    Keys.onDeletePressed: function (event) { convertController.removeSelected(); event.accepted = true }
+                    Keys.onPressed: function (event) {
+                        if (event.key === Qt.Key_Backspace) { convertController.removeSelected(); event.accepted = true }
+                    }
                     delegate: Rectangle {
                         id: row
                         required property int index
@@ -168,6 +223,7 @@ ColumnLayout {
                             onClicked: function (mouse) {
                                 var toggle = (mouse.modifiers & Qt.ControlModifier) !== 0 || (mouse.modifiers & Qt.MetaModifier) !== 0
                                 var extend = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                                diveList.forceActiveFocus()
                                 convertController.clickRow(row.index, toggle, extend)
                             }
                         }
@@ -176,9 +232,11 @@ ColumnLayout {
             }
             Text {
                 visible: convertController.diveCount > 0
-                text: "Click selects one dive · Cmd/Ctrl-click adds or removes one · Shift-click selects a range"
+                text: "Click selects one dive · Cmd/Ctrl-click adds or removes one · Shift-click selects a range · Delete removes the selected dives from the list"
                 color: Theme.muted
                 font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
             }
         }
 
@@ -210,6 +268,15 @@ ColumnLayout {
                         text: "From " + page.sel.source + (page.sel.external_ids ? " · " + page.sel.external_ids : "")
                         color: Theme.muted
                         font.pixelSize: 11
+                    }
+                    Text {
+                        objectName: "enrichedLine"
+                        visible: page.hasDive && (page.sel.enriched || "") !== ""
+                        text: page.sel.enriched ? "Filled in: " + page.sel.enriched : ""
+                        color: Theme.muted
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
                     }
                     GridLayout {
                         visible: page.hasDive

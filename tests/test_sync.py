@@ -935,3 +935,28 @@ def test_garmin_download_retries_a_dive_whose_telemetry_failed(tmp_path, monkeyp
     detail_calls.clear()
     assert engine.download_and_save_raw_data(mock_data_dir=base, include_divelogs=False) is True
     assert detail_calls == [], detail_calls
+
+
+def test_garmin_maps_a_cached_payload_without_a_client():
+    """`GarminAdapter.from_cached_payload`: the cache file's payload becomes a
+    UnifiedDive on the class alone (no login, no client, no token folder) -
+    what the Convert page's enrichment reads (plans/convert.md I9)."""
+    from src.core.services.garmin import GarminAdapter
+    payload = {
+        "summary": {"activityId": 777, "activityName": "House Reef", "startTimeLocal": "2026-08-29 09:56:11"},
+        "details": {"activityId": 777, "description": "Easy drift",
+                    "summaryDTO": {"startTimeLocal": "2026-08-29T09:56:11.0", "duration": 2780, "maxDepth": 11.9},
+                    "metadataDTO": {"diveNumber": 38},
+                    "diveInfo": {"buddy": "Kim", "weight": 4.0, "weightUnit": {"unitKey": "kilogram"},
+                                 "diveGases": [{"gasIndex": 0, "oxygenContent": 32.0, "tankSize": 12.0}]}},
+        "tanksensor": {"tankSensors": [{"tankIndex": 0, "name": "Tank 1", "startingPressure": 200, "endingPressure": 60}]},
+    }
+    dive = GarminAdapter.from_cached_payload(payload)
+    assert dive.external_ids == {"garmin": "777"} and dive.dive_number == 38
+    assert dive.date_time == datetime(2026, 8, 29, 9, 56, 11) and dive.duration == 2780
+    assert (dive.location, dive.buddy, dive.notes, dive.weight, dive.weight_unit) == ("House Reef", "Kim", "Easy drift", 4.0, "kilogram")
+    assert dive.gas_mixtures[0].tank_volume == 12.0 and dive.gas_mixtures[0].tank_name == "Tank 1" and dive.gas_mixtures[0].oxygen == 32.0
+    # the same as an instance maps it; odd payload parts are ignored
+    assert GarminAdapter("dummy", "dummy")._map_to_unified(payload["summary"], payload["details"], None, payload["tanksensor"]) == dive
+    assert GarminAdapter.from_cached_payload({"summary": {"activityId": 1, "startTimeLocal": "2026-01-01 10:00:00"}, "details": "x", "tanksensor": []}).external_ids == {"garmin": "1"}
+    assert GarminAdapter._parse_datetime("2026-01-01T10:00:00.0") == datetime(2026, 1, 1, 10)

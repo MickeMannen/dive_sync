@@ -171,7 +171,7 @@ def test_read_fit_fixture():
     result = read_file(SINGLE_GAS)
     assert isinstance(result, ReadResult)
     assert [d.dive_number for d in result.dives] == [28] and result.warnings == []
-    assert result.files == [(SINGLE_GAS, "fit")] and result.format_id == "fit"
+    assert result.files == [(SINGLE_GAS, "fit")] and result.format_id == "fit" and result.sources == [SINGLE_GAS]
 
 
 @fixtures
@@ -184,11 +184,17 @@ def test_read_connect_zip_and_zip_of_several(tmp_path):
     result = read_file(connect)
     assert len(result.dives) == 1 and result.dives[0].external_ids == {"garmin": "24449823352"}
     assert result.files == [(connect, "fit")]
+    # the export as Connect names it, and a zip of several Connect members: each entry's name gives its id
+    export = _zip_of({"22569827629_ACTIVITY.fit": single}, tmp_path / "22569827629.zip")
+    assert read_file(export).dives[0].external_ids == {"garmin": "22569827629"}
+    both = _zip_of({"22569827629_ACTIVITY.fit": single, "22569827630_ACTIVITY.fit": two}, tmp_path / "day.zip")
+    assert [d.external_ids["garmin"] for d in read_file(both).dives] == ["22569827629", "22569827630"]
     running = build_fit([_file_id(), _session(sport=1, sub_sport=0), _record(0, 1.0)])
     many = _zip_of({"b_two.fit": two, "a_single.fit": single, "c_run.fit": running, "notes.txt": b"x"},
                    tmp_path / "many.zip")
     result = read_file(many)
     assert [d.dive_number for d in result.dives] == [28, 38]    # entry name order
+    assert result.sources == [many, many] and result.files == [(many, "fit")]
     assert all(d.external_ids == {} for d in result.dives)
     assert len(result.warnings) == 1 and "c_run.fit" in result.warnings[0] and "running" in result.warnings[0]
 
@@ -246,6 +252,7 @@ def test_read_files_merges_in_order_and_warns_per_failed_file(tmp_path):
     result = read_files([uddf, fit, text, tmp_path / "missing.fit"])
     assert [d.dive_number for d in result.dives] == [148, None, 12]
     assert result.files == [(str(uddf), "uddf"), (str(fit), "fit")] and result.format_id is None
+    assert result.sources == [str(uddf), str(uddf), str(fit)]       # the path each dive came from
     assert len(result.warnings) == 2
     assert result.warnings[0].startswith("notes.txt: ") and result.warnings[1] == "missing.fit: file not found"
     # one path: the error is raised, as read_file does

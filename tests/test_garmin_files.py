@@ -29,6 +29,30 @@ def test_dive_stem_formats():
     assert garmin_files.activity_id_of("12.json") is None
 
 
+def test_extract_fit_named_unwraps_connect_zip_and_keeps_the_member_name():
+    """Connect's export is ``<id>.zip`` around ``<id>_ACTIVITY.fit``: the FIT
+    bytes come out with the member's name; a bare FIT has no member name and
+    `extract_fit` is the bytes alone either way."""
+    raw = b".FIT fake bytes"
+    assert garmin_files.extract_fit_named(raw) == (raw, None)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("readme.txt", "x")
+        archive.writestr("22569827629_ACTIVITY.fit", raw)
+    assert garmin_files.extract_fit_named(buffer.getvalue()) == (raw, "22569827629_ACTIVITY.fit")
+    assert garmin_files.extract_fit(buffer.getvalue()) == raw
+    # a folder inside the zip: the member's base name; no .fit at all: the first entry (as before)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("export/22569827629_ACTIVITY.FIT", raw)
+    assert garmin_files.extract_fit_named(buffer.getvalue())[1] == "22569827629_ACTIVITY.FIT"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w"):
+        pass
+    with pytest.raises(ValueError, match="empty archive"):
+        garmin_files.extract_fit_named(buffer.getvalue())
+
+
 def test_save_fit_unzips_and_replaces_an_older_name(tmp_path):
     base = str(tmp_path)
     garmin_files.save_fit(_zip("x_ACTIVITY.fit", b"old"), "1_2024-05-01_100000_55", "u", base)

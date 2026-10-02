@@ -1556,6 +1556,266 @@ def test_convert_controller_reads_a_garmin_fit(qapp, scratch_data_dir, fake_keyr
     assert c.dives[0]["dive_number"] != "" and c.suggestedFileName("uddf").endswith(f" dive {c.dives[0]['dive_number']}.uddf")
 
 
+def test_convert_controller_fills_dives_from_the_garmin_cache(qapp, scratch_data_dir, fake_keyring):
+    """I9 (decision Q7): a dive whose Garmin activity id is in an account's
+    cache gets site, buddy, notes, weight, visibility and tank volumes from
+    it, only where the file has none; the detail pane says what came from
+    where; the checkbox (on by default, remembered in desktop_prefs.json)
+    re-applies to the dives already loaded without re-reading the files;
+    dives without a match or an id pass through; a broken cache entry is a
+    log line, not a failed open."""
+    from desktop import preferences
+    from desktop.controllers.convert import ConvertController
+    from src.core import garmin_files, layout
+    from src.core.convert.formats import ReadResult
+    from src.core.models import GasMixture, UnifiedDive
+    from tests.test_convert_enrich import cache_payload
+    folder = layout.dives_dir("garmin", "me@example.org", str(scratch_data_dir))
+    garmin_files.write_cached(folder, cache_payload(24449823373, tank_sizes=(12.0, 11.0)))
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "9_2026-01-01_100000_555.json"), "w") as f:
+        f.write("{broken")
+    fit = UnifiedDive(date_time=datetime(2026, 8, 29, 9, 56, 11), duration=2780, max_depth=11.92, dive_number=38,
+                      external_ids={"garmin": "24449823373"}, notes="From the watch",
+                      gas_mixtures=[GasMixture(oxygen=21.0, start_pressure=200.0, end_pressure=60.0, tank_name="Tank 1"),
+                                    GasMixture(oxygen=21.0, tank_volume=15.0, tank_name="Tank 2")])
+    broken = UnifiedDive(date_time=datetime(2026, 1, 1, 10), duration=600, max_depth=5.0, external_ids={"garmin": "555"})
+    plain = UnifiedDive(date_time=datetime(2026, 2, 1, 10), duration=600, max_depth=5.0, location="From the UDDF")
+    result = ReadResult(dives=[fit, broken, plain], files=[("/x/a.fit", "fit"), ("/x/b.fit", "fit"), ("/x/c.uddf", "uddf")])
+
+    c = ConvertController()
+    assert c.enrichFromCache is True and preferences.get_convert_enrich() is True
+    c._apply_read(result)
+    assert c.enrichedCount == 1 and c.message == "3 dives from 3 files. 1 filled from the Garmin cache."
+    sel = c.selected
+    assert sel["location"] == "House Reef" and sel["buddy"] == "Kim" and sel["notes"] == "From the watch"   # the file's notes stay
+    assert sel["weight"] == "4 kg" and sel["visibility"] == "15 m"
+    assert [t["volume"] for t in sel["tanks"]] == ["12 l", "15 l"] and sel["tanks"][0]["start_pressure"] == "200 bar"
+    assert sel["enriched"] == "site, buddy, weight, visibility, tank volume from the Garmin cache (me@example.org)"
+    assert c.dives[0]["location"] == "House Reef"
+    c.clickRow(1, False, False)
+    assert c.selected["enriched"] == "" and c.selected["location"] == ""          # the broken entry: nothing filled
+    c.clickRow(2, False, False)
+    assert c.selected["enriched"] == "" and c.selected["location"] == "From the UDDF"
+    # the dives as read are untouched; the enriched ones are derived from them
+    assert fit.location is None and fit.gas_mixtures[0].tank_volume is None
+    # untick: the file alone, the selection kept, the choice remembered
+    c.clickRow(0, True, False)
+    c.setEnrichFromCache(False)
+    assert c.enrichFromCache is False and preferences.get_convert_enrich() is False
+    assert c.selection == [0, 2] and c.currentRow == 0
+    assert c.enrichedCount == 0 and c.message == "3 dives from 3 files."
+    assert c.selected["location"] == "" and c.selected["buddy"] == "" and c.selected["enriched"] == ""
+    assert [t["volume"] for t in c.selected["tanks"]] == ["", "15 l"] and c.dives[0]["location"] == ""
+    c.setEnrichFromCache(False)                                                   # no change: nothing happens
+    c.setEnrichFromCache(True)
+    assert c.selected["location"] == "House Reef" and c.enrichedCount == 1 and c.message.endswith("1 filled from the Garmin cache.")
+    # a new controller starts from the remembered choice
+    c.setEnrichFromCache(False)
+    assert ConvertController().enrichFromCache is False
+    # the worker path reads the cache too, and a file without Garmin ids is unchanged;
+    # Open adds to the list (I9b), so the filled dive is still there
+    c.setEnrichFromCache(True)
+    c.openFiles([_file_url(os.path.join(FIXTURES, "ssrf", "handwritten.ssrf"))])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.diveCount == 8 and c.enrichedCount == 1
+    assert c.message == f"5 dives from 1 file added; 8 in the list. {len(c.warnings)} warnings. 1 filled from the Garmin cache."
+    assert c.selection == [3] and c.currentRow == 3 and c.selected["enriched"] == ""
+    c.clear()
+    assert c.diveCount == 0 and c.enrichedCount == 0 and c.message == ""
+    c.openFiles([_file_url(os.path.join(FIXTURES, "ssrf", "handwritten.ssrf"))])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.diveCount == 5 and c.enrichedCount == 0 and "Garmin cache" not in c.message
+
+
+def test_convert_controller_fills_by_start_time_and_prefers_the_selected_account(qapp, scratch_data_dir, fake_keyring):
+    """The I9 follow-up: a file whose name holds no activity id (a renamed
+    export, a file in the diver's own folder) is matched to the cached dive
+    with the same start; the pane says so. With two accounts holding the
+    dive, the Garmin dives page's account comes first and an exact id match
+    anywhere beats it."""
+    from desktop import accounts, preferences
+    from desktop.controllers import convert as module
+    from desktop.controllers.convert import ConvertController
+    from src.core import garmin_files, layout
+    from src.core.convert.formats import ReadResult
+    from src.core.models import GasMixture, UnifiedDive
+    from tests.test_convert_enrich import cache_payload
+    gmt = "2026-08-29 02:56:11"
+    garmin_files.write_cached(layout.dives_dir("garmin", "live@example.org", str(scratch_data_dir)),
+                              cache_payload(18314668175, location="Live copy", gmt=gmt))
+    garmin_files.write_cached(layout.dives_dir("garmin", "test@example.org", str(scratch_data_dir)),
+                              cache_payload(24449823373, location="Test copy", buddy="", gmt=gmt))
+    renamed = UnifiedDive(date_time=datetime(2026, 8, 29, 9, 56, 11), date_time_utc=datetime(2026, 8, 29, 2, 56, 11),
+                          duration=2780, max_depth=11.92, dive_number=38, gas_mixtures=[GasMixture(oxygen=21.0)])
+    # no account configured: name order
+    assert module.preferred_garmin_account() == ""
+    c = ConvertController()
+    c._apply_read(ReadResult(dives=[renamed], files=[("/x/515.fit", "fit")], sources=["/x/515.fit"]))
+    assert c.enrichedCount == 1 and c.message == "1 dive from 1 file. 1 filled from the Garmin cache."
+    assert c.selected["location"] == "Live copy" and c.selected["external_ids"] == ""
+    assert c.selected["enriched"] == "site, buddy, notes, weight, visibility, tank volume from the Garmin cache (live@example.org, matched by start time)"
+    # the Garmin dives page's pick comes first
+    from src.core.config import CredentialsModel, GarminCredentials
+    from desktop import credentials as creds_store
+    creds_store.save_credentials_model(CredentialsModel(garmin=[
+        GarminCredentials(username="live@example.org", password="p"), GarminCredentials(username="test@example.org", password="p")]))
+    assert module.preferred_garmin_account() == "live@example.org"
+    accounts.select("dives", "garmin", "test@example.org")
+    assert module.preferred_garmin_account() == "test@example.org"
+    c.clear()
+    c._apply_read(ReadResult(dives=[renamed], files=[("/x/515.fit", "fit")], sources=["/x/515.fit"]))
+    assert c.selected["location"] == "Test copy"
+    assert c.selected["enriched"] == "site, notes, weight, visibility, tank volume from the Garmin cache (test@example.org, matched by start time)"
+    # an exact id match in the other account wins over the preferred one's time match
+    exported = renamed.model_copy(update={"external_ids": {"garmin": "18314668175"}})
+    c.clear()
+    c._apply_read(ReadResult(dives=[exported], files=[("/x/18314668175.zip", "fit")], sources=["/x/18314668175.zip"]))
+    assert c.selected["location"] == "Live copy" and c.selected["external_ids"] == "garmin 18314668175"
+    assert c.selected["enriched"].endswith("from the Garmin cache (live@example.org)")
+    # the pick is the remembered one only while the account exists; the Sync page's is the fallback
+    accounts.select("dives", "garmin", "gone@example.org")
+    accounts.select("sync", "garmin", "test@example.org")
+    assert module.preferred_garmin_account() == "live@example.org"       # dives page: first configured
+    creds_store.save_credentials_model(CredentialsModel(garmin=[GarminCredentials(username="test@example.org", password="p")]))
+    assert module.preferred_garmin_account() == "test@example.org"
+    assert preferences.get_selected_account("dives", "garmin") == "gone@example.org"
+
+
+def test_convert_controller_appends_removes_and_clears(qapp, scratch_data_dir, fake_keyring, tmp_path):
+    """I9b: Open adds to the list, skipping a dive already in it (same file,
+    or same start and number); Remove takes the selected dives off (one or
+    several), selects the row that moved into the first one's place, keeps
+    the details pane, the enrichment and the files in step; Clear empties
+    the list. Nothing on disk is touched."""
+    import shutil
+    from desktop.controllers.convert import ConvertController
+    from src.core import garmin_files, layout
+    from src.core.convert import formats
+    from tests.test_convert_enrich import cache_payload
+    handwritten = os.path.join(FIXTURES, "ssrf", "handwritten.ssrf")
+    synthetic = os.path.join(FIXTURES, "ssrf", "synthetic.ssrf")
+    uddf = os.path.join(FIXTURES, "uddf", "subsurface_sync.uddf")
+    copy = tmp_path / "copy.ssrf"                        # the same dives under another name
+    shutil.copy(handwritten, copy)
+    c = _loaded_convert(qapp, handwritten)
+    read = formats.read_file(handwritten)
+    n, w = len(read.dives), f" {len(read.warnings)} warnings." if read.warnings else ""
+    assert c.diveCount == n and c.files == ["handwritten.ssrf"] and c.message == f"{n} dives from 1 file.{w}"
+    # the same file again: nothing added; a copy of it: the dives are the same ones
+    c.openFiles([_file_url(handwritten)])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.diveCount == n and c.message == f"0 dives from 1 file added; {n} in the list. {n} already loaded.{w}"
+    c.openFiles([_file_url(copy)])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.diveCount == n and c.files == ["handwritten.ssrf"] and f"{n} already loaded." in c.message
+    # another file adds its dives after the loaded ones and selects the first new one
+    c.clickRow(1, False, False)
+    c.openFiles([_file_url(synthetic), _file_url(uddf)])
+    assert wait_until(qapp, lambda: not c.busy)
+    more = formats.read_files([synthetic, uddf])
+    added = len(more.dives)
+    assert c.diveCount == n + added and c.files == ["handwritten.ssrf", "synthetic.ssrf", "subsurface_sync.uddf"]
+    assert c.message == f"{added} dives from 2 files added; {n + added} in the list."
+    assert c.selection == [n] and c.currentRow == n and c.dives[n]["source"] == "synthetic.ssrf"
+    assert [r["source"] for r in c.dives][:n] == ["handwritten.ssrf"] * n
+    # remove one: the next row takes its place and is selected; the pane follows
+    c.clickRow(0, False, False)
+    second = c.dives[1]
+    c.removeSelected()
+    assert c.diveCount == n + added - 1 and c.dives[0]["date"] == second["date"] and c.dives[0]["index"] == 0
+    assert c.selection == [0] and c.currentRow == 0 and c.selected["title"].startswith(second["date"])
+    assert c.message == f"Removed 1 dive; {n + added - 1} in the list."
+    # remove several, including the last row: the selection lands on the new last row
+    last = c.diveCount - 1
+    c.clickRow(last, False, False)
+    c.clickRow(2, True, False)
+    c.removeSelected()
+    assert c.diveCount == n + added - 3 and c.selection == [2] and c.currentRow == 2
+    assert c.message == f"Removed 2 dives; {n + added - 3} in the list."
+    # a file none of whose dives is left is forgotten, so it can be opened again
+    c.selectAll()
+    c.clickRow(0, True, False)                           # keep the first (a handwritten dive)
+    c.removeSelected()
+    assert c.diveCount == 1 and c.files == ["handwritten.ssrf"] and c.dives[0]["source"] == "handwritten.ssrf"
+    c.openFiles([_file_url(synthetic)])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.diveCount == 1 + len(formats.read_file(synthetic).dives) and c.files == ["handwritten.ssrf", "synthetic.ssrf"]
+    # nothing selected: nothing happens; the files are still on disk
+    c._selection = []
+    c.removeSelected()
+    assert c.diveCount > 1 and os.path.exists(handwritten) and os.path.exists(copy)
+    # two files of the same name in different folders are two files: removing one's dives forgets that one only
+    c.clear()
+    a_dir, b_dir = tmp_path / "a", tmp_path / "b"
+    a_dir.mkdir(); b_dir.mkdir()
+    shutil.copy(handwritten, a_dir / "log.ssrf")
+    shutil.copy(synthetic, b_dir / "log.ssrf")
+    c.openFiles([_file_url(a_dir / "log.ssrf"), _file_url(b_dir / "log.ssrf")])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.files == ["log.ssrf", "log.ssrf"] and c.diveCount == n + len(formats.read_file(synthetic).dives)
+    c.clickRow(0, False, False)
+    c.clickRow(n - 1, False, True)
+    c.removeSelected()
+    assert c._files == [str(b_dir / "log.ssrf")] and all(r["source"] == "log.ssrf" for r in c.dives)
+    c.openFiles([_file_url(a_dir / "log.ssrf")])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.diveCount == n + len(formats.read_file(synthetic).dives) and c.message.startswith(f"{n} dives from 1 file added;")
+    # the enrichment follows the list: the filled dive keeps its fill after a remove above it
+    folder = layout.dives_dir("garmin", "me@example.org", str(scratch_data_dir))
+    garmin_files.write_cached(folder, cache_payload(24449823373, location="House Reef"))
+    from src.core.convert.formats import ReadResult
+    from src.core.models import GasMixture, UnifiedDive
+    fit = UnifiedDive(date_time=datetime(2026, 8, 29, 9, 56, 11), duration=2780, max_depth=11.92, dive_number=38,
+                      external_ids={"garmin": "24449823373"}, gas_mixtures=[GasMixture(oxygen=21.0)])
+    c._apply_read(ReadResult(dives=[fit], files=[("/x/a.fit", "fit")], sources=["/x/a.fit"]), append=True)
+    row = c.diveCount - 1
+    assert c.enrichedCount == 1 and c.dives[row]["location"] == "House Reef" and c.message.endswith("1 filled from the Garmin cache.")
+    c.clickRow(0, False, False)
+    c.removeSelected()
+    assert c.enrichedCount == 1 and c.dives[row - 1]["location"] == "House Reef" and c.message.endswith("1 filled from the Garmin cache.")
+    c.clickRow(row - 1, False, False)
+    assert c.selected["enriched"].startswith("site, buddy") and fit.location is None
+    # removing everything: an empty list, an empty pane
+    c.selectAll()
+    c.removeSelected()
+    assert c.diveCount == 0 and c.selected == {} and c.selection == [] and c.files == [] and c.message == f"Removed {row} dives."
+    assert c.enrichedCount == 0
+    # clear
+    c._apply_read(ReadResult(dives=[fit], files=[("/x/a.fit", "fit")], sources=["/x/a.fit"]), append=True)
+    assert c.diveCount == 1 and c.selection == [0]
+    c.clear()
+    assert c.diveCount == 0 and c.files == [] and c.selected == {} and c.message == "" and c._dives_as_read == [] and c._cached == {}
+
+
+def test_convert_controller_enriches_the_fit_fixture(qapp, scratch_data_dir, fake_keyring, tmp_path):
+    """The two-transmitter FIT under the name Connect's cache gives it (the
+    activity id is the last part), with a cache entry for that id: the dive
+    gets its site, buddy, notes, weight and visibility; the tank volumes the
+    watch wrote (the transmitter profiles) stay the file's, as do the
+    profile and the pressures (skipped while the fixture is absent)."""
+    import shutil
+    from src.core import garmin_files, layout
+    from tests.test_convert_enrich import cache_payload
+    source = os.path.join(FIT_FIXTURES, "two_tanks.fit")
+    if not os.path.exists(source):
+        pytest.skip("FIT fixture not present")
+    path = tmp_path / "38_2026-08-29_095611_24449823373.fit"
+    shutil.copy(source, path)
+    folder = layout.dives_dir("garmin", "me@example.org", str(scratch_data_dir))
+    garmin_files.write_cached(folder, cache_payload(24449823373, location="House Reef", buddy="Kim", tank_sizes=(12.0, 12.0)))
+    c = _loaded_convert(qapp, path)
+    assert c.diveCount == 1 and c.enrichedCount == 1 and c.warnings == []
+    sel = c.selected
+    assert sel["external_ids"] == "garmin 24449823373" and sel["location"] == "House Reef" and sel["buddy"] == "Kim"
+    assert sel["enriched"] == "site, buddy, notes, weight, visibility from the Garmin cache (me@example.org)"
+    assert [t["volume"] for t in sel["tanks"]] == ["11.1 l", "11.1 l"] and sel["tanks"][0]["name"] == "Tank 1"   # the file's, not the cache's 12
+    assert sel["channels"][0] == "tank pressure (tank 1, tank 2)" and sel["gf"] == "40/85" and sel["sample_count"] > 100
+    assert c.dives[0]["location"] == "House Reef" and c.suggestedFileName("uddf").endswith(" dive 38.uddf")
+    c.setEnrichFromCache(False)
+    assert c.selected["location"] == "" and [t["volume"] for t in c.selected["tanks"]] == ["11.1 l", "11.1 l"]
+
+
 def test_convert_controller_reports_unreadable_files(qapp, scratch_data_dir, fake_keyring, tmp_path):
     bad = tmp_path / "notes.txt"
     bad.write_text("not a dive")
@@ -1630,9 +1890,10 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     button, its plan area, the MySSI card in Settings) follow the
     `ssi.UPLOAD_ENABLED` switch: hidden while it is off (the shipped state
     since 2026-10-02), shown when it is on."""
-    from PySide6.QtCore import QObject
+    from PySide6.QtCore import QMetaObject, QObject
     from desktop import app as desktop_app
     from desktop import logging_bridge
+    from desktop import preferences
     from src.core import dive_cache
     from src.core.convert import formats
     from src.core.services import ssi
@@ -1653,6 +1914,16 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     page = root.findChild(QObject, "convertPage")
     assert page is not None and page.findChild(QObject, "convertDiveList") is not None
     assert page.findChild(QObject, "saveTargets").property("count") == 2     # Save as UDDF…, Save as Subsurface…
+    # the Garmin-cache checkbox (I9): on by default, toggling it reaches the controller and the prefs file
+    box = page.findChild(QObject, "enrichCheckBox")
+    assert box is not None and box.property("checked") is True and c.enrichFromCache is True
+    assert page.findChild(QObject, "enrichedLine").property("visible") is False   # Subsurface dives: nothing filled
+    QMetaObject.invokeMethod(box, "click")
+    wait(qapp, 100)
+    assert c.enrichFromCache is False and preferences.get_convert_enrich() is False
+    QMetaObject.invokeMethod(box, "click")
+    wait(qapp, 100)
+    assert c.enrichFromCache is True and box.property("checked") is True
     assert c.ssiEnabled is ssi_on
     assert page.findChild(QObject, "sendToSsiButton").property("visible") is ssi_on
     assert page.findChild(QObject, "ssiSection").property("visible") is False     # nothing planned yet, either way
@@ -1663,6 +1934,36 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     c._set_ssi_message("would show the plan")
     wait(qapp, 100)
     assert page.findChild(QObject, "ssiSection").property("visible") is ssi_on   # the SSI area only when on
+    # the list's own buttons (I9b): Remove with a selection, Clear while dives are listed, Delete on the list
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    remove, clear_button = page.findChild(QObject, "removeButton"), page.findChild(QObject, "clearButton")
+    assert remove.property("visible") is True and remove.property("enabled") is True and clear_button.property("visible") is True
+    assert page.findChild(QObject, "selectAllButton").property("visible") is True
+    total = c.diveCount
+    c.clickRow(0, False, False)
+    wait(qapp, 100)
+    QMetaObject.invokeMethod(remove, "click")
+    wait(qapp, 150)
+    assert c.diveCount == total - 1 and c.selection == [0] and c.message.startswith("Removed 1 dive;")
+    dive_list = page.findChild(QObject, "convertDiveList")
+    QMetaObject.invokeMethod(dive_list, "forceActiveFocus")
+    wait(qapp, 100)
+    QTest.keyClick(root, Qt.Key.Key_Delete)
+    wait(qapp, 150)
+    assert c.diveCount == total - 2
+    QTest.keyClick(root, Qt.Key.Key_Backspace)
+    wait(qapp, 150)
+    assert c.diveCount == total - 3
+    c._selection = []
+    c.selectionChanged.emit()
+    wait(qapp, 100)
+    assert remove.property("enabled") is False
+    QMetaObject.invokeMethod(clear_button, "click")
+    wait(qapp, 150)
+    assert c.diveCount == 0 and remove.property("visible") is False and clear_button.property("visible") is False
+    c._apply_read(formats.read_files([os.path.join(FIXTURES, "ssrf", "handwritten.ssrf")]))
+    wait(qapp, 150)
     c.clear()
     wait(qapp, 150)
     # the Settings page has the MySSI card only when the switch is on

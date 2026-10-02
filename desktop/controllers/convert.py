@@ -12,8 +12,20 @@ Files are read on a `jobs.Worker`; the MySSI calls run on one too. The file
 dialogs open in Documents the first time and then in the last folder used
 (`preferences.get_convert_folder`, decision Q11).
 
-I9 (enrich from the Garmin cache) hooks in at `_enrich`, which today returns
-the dives as read.
+A FIT whose dive is in one of the app's Garmin account caches - found by
+the activity id in the file's name, or by the start time when the name
+holds none (a renamed file, an export of another account's copy) - gets
+its site, buddy, notes, weight, visibility and tank volumes from the
+cached dive (`src.core.convert.enrich`, I9, decision Q7): on by default, a
+checkbox on the page, remembered in `desktop_prefs.json`. The dives are
+kept as read and the enriched ones derived from them, so the checkbox
+re-applies without re-reading the files; the cache is read once per open,
+on the worker, the Garmin dives page's account first.
+
+The list is a working list (I9b): Open adds to it (a dive already loaded,
+from the same file or with the same start and number, is skipped), Remove
+takes the selected dives off it, Clear empties it; the files on disk are
+never touched.
 """
 from __future__ import annotations
 
@@ -24,11 +36,12 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from PySide6.QtCore import Property, QObject, QStandardPaths, QUrl, Signal, Slot
 
+from desktop import accounts
 from desktop import credentials as creds_store
 from desktop import preferences
 from desktop.jobs import Worker
 from src.core import layout
-from src.core.convert import formats
+from src.core.convert import enrich, formats
 from src.core.models import UnifiedDive
 
 logger = logging.getLogger("dive_sync.desktop.convert")
@@ -59,6 +72,17 @@ def documents_folder() -> str:
     Documents folder through QStandardPaths, the home folder without one."""
     folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
     return folder or os.path.expanduser("~")
+
+
+def preferred_garmin_account() -> str:
+    """The Garmin account the cache lookup tries first (rework.md E19): the
+    one the Garmin dives page works with, else the Sync page's; "" with
+    none configured (the caches are then read in name order)."""
+    try:
+        return accounts.selected("dives", "garmin") or accounts.selected("sync", "garmin")
+    except Exception as e:  # no credentials at all: not a reason to skip the cache
+        logger.debug("No preferred Garmin account: %s", e)
+        return ""
 
 
 def _num(value: Optional[float], unit: str = "", digits: int = 1) -> str:
@@ -103,10 +127,11 @@ def dive_row(index: int, dive: UnifiedDive, source: str = "") -> Dict[str, Any]:
     }
 
 
-def dive_details(dive: UnifiedDive, source: str = "") -> Dict[str, Any]:
+def dive_details(dive: UnifiedDive, source: str = "", enriched: str = "") -> Dict[str, Any]:
     """Everything the right-hand pane shows for one dive: the summary, the
     tanks, the profile samples (ProfileChart's shape), which extra channels
-    the file has and the events."""
+    the file has and the events. ``enriched`` is what the Garmin cache
+    filled in (`enrich.Enrichment.summary`), blank for nothing."""
     computer = " ".join(p for p in (dive.computer_vendor, dive.computer_model) if p)
     extras = [p for p in (f"serial {dive.computer_serial}" if dive.computer_serial else "",
                           f"firmware {dive.computer_firmware}" if dive.computer_firmware else "") if p]
@@ -183,6 +208,7 @@ def dive_details(dive: UnifiedDive, source: str = "") -> Dict[str, Any]:
                 if dive.cns_start is not None or dive.cns_end is not None else ""),
         "external_ids": ids,
         "source": source,
+        "enriched": enriched,
         "tanks": tanks,
         "samples": samples,
         "sample_count": len(samples),
@@ -198,13 +224,20 @@ class ConvertController(QObject):
     messageChanged = Signal()
     busyChanged = Signal()
     folderChanged = Signal()
+    enrichChanged = Signal()       # the checkbox
     ssiChanged = Signal()          # login, plan, results, sites, message
     ssiBusyChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self._dives: List[UnifiedDive] = []
-        self._sources: List[str] = []           # one file name per dive
+        self._dives: List[UnifiedDive] = []     # what the page shows (enriched when the checkbox is on)
+        self._dives_as_read: List[UnifiedDive] = []
+        self._cached: Dict[str, enrich.CachedDive] = {}   # the Garmin cache entries of the dives read (enrich.load_cached_dives keys)
+        self._enrichments: List[enrich.Enrichment] = []
+        self._enrich_enabled = preferences.get_convert_enrich()
+        self._read_text = ""                    # the "n dives from m files" line, without the enrich count
+        self._sources: List[str] = []           # one file name per dive (what the page shows)
+        self._paths: List[str] = []             # the same as full paths (what "already loaded" compares)
         self._files: List[str] = []
         self._warnings: List[str] = []          # from the last read
         self._selection: List[int] = []
@@ -240,6 +273,7 @@ class ConvertController(QObject):
 
     @Property("QVariantList", notify=divesChanged)
     def files(self):
+        """The files whose dives are in the list, as names."""
         return [os.path.basename(f) for f in self._files]
 
     @Property("QVariantList", notify=divesChanged)
@@ -263,8 +297,36 @@ class ConvertController(QObject):
     def selected(self):
         """The dive the detail pane shows (the one clicked last); {} with none."""
         if 0 <= self._current < len(self._dives):
-            return dive_details(self._dives[self._current], self._sources[self._current])
+            return dive_details(self._dives[self._current], self._sources[self._current], self._enriched_summary(self._current))
         return {}
+
+    @Property(bool, notify=enrichChanged)
+    def enrichFromCache(self) -> bool:
+        """The checkbox (decision Q7): fill a FIT's site, buddy, notes, weight,
+        visibility and tank volumes from the cached Garmin dive with the same
+        activity id. On by default; remembered in desktop_prefs.json."""
+        return self._enrich_enabled
+
+    @Slot(bool)
+    def setEnrichFromCache(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled == self._enrich_enabled:
+            return
+        self._enrich_enabled = enabled
+        preferences.set_convert_enrich(enabled)
+        self.enrichChanged.emit()
+        self._reapply_enrich()
+
+    @Property(int, notify=divesChanged)
+    def enrichedCount(self) -> int:
+        """How many of the dives shown got something from the Garmin cache."""
+        return len(self._enrichments)
+
+    def _enriched_summary(self, index: int) -> str:
+        for e in self._enrichments:
+            if e.index == index:
+                return e.summary
+        return ""
 
     @Property(str, notify=messageChanged)
     def message(self) -> str:
@@ -315,21 +377,28 @@ class ConvertController(QObject):
 
     @Slot("QVariantList")
     def openFiles(self, urls) -> None:
-        """Read every file picked in the Open dialog (several at once, Q6);
-        what is shown is replaced by what they hold."""
+        """Read every file picked in the Open dialog (several at once, Q6)
+        and add their dives to the list (I9b); a dive already in it is
+        skipped and counted in the message."""
         paths = [local_path(u) for u in urls or []]
         paths = [p for p in paths if p]
         if not paths or self._busy:
             return
         self._set_busy(True)
         self._set_message(f"Reading {len(paths)} file{'s' if len(paths) != 1 else ''}…")
+        preferred = preferred_garmin_account()
 
         def work():
-            return formats.read_files(paths)
+            result = formats.read_files(paths)
+            # the cache entries of the dives read, looked up here so the
+            # checkbox can re-apply them without touching the disk again
+            cached = enrich.load_cached_dives(result.dives, preferred_account=preferred)
+            return result, cached
 
-        def done(result):
+        def done(outcome):
+            result, cached = outcome
             self._set_busy(False)
-            self._apply_read(result)
+            self._apply_read(result, cached, append=True)
             self._remember_folder(paths[0])
 
         def fail(text):
@@ -343,39 +412,131 @@ class ConvertController(QObject):
         worker.start()
 
     def _enrich(self, dives: List[UnifiedDive]) -> List[UnifiedDive]:
-        """I9's hook: fill site, buddy, notes, weight, visibility and tank
-        volume from the Garmin cache when a FIT's activity id is a cached
-        dive. Until then the dives are shown as the file holds them."""
-        return dives
+        """The dives to show: filled from the Garmin cache entries read with
+        them (`self._cached`) when the checkbox is on, else as read. Records
+        what was filled for the detail pane and the page."""
+        if not self._enrich_enabled or not self._cached:
+            self._enrichments = []
+            return list(dives)
+        result = enrich.enrich_dives(dives, self._cached)
+        self._enrichments = list(result.enrichments)
+        return result.dives
 
-    def _apply_read(self, result: formats.ReadResult) -> None:
-        """Show a `formats.ReadResult`; the tests feed one directly."""
-        dives = self._enrich(list(result.dives))
-        # which file each dive came from: a zip of several FITs gives several
-        # dives from one entry of result.files, so the name is matched by count
-        # only when the counts line up (one file: trivially)
-        sources = [""] * len(dives)
-        if len(result.files) == 1:
-            sources = [os.path.basename(result.files[0][0])] * len(dives)
-        elif len(result.files) == len(dives):
-            sources = [os.path.basename(path) for path, _fmt in result.files]
-        self._dives, self._sources = dives, sources
-        self._files = [path for path, _fmt in result.files]
-        self._warnings = list(result.warnings)
-        self._selection = [0] if dives else []
-        self._current = self._anchor = 0 if dives else -1
+    def _reapply_enrich(self) -> None:
+        """The checkbox changed: derive the shown dives from the ones as read
+        again, keeping the selection."""
+        self._dives = self._enrich(self._dives_as_read)
         self._close_ssi_plan()
         self.divesChanged.emit()
         self.selectionChanged.emit()
-        n, m = len(dives), len(result.files)
-        text = f"{n} dive{'s' if n != 1 else ''} from {m} file{'s' if m != 1 else ''}."
+        if self._read_text:
+            self._set_message(self._read_text + self._enrich_text())
+
+    def _enrich_text(self) -> str:
+        n = len(self._enrichments)
+        return f" {n} filled from the Garmin cache." if n else ""
+
+    @staticmethod
+    def _paths_of(result: formats.ReadResult) -> List[str]:
+        """The file each dive came from, one path per dive: ``result.sources``
+        when the reader filled it; for a result built by hand, the one file
+        for every dive, or one file per dive when the counts line up, else blanks."""
+        if len(result.sources) == len(result.dives):
+            return [os.fspath(p) for p in result.sources]
+        if len(result.files) == 1:
+            return [result.files[0][0]] * len(result.dives)
+        if len(result.files) == len(result.dives):
+            return [path for path, _fmt in result.files]
+        return [""] * len(result.dives)
+
+    @staticmethod
+    def _dive_key(dive: UnifiedDive):
+        """What makes two dives the same one for the list: the start and the number."""
+        return dive.date_time, dive.dive_number
+
+    def _apply_read(self, result: formats.ReadResult, cached: Optional[Dict[str, enrich.CachedDive]] = None,
+                    append: bool = False) -> None:
+        """Show a `formats.ReadResult` - in place of the list, or added to it
+        (``append``, what Open does; a dive from a file already in the list,
+        or with the start and number of one already there, is skipped). The
+        tests feed a result directly. ``cached`` is what the worker found in
+        the Garmin cache for the dives read; None looks it up here (never
+        raises: a broken entry is a log line)."""
+        if cached is None:
+            cached = enrich.load_cached_dives(result.dives, preferred_account=preferred_garmin_account())
+        paths = self._paths_of(result)
+        if not append:
+            self._dives_as_read, self._sources, self._paths, self._files, self._cached = [], [], [], [], {}
+        known_files = set(self._files)
+        known_keys = {self._dive_key(d) for d in self._dives_as_read}
+        first_new = len(self._dives_as_read)
+        added = skipped = 0
+        for dive, path in zip(result.dives, paths):
+            key = self._dive_key(dive)
+            if (path and path in known_files) or key in known_keys:
+                skipped += 1
+                continue
+            known_keys.add(key)
+            self._dives_as_read.append(dive)
+            self._sources.append(os.path.basename(path))
+            self._paths.append(path)
+            if path and path not in self._files:
+                self._files.append(path)
+            added += 1
+        self._cached.update(cached)
+        self._dives = self._enrich(self._dives_as_read)
+        self._warnings = list(result.warnings)
+        if added or not append:
+            self._selection = [first_new] if self._dives else []
+            self._current = self._anchor = first_new if self._dives else -1
+        self._close_ssi_plan()
+        self.divesChanged.emit()
+        self.selectionChanged.emit()
+        n, m, total = len(result.dives), len(result.files), len(self._dives)
+        if append and total > added:
+            text = f"{added} dive{'s' if added != 1 else ''} from {m} file{'s' if m != 1 else ''} added; {total} in the list."
+            if skipped:
+                text += f" {skipped} already loaded."
+        else:
+            text = f"{n} dive{'s' if n != 1 else ''} from {m} file{'s' if m != 1 else ''}."
         if result.warnings:
             text += f" {len(result.warnings)} warning{'s' if len(result.warnings) != 1 else ''}."
-        self._set_message(text)
+        self._read_text = text
+        self._set_message(text + self._enrich_text())
+
+    @Slot()
+    def removeSelected(self) -> None:
+        """Take the selected dives off the list (I9b): the files on disk are
+        untouched. The row that moves into the first removed one's place is
+        selected next; a file none of whose dives is left is forgotten, so
+        opening it again adds them back."""
+        rows = sorted(r for r in set(self._selection) if 0 <= r < len(self._dives_as_read))
+        if not rows:
+            return
+        gone = set(rows)
+        self._dives_as_read = [d for i, d in enumerate(self._dives_as_read) if i not in gone]
+        self._sources = [s for i, s in enumerate(self._sources) if i not in gone]
+        self._paths = [p for i, p in enumerate(self._paths) if i not in gone]
+        left = set(self._paths)
+        self._files = [p for p in self._files if p in left]
+        self._dives = self._enrich(self._dives_as_read)
+        if self._dives:
+            row = min(rows[0], len(self._dives) - 1)
+            self._selection, self._current, self._anchor = [row], row, row
+        else:
+            self._selection, self._current, self._anchor = [], -1, -1
+        self._close_ssi_plan()
+        self.divesChanged.emit()
+        self.selectionChanged.emit()
+        n, total = len(rows), len(self._dives)
+        self._read_text = f"Removed {n} dive{'s' if n != 1 else ''}; {total} in the list." if total else ""
+        self._set_message(self._read_text + self._enrich_text() if total else f"Removed {n} dive{'s' if n != 1 else ''}.")
 
     @Slot()
     def clear(self) -> None:
-        self._apply_read(formats.ReadResult())
+        """Empty the list; nothing on disk changes."""
+        self._apply_read(formats.ReadResult(), {})
+        self._read_text = ""
         self._set_message("")
 
     # -- selection ---------------------------------------------------------

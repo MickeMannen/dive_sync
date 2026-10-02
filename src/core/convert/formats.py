@@ -186,12 +186,14 @@ def detect_format(path: PathLike) -> FileFormat:
 @dataclass
 class ReadResult:
     """What `read_file` / `read_files` got: the dives of every file read, in
-    file order, the lines worth showing (an entry that was not a dive, a
-    file that could not be read when several were given) and the files that
-    gave dives as ``(path, format id)`` pairs."""
+    file order, the path each dive came from (``sources``, one per dive), the
+    lines worth showing (an entry that was not a dive, a file that could not
+    be read when several were given) and the files that gave dives as
+    ``(path, format id)`` pairs."""
     dives: List[UnifiedDive] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     files: List[Tuple[str, str]] = field(default_factory=list)
+    sources: List[str] = field(default_factory=list)
 
     @property
     def format_id(self) -> Optional[str]:
@@ -252,6 +254,7 @@ def read_file(path: PathLike) -> ReadResult:
     else:  # pragma: no cover - every readable format is handled above
         raise UnsupportedFileError(f"{os.path.basename(path)}: no reader for {fmt.label}")
     result.files.append((path, fmt.id))
+    result.sources += [path] * (len(result.dives) - before)
     logger.debug("Read %d dive(s) from %s (%s)", len(result.dives) - before, path, fmt.id)
     return result
 
@@ -274,6 +277,7 @@ def read_files(paths: Iterable[PathLike]) -> ReadResult:
             failures.append(f"{os.path.basename(path)}: {reason}" if os.path.basename(path) not in reason else reason)
             continue
         result.dives += one.dives
+        result.sources += one.sources
         result.warnings += one.warnings
         result.files += one.files
     if paths and not result.files:

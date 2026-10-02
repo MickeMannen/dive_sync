@@ -11,13 +11,14 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 3. Match identical dives across services.
 4. Synchronize data differences (gases, weights, buddies, notes, GPS coordinates) and upload new dives.
 5. Run scheduled or CLI-triggered sync jobs, with a read-only status page for monitoring plus schedule/credential configuration.
+6. Convert dive-computer files offline in the desktop app (Garmin `.fit`, UDDF or Subsurface `.ssrf` in; UDDF or `.ssrf` out), with no account involved (rework.md Track I).
 
 ---
 
 ## 💻 Tech Stack
 * **Language**: Python 3.10+
 * **Backend Framework**: FastAPI (with Uvicorn)
-* **Libraries**: `python-garminconnect` (for Garmin Connect API integration), `requests` (for Divelogs.org API), `pydantic` (for data validation)
+* **Libraries**: `python-garminconnect` (for Garmin Connect API integration), `requests` (for Divelogs.org API), `pydantic` (for data validation), `fitdecode` (Garmin `.fit` files on the Convert page; MIT, unlike Garmin's own SDK which is a dev dependency only)
 * **Frontend**: HTML5, Vanilla JavaScript, CSS (via TailwindCSS CDN)
 * **Testing**: Pytest
 
@@ -28,7 +29,9 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 ├── src/
 │   ├── core/                  # Core domain logic
 │   │   ├── services/          # Adapters: Garmin, Divelogs, UDDF, Subsurface (git storage + cloud), Submersion (peer), mocks
-│   │   │   └── submersion/    # codec.py (profile blobs), hlc.py (clock), store.py (S3/folder), library.py (HLC merge), adapter.py (metadata only: the app's own .fit import owns the profile, tanks, pressures, gas switches and data sources - rework.md F17)
+│   │   │   ├── submersion/    # codec.py (profile blobs), hlc.py (clock), store.py (S3/folder), library.py (HLC merge), adapter.py (metadata only: the app's own .fit import owns the profile, tanks, pressures, gas switches and data sources - rework.md F17)
+│   │   │   └── ssi.py         # MySSI upload client + SsiAdapter for the Convert page only (unofficial route; not in pairs.KNOWN_SERVICES, no board or settings; hidden behind ssi.UPLOAD_ENABLED = False until the owner's live test)
+│   │   ├── convert/           # The Convert page's core (rework.md Track I), pure - no adapter, settings or credentials: fit_reader.py (Garmin .fit on fitdecode), formats.py (registry: detection by extension/content, read/write entry points, dialog filters, "<date> <time> dive <n>.<ext>" names, per-format drop lines), ssrf_writer.py / ssrf_reader.py (Subsurface XML), enrich.py (fill a FIT's dive from the cached Garmin dive with the same activity id, or the same start time when the name holds no id; the selected account first)
 │   │   ├── pairs.py           # Service specs (garmin, uddf:<file>, subsurface:<dir>) -> adapters and engines; sync_pairs
 │   │   ├── site_matcher.py    # Dive-site resolution by name / nearest within 200 m
 │   │   ├── mapping/           # Declarative JSONPath mapping files
@@ -50,6 +53,7 @@ This document provides a comprehensive overview of the `dive_sync` project. It i
 │   ├── test_sync.py           # Sync logic and engine tests
 │   ├── test_mock_sync.py      # Dry-run and offline sync tests
 │   ├── test_scheduler.py      # Scheduler extraction unit tests
+│   ├── test_convert_*.py      # One module per src/core/convert file (fit, formats, ssrf, ssrf_reader, enrich); test_ssi.py for services/ssi.py; the page itself is in test_desktop_qt.py
 │   └── test_web_api.py        # Status page API endpoint integration tests
 ├── data/                      # DATA_DIR when unset (auto-created); layout.py
 │   ├── garmin/<account>/      # data/ (cached dive JSON), fit/ (.fit files), tokens/ (login tokens)

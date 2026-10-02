@@ -15,7 +15,7 @@ from datetime import datetime
 
 import pytest
 
-from src.core.convert.fit_reader import FitReadError, NotADiveError, read_fit, zone_name
+from src.core.convert.fit_reader import FitReadError, NotADiveError, activity_id_from_name, read_fit, zone_name
 from src.core.models import EVENT_ALERT, EVENT_GAS_SWITCH, DiveEvent, UnifiedDive
 
 DATA = os.path.join(os.path.dirname(__file__), "data", "garmin_fit")
@@ -266,6 +266,51 @@ def test_bytes_and_connect_zip_read_the_same(tmp_path):
     from_zip = read_fit(str(zipped))
     assert from_zip.external_ids == {"garmin": "24449823352"}
     assert from_zip.model_copy(update={"external_ids": {}}) == from_path
+
+
+@fixtures
+def test_connect_named_files_give_the_activity_id(tmp_path):
+    """The files as Connect exports them (I9 follow-up): ``<id>.zip`` holding
+    ``<id>_ACTIVITY.fit``, the member alone, or the zip renamed - the id is
+    taken from whichever name holds it. A file renamed by its dive number
+    (``515.fit``) holds no id."""
+    raw = open(SINGLE_GAS, "rb").read()
+    member = tmp_path / "22569827629_ACTIVITY.fit"
+    member.write_bytes(raw)
+    assert read_fit(str(member)).external_ids == {"garmin": "22569827629"}
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("22569827629_ACTIVITY.fit", raw)
+    connect = tmp_path / "22569827629.zip"
+    connect.write_bytes(buffer.getvalue())
+    assert read_fit(str(connect)).external_ids == {"garmin": "22569827629"}
+    # the zip renamed: the member's name still carries the id; the bytes alone too
+    renamed = tmp_path / "phuket day 2.zip"
+    renamed.write_bytes(buffer.getvalue())
+    assert read_fit(str(renamed)).external_ids == {"garmin": "22569827629"}
+    assert read_fit(buffer.getvalue()).external_ids == {"garmin": "22569827629"}
+    # a short all-digit name is a dive number, not an id
+    short = tmp_path / "515.fit"
+    short.write_bytes(raw)
+    assert read_fit(str(short)).external_ids == {}
+
+
+@pytest.mark.parametrize("names, expected", [
+    (("38_2026-08-29_095611_24449823373.fit",), "24449823373"),
+    (("22569827629.zip",), "22569827629"),
+    (("22569827629_ACTIVITY.fit",), "22569827629"),
+    (("22569827629_activity.FIT",), "22569827629"),
+    (("/Users/me/DivingMedia/20260829_Phuket/logs/22569827629.zip",), "22569827629"),
+    (("phuket.zip", "22569827629_ACTIVITY.fit"), "22569827629"),
+    (("28_2026-06-27_1124_24449823352.zip", "22569827629_ACTIVITY.fit"), "24449823352"),   # the first name that has one
+    (("515.fit",), None),
+    (("20260829_Phuket.zip",), None),       # a date, not an id
+    (("dive_22569827629.fit",), None),
+    ((None, "", "two_tanks.fit"), None),
+    ((), None),
+])
+def test_activity_id_from_name(names, expected):
+    assert activity_id_from_name(*names) == expected
 
 
 # --- synthetic files ----------------------------------------------------------

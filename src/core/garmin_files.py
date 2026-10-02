@@ -25,7 +25,7 @@ import os
 import re
 import struct
 import zipfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core import layout
 
@@ -114,13 +114,20 @@ def fit_index(username: Optional[str] = None, base_dir: Optional[str] = None) ->
 def extract_fit(data: bytes) -> bytes:
     """Garmin's "original" download is a zip holding the .fit; older or
     odd endpoints hand the bare file back. Either way, the FIT bytes."""
+    return extract_fit_named(data)[0]
+
+
+def extract_fit_named(data: bytes) -> Tuple[bytes, Optional[str]]:
+    """`extract_fit` with the name of the zip member taken (Connect names it
+    ``<activity id>_ACTIVITY.fit``, which the Convert page reads the id
+    from); None for a bare FIT."""
     if data[:2] != b"PK":
-        return data
+        return data, None
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         names = [n for n in archive.namelist() if n.lower().endswith(".fit")] or archive.namelist()
         if not names:
             raise ValueError("Garmin returned an empty archive")
-        return archive.read(names[0])
+        return archive.read(names[0]), os.path.basename(names[0])
 
 
 def save_fit(data: bytes, stem: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> str:
