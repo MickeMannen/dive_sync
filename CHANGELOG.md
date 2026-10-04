@@ -4,16 +4,13 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
-## Unreleased
+## 0.4.2 - 2026-10-04
 
 - Convert page: a new **Open Cached** button next to Open files… opens the
-  same dialog straight in the `.fit` files this app downloaded from Garmin
-  Connect for the Garmin page's account - a folder inside the app's data
-  area that is hard to find by hand. Opening from there does not change the
-  folder the Open and Save dialogs remember, so a Save still lands where
-  your own files are. The button is off, with a tip saying why, until a
-  Garmin account is set up and the Garmin page's Download dives has cached
-  something.
+  `.fit` files this app has downloaded from Garmin Connect for your Garmin
+  account, a folder that is hard to find by hand. Save dialogs still open
+  in your own folder afterwards. The button stays off, with a tip saying
+  why, until the Garmin page's Download dives has cached something.
 
 ## 0.4.1 - 2026-10-02
 
