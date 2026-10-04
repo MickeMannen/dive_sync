@@ -1816,6 +1816,96 @@ def test_convert_controller_enriches_the_fit_fixture(qapp, scratch_data_dir, fak
     assert c.selected["location"] == "" and [t["volume"] for t in c.selected["tanks"]] == ["11.1 l", "11.1 l"]
 
 
+def test_convert_controller_opens_the_garmin_fit_cache(qapp, scratch_data_dir, fake_keyring, tmp_path):
+    """I9c, Open Cached: the folder is the preferred Garmin account's FIT
+    cache under DATA_DIR (`layout.garmin_fit_dir`), as a file URL; the button
+    is off without an account, without the folder and without a .fit file
+    in it, with a tip saying why (the Garmin page's Download dives fills
+    it); `refreshCache` picks up a download made meanwhile; opening from
+    the cache adds the dives like Open but leaves the remembered last folder
+    alone, so a Save after it does not land in the data folder."""
+    import shutil
+    from PySide6.QtCore import QUrl
+    from desktop import accounts, preferences
+    from desktop import credentials as creds_store
+    from desktop.controllers import convert as module
+    from desktop.controllers.convert import ConvertController
+    from src.core import layout
+    from src.core.config import CredentialsModel, GarminCredentials
+    # no account: nothing to open
+    assert module.garmin_cache_folder("") == "" and module.has_fit_files("") is False
+    c = ConvertController()
+    changes = []
+    c.cacheChanged.connect(lambda: changes.append(1))
+    assert c.cacheAccount == "" and c.cacheFolder == "" and c.cacheAvailable is False
+    assert c.cacheTip.startswith("No Garmin account is set up.") and "Download dives" in c.cacheTip
+    # an account, no cache folder yet: off, the tip names the account and the Garmin page
+    creds_store.save_credentials_model(CredentialsModel(garmin=[
+        GarminCredentials(username="live@example.org", password="p"), GarminCredentials(username="test@example.org", password="p")]))
+    accounts.select("dives", "garmin", "test@example.org")
+    c.refreshCache()
+    assert changes == [1]
+    folder = layout.garmin_fit_dir("test@example.org", str(scratch_data_dir))
+    assert folder.startswith(str(scratch_data_dir)) and folder.endswith(os.path.join("garmin", "test@example.org", "fit"))
+    assert module.garmin_cache_folder("test@example.org") == folder
+    assert c.cacheAccount == "test@example.org" and QUrl(c.cacheFolder).toLocalFile() == folder
+    assert not os.path.exists(folder) and c.cacheAvailable is False      # nothing is created
+    assert c.cacheTip == ("Nothing cached yet for test@example.org: the Garmin page's Download dives fetches the .fit files "
+                          "from Garmin Connect, and they are kept here.")
+    # the folder without a .fit file is still off; one .fit turns it on
+    os.makedirs(folder)
+    with open(os.path.join(folder, "notes.txt"), "w") as f:
+        f.write("x")
+    assert c.cacheAvailable is False
+    source = os.path.join(FIT_FIXTURES, "two_tanks.fit")
+    cached_fit = os.path.join(folder, "38_2026-08-29_095611_24449823373.FIT")
+    if os.path.exists(source):
+        shutil.copy(source, cached_fit)
+    else:
+        with open(cached_fit, "wb") as f:
+            f.write(b"not a fit")                 # enough for the button; the read is not what this checks
+    c.refreshCache()
+    assert c.cacheAvailable is True and module.has_fit_files(folder) is True
+    assert c.cacheTip == ("Opens the .fit files this app downloaded from Garmin Connect (the Garmin page's dives) "
+                          "for test@example.org. The dives are added to the list.")
+    # the other account's cache is another folder
+    accounts.select("dives", "garmin", "live@example.org")
+    c.refreshCache()
+    assert QUrl(c.cacheFolder).toLocalFile() == layout.garmin_fit_dir("live@example.org", str(scratch_data_dir))
+    assert c.cacheAvailable is False
+    accounts.select("dives", "garmin", "test@example.org")
+    c.refreshCache()
+    # opening from the cache: the dives are added, the last folder is not the cache
+    own = tmp_path / "own"
+    own.mkdir()
+    preferences.set_convert_folder(str(own))
+    cached_ssrf = os.path.join(folder, "copy.ssrf")      # the dialog's filters are the Open dialog's: any format opens
+    shutil.copy(os.path.join(FIXTURES, "ssrf", "handwritten.ssrf"), cached_ssrf)
+    c.openCachedFiles([_file_url(cached_ssrf)])
+    assert c.busy
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.diveCount == 5 and c.files == ["copy.ssrf"] and c.message.startswith("5 dives from 1 file.")
+    assert preferences.get_convert_folder("") == str(own) and QUrl(c.dialogFolder).toLocalFile() == str(own)
+    assert c.suggestedFileUrl("uddf").startswith(QUrl.fromLocalFile(str(own)).toString())
+    # Open (the plain one) still remembers; a cancelled cache dialog does nothing
+    c.openFiles([_file_url(os.path.join(FIXTURES, "ssrf", "synthetic.ssrf"))])
+    assert wait_until(qapp, lambda: not c.busy)
+    assert preferences.get_convert_folder("") == os.path.join(FIXTURES, "ssrf")
+    c.openCachedFiles([])
+    assert not c.busy and preferences.get_convert_folder("") == os.path.join(FIXTURES, "ssrf")
+    # a cached FIT read from there is filled from the same account's cache (I9) like any other
+    if os.path.exists(source):
+        from src.core import garmin_files
+        from tests.test_convert_enrich import cache_payload
+        garmin_files.write_cached(layout.dives_dir("garmin", "test@example.org", str(scratch_data_dir)),
+                                  cache_payload(24449823373, location="House Reef"))
+        c.clear()
+        c.openCachedFiles([_file_url(cached_fit)])
+        assert wait_until(qapp, lambda: not c.busy)
+        assert c.diveCount == 1 and c.selected["location"] == "House Reef"
+        assert preferences.get_convert_folder("") == os.path.join(FIXTURES, "ssrf")
+
+
 def test_convert_controller_reports_unreadable_files(qapp, scratch_data_dir, fake_keyring, tmp_path):
     bad = tmp_path / "notes.txt"
     bad.write_text("not a dive")
@@ -1924,6 +2014,28 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     QMetaObject.invokeMethod(box, "click")
     wait(qapp, 100)
     assert c.enrichFromCache is True and box.property("checked") is True
+    # Open Cached (I9c): off without a Garmin account, the tip says so; a cached .fit
+    # of a configured account turns it on when the page is shown again
+    cached = page.findChild(QObject, "openCachedButton")
+    assert cached is not None and cached.property("text") == "Open Cached" and cached.property("enabled") is False
+    assert c.cacheAvailable is False and "Download dives" in c.cacheTip
+    from desktop import accounts
+    from desktop import credentials as creds_store
+    from src.core import layout
+    from src.core.config import CredentialsModel, GarminCredentials
+    creds_store.save_credentials_model(CredentialsModel(garmin=[GarminCredentials(username="me@example.org", password="p")]))
+    accounts.select("dives", "garmin", "me@example.org")
+    fit_folder = layout.garmin_fit_dir("me@example.org", str(scratch_data_dir))
+    os.makedirs(fit_folder)
+    with open(os.path.join(fit_folder, "1_2026-01-01_100000_1.fit"), "wb") as f:
+        f.write(b"x")
+    assert cached.property("enabled") is False                                    # not re-read until the page is shown
+    root.setProperty("currentSection", sections.index("Settings"))
+    wait(qapp, 150)
+    root.setProperty("currentSection", sections.index("Convert"))
+    wait(qapp, 150)
+    assert cached.property("enabled") is True and c.cacheAvailable is True
+    assert c.cacheTip.startswith("Opens the .fit files this app downloaded from Garmin Connect") and "me@example.org" in c.cacheTip
     assert c.ssiEnabled is ssi_on
     assert page.findChild(QObject, "sendToSsiButton").property("visible") is ssi_on
     assert page.findChild(QObject, "ssiSection").property("visible") is False     # nothing planned yet, either way

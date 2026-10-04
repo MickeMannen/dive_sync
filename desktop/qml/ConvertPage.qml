@@ -13,14 +13,19 @@ import QtQuick.Dialogs
 // the name holds none) gets its site, buddy, notes, weight, visibility and
 // tank volumes from there (I9, the checkbox, on by default). The list is a
 // working list (I9b): Open adds to it, Remove (or Delete/Backspace) takes
-// the selected dives off it, Clear empties it. No sync account is involved;
-// nothing is written but the files chosen.
+// the selected dives off it, Clear empties it. "Open Cached" (I9c) is the
+// same Open dialog started in the app's Garmin FIT cache - the files the
+// Garmin page downloaded, in a data folder the diver would not find by hand;
+// it does not become the remembered last folder. No sync account is
+// involved; nothing is written but the files chosen.
 ColumnLayout {
     id: page
     objectName: "convertPage"
     spacing: 12
     readonly property var sel: convertController.selected
     readonly property bool hasDive: !!sel.date_time
+    // dives downloaded on the Garmin page meanwhile enable Open Cached
+    onVisibleChanged: if (visible) convertController.refreshCache()
 
     // A read-only value with its label above; hidden when empty, so the grid
     // shows only what the file holds.
@@ -77,6 +82,15 @@ ColumnLayout {
                 enabled: !convertController.busy
                 Tip { text: "Garmin .fit files or Connect's \"export original\" zip, UDDF and Subsurface (.ssrf) files; several at once. The dives are added to the list."; visible: parent.hovered }
                 onClicked: openDialog.open()
+            },
+            Button {
+                text: "Open Cached"
+                objectName: "openCachedButton"
+                enabled: !convertController.busy && convertController.cacheAvailable
+                // a HoverHandler, not hovered: the tip explains the button when it is off too
+                Tip { text: convertController.cacheTip; visible: cachedHover.hovered }
+                HoverHandler { id: cachedHover }
+                onClicked: cachedDialog.open()
             },
             CheckBox {
                 objectName: "enrichCheckBox"
@@ -595,6 +609,16 @@ ColumnLayout {
         nameFilters: convertController.openNameFilters
         currentFolder: convertController.dialogFolder
         onAccepted: convertController.openFiles(selectedFiles)
+    }
+    // Open Cached (I9c): the same dialog in the Garmin FIT cache of the
+    // Garmin page's account; opening from there leaves the last folder alone.
+    FileDialog {
+        id: cachedDialog
+        title: "Open cached Garmin dive files"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: convertController.openNameFilters
+        currentFolder: convertController.cacheFolder
+        onAccepted: convertController.openCachedFiles(selectedFiles)
     }
     FileDialog {
         id: saveDialog

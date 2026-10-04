@@ -26,6 +26,13 @@ The list is a working list (I9b): Open adds to it (a dive already loaded,
 from the same file or with the same start and number, is skipped), Remove
 takes the selected dives off it, Clear empties it; the files on disk are
 never touched.
+
+"Open Cached" (I9c) is the same Open dialog started in the Garmin FIT cache
+of the preferred account (`layout.garmin_fit_dir`, under DATA_DIR - a folder
+the diver would not find by hand); it leaves the remembered last folder
+alone, so a Save after it does not land inside the app's data folder. The
+button is off without an account or a `.fit` file in the folder; the page
+re-checks when it is shown.
 """
 from __future__ import annotations
 
@@ -83,6 +90,25 @@ def preferred_garmin_account() -> str:
     except Exception as e:  # no credentials at all: not a reason to skip the cache
         logger.debug("No preferred Garmin account: %s", e)
         return ""
+
+
+def garmin_cache_folder(account: str = "") -> str:
+    """The folder holding the ``.fit`` files the app downloaded for a Garmin
+    account (`layout.garmin_fit_dir`, under DATA_DIR); "" without an account.
+    Nothing is created: the Garmin page's Download dives fills it."""
+    return layout.garmin_fit_dir(account) if account else ""
+
+
+def has_fit_files(folder: str) -> bool:
+    """Whether ``folder`` exists and holds at least one ``.fit`` file."""
+    if not folder or not os.path.isdir(folder):
+        return False
+    try:
+        with os.scandir(folder) as entries:
+            return any(e.is_file() and e.name.lower().endswith(".fit") for e in entries)
+    except OSError as e:
+        logger.debug("Cannot list %s: %s", folder, e)
+        return False
 
 
 def _num(value: Optional[float], unit: str = "", digits: int = 1) -> str:
@@ -224,6 +250,7 @@ class ConvertController(QObject):
     messageChanged = Signal()
     busyChanged = Signal()
     folderChanged = Signal()
+    cacheChanged = Signal()        # the Open Cached button (I9c)
     enrichChanged = Signal()       # the checkbox
     ssiChanged = Signal()          # login, plan, results, sites, message
     ssiBusyChanged = Signal()
@@ -366,6 +393,46 @@ class ConvertController(QObject):
             preferences.set_convert_folder(folder)
             self.folderChanged.emit()
 
+    # -- the Garmin FIT cache (I9c) --------------------------------------------
+
+    @Property(str, notify=cacheChanged)
+    def cacheAccount(self) -> str:
+        """The Garmin account whose FIT cache Open Cached shows: the one the
+        Garmin dives page works with (`preferred_garmin_account`); "" with none."""
+        return preferred_garmin_account()
+
+    @Property(str, notify=cacheChanged)
+    def cacheFolder(self) -> str:
+        """That account's FIT cache folder as a file URL for the dialog's
+        ``currentFolder``; "" without an account."""
+        folder = garmin_cache_folder(self.cacheAccount)
+        return QUrl.fromLocalFile(folder).toString() if folder else ""
+
+    @Property(bool, notify=cacheChanged)
+    def cacheAvailable(self) -> bool:
+        """Whether Open Cached has anything to open: an account, and a
+        ``.fit`` file in its cache folder."""
+        return has_fit_files(garmin_cache_folder(self.cacheAccount))
+
+    @Property(str, notify=cacheChanged)
+    def cacheTip(self) -> str:
+        """The button's help: what it opens when it can, else why it is off."""
+        account = self.cacheAccount
+        if not account:
+            return ("No Garmin account is set up. Open Cached opens the .fit files this app downloads from "
+                    "Garmin Connect; add an account on the Settings page and use the Garmin page's Download dives.")
+        if not self.cacheAvailable:
+            return (f"Nothing cached yet for {account}: the Garmin page's Download dives fetches the .fit files "
+                    "from Garmin Connect, and they are kept here.")
+        return (f"Opens the .fit files this app downloaded from Garmin Connect (the Garmin page's dives) "
+                f"for {account}. The dives are added to the list.")
+
+    @Slot()
+    def refreshCache(self) -> None:
+        """Re-read the cache state (the page calls it when shown, so dives
+        downloaded on the Garmin page meanwhile enable the button)."""
+        self.cacheChanged.emit()
+
     def _set_message(self, text: str, save_warnings: Optional[List[str]] = None) -> None:
         self._message = text
         self._save_warnings = list(save_warnings or [])
@@ -379,7 +446,18 @@ class ConvertController(QObject):
     def openFiles(self, urls) -> None:
         """Read every file picked in the Open dialog (several at once, Q6)
         and add their dives to the list (I9b); a dive already in it is
-        skipped and counted in the message."""
+        skipped and counted in the message. The files' folder becomes the
+        one the dialogs open in next."""
+        self._open(urls, remember=True)
+
+    @Slot("QVariantList")
+    def openCachedFiles(self, urls) -> None:
+        """`openFiles` for the Open Cached dialog (I9c): the same read, but
+        the app's cache folder is not remembered as the last folder used,
+        so a Save after it still opens where the diver's own files are."""
+        self._open(urls, remember=False)
+
+    def _open(self, urls, remember: bool) -> None:
         paths = [local_path(u) for u in urls or []]
         paths = [p for p in paths if p]
         if not paths or self._busy:
@@ -399,7 +477,8 @@ class ConvertController(QObject):
             result, cached = outcome
             self._set_busy(False)
             self._apply_read(result, cached, append=True)
-            self._remember_folder(paths[0])
+            if remember:
+                self._remember_folder(paths[0])
 
         def fail(text):
             self._set_busy(False)
