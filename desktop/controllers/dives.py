@@ -23,6 +23,7 @@ from desktop import accounts, credentials, preferences
 from desktop.jobs import Worker
 from src.core import dive_cache, scheduler
 from src.core import units as core_units
+from src.core.convert import profile
 from desktop.controllers.editing import display_number, js_number, si_number  # shared with the Dive edit page (I14)
 
 logger = logging.getLogger("dive_sync.desktop.dives")
@@ -496,6 +497,7 @@ class DivesController(QObject):
         self._live_known: Optional[Dict[str, float]] = None
         self._live_account: Optional[str] = None
         self._selected: Dict[str, Any] = {}
+        self._profile = None                    # the selected dive's samples as a UnifiedDive, for sampleDetails (I19)
         # filename -> the form's values brought back to SI (_si_fields): what
         # the overlay formats and the save sends
         self._pending: Dict[str, Dict[str, Any]] = {}
@@ -811,6 +813,7 @@ class DivesController(QObject):
         if staged:
             # the form shows the dive as edited, not as stored
             self._selected = dict(self._selected, **self._staged_as_row(staged), pending=True)
+        self._profile = None
         if self._selected.get("filename"):
             try:
                 self._selected["samples"] = dive_cache.get_samples(self.service, self._selected["filename"],
@@ -818,7 +821,22 @@ class DivesController(QObject):
             except Exception as e:
                 logger.warning("Failed to load samples for %s: %s", self._selected["filename"], e)
                 self._selected["samples"] = []
+            # the chart's hover (I19) reads one sample at a time from this bare dive;
+            # a cache holds depth, temperature and time only, so no ticks and no band
+            self._profile = profile.dive_from_samples(self._selected["samples"])
+            self._selected["markers"] = profile.gas_switch_markers(self._profile)
+            self._selected["ceiling"] = profile.ceiling_series(self._profile)
         self.selectedChanged.emit()
+
+    @Slot(int, result="QVariantMap")
+    def sampleDetails(self, index: int):
+        """What the profile chart shows for sample ``index`` of the selected
+        dive under the mouse (I19, ``profile.sample_details`` in the current
+        unit system): time, depth and temperature - all a service cache
+        holds. ``{}`` with no dive selected."""
+        if self._profile is None:
+            return {}
+        return profile.sample_details(self._profile, int(index), self._system())
 
     @Slot("QVariantList")
     def setVisibleColumns(self, keys) -> None:

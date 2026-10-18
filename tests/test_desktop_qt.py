@@ -4209,3 +4209,273 @@ def test_ssi_slots_refuse_while_the_switch_is_off(qapp, scratch_data_dir, fake_k
     assert len(refused) == 8 and all("ssi.UPLOAD_ENABLED" in m for m in refused)
     for action in ("prepareSsi", "downloadSites", "sendToSsi", "searchSites", "setSite", "saveSsi", "testSsi", "clearSsi"):
         assert any(action in m for m in refused), action
+
+
+# ---------------------------------------------------------------- I19: the profile hover
+
+def _chart_view(qapp, tmp_path, provider=None, samples=None, markers=(), ceiling=()):
+    """ProfileChart.qml alone in a QQuickView (the real window the mouse and
+    key events go to), with ``provider`` (a controller with sampleDetails)
+    as its details provider when given."""
+    from PySide6.QtCore import QObject, QPoint, QUrl
+    from PySide6.QtQuick import QQuickView
+    from PySide6.QtTest import QTest
+    from desktop.app import QML_DIR
+    wrapper = tmp_path / "ChartHost.qml"
+    wrapper.write_text(
+        'import QtQuick\nimport "%s"\n'
+        'Item { width: 400; height: 220\n'
+        '  ProfileChart { objectName: "chart"; width: 400\n'
+        '    detailsProvider: %s\n'
+        '    samples: %s; markers: %s; ceiling: %s } }\n'
+        % (QUrl.fromLocalFile(QML_DIR).toString(),
+           "function (i) { return provider.sampleDetails(i) }" if provider is not None else "null",
+           json.dumps(samples or []), json.dumps(list(markers)), json.dumps(list(ceiling))))
+    view = QQuickView()
+    view.engine().addImportPath(QML_DIR)
+    warnings = []
+    view.engine().warnings.connect(lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    if provider is not None:
+        view.rootContext().setContextProperty("provider", provider)
+    view.setSource(QUrl.fromLocalFile(str(wrapper)))
+    assert view.status() == QQuickView.Status.Ready, [str(e.toString()) for e in view.errors()]
+    view.resize(400, 220)
+    view.show()
+    wait(qapp, 150)
+    chart = view.rootObject().findChild(QObject, "chart")
+    # QTest skips a move to where it believes the mouse already is (the last
+    # test's window had the same geometry): park it outside the plot first
+    QTest.mouseMove(view, QPoint(2, 2))
+    wait(qapp, 20)
+    return view, chart, warnings
+
+
+def _plot_point(chart, fraction):
+    """The window point over the plot at ``fraction`` of its width."""
+    from PySide6.QtCore import QObject, QPointF
+    plot = chart.findChild(QObject, "profilePlot")
+    return plot.mapToScene(QPointF(chart.property("padLeft") + chart.property("plotW") * fraction, 60)).toPoint()
+
+
+def _variant(value):
+    """A QML ``var`` property as Python: a QJSValue converted, a plain value as is."""
+    return value.toVariant() if hasattr(value, "toVariant") else value
+
+
+def _lines(chart):
+    return list(_variant(chart.property("tooltipLines")))
+
+
+def test_convert_controller_sample_details_markers_and_ceiling(qapp, scratch_data_dir, fake_keyring):
+    """``sampleDetails`` gives one sample's lines in the current unit system
+    (the units switch re-reads them), and ``selected`` carries the chart's
+    gas-switch markers and deco ceiling (metres) for the selected dive."""
+    from desktop.controllers.convert import ConvertController
+    from desktop.controllers.units import UnitsController
+    from src.core.convert.formats import ReadResult
+    from tests.test_convert_profile import _deco_dive
+    units = UnitsController()
+    c = ConvertController(units=units)
+    assert c.sampleDetails(0) == {}                       # no dive
+    c._apply_read(ReadResult(dives=[_deco_dive()], files=[("/x/deco.uddf", "uddf")]))
+    sel = c.selected
+    assert sel["markers"] == [{"time": 1200, "label": "EAN50"}]
+    assert sel["ceiling"] == [{"time": 900, "depth": 6.0}, {"time": 1200, "depth": 6.0}, {"time": 1500, "depth": 0.0}]
+    assert sel["samples"][1] == {"time": 600, "depth": 30.0, "temp": 27.5}   # the chart's samples are unchanged
+    d = c.sampleDetails(1)
+    assert d["lines"] == ["10:00", "30.0 m", "27.5 °C", "NDL 14 min", "Air (Back gas)", "Back gas 180 bar", "Tank 2 200 bar",
+                          "CNS 12 %", "PO2 0.84 bar", "HR 92 bpm", "Gas time 91 min"]
+    assert c.sampleDetails(2)["deco"] == "Deco: stop 6 m for 3 min, TTS 12 min"
+    units.setUnits("imperial")
+    d = c.sampleDetails(1)
+    assert d["depth"] == "98 ft" and d["temp"] == "82 °F" and d["tanks"] == ["Back gas 2611 psi", "Tank 2 2901 psi"]
+    assert c.sampleDetails(2)["deco"] == "Deco: stop 20 ft for 3 min, TTS 12 min"
+    assert c.sampleDetails(99) == {} and c.sampleDetails(-1) == {}
+    units.setUnits("metric")
+    c.clear()
+    assert c.sampleDetails(1) == {}
+
+
+def test_profile_chart_hover_pin_keys_and_markers(qapp, scratch_data_dir, fake_keyring, tmp_path):
+    """Real mouse and key events on the chart: the mouse over the plot picks
+    the nearest sample (line, dot and the tooltip with the controller's
+    lines); a click pins it so a later move changes nothing, a second click
+    or Esc unpins; Right/Left step one sample (Shift: ten) once the chart
+    has focus, pinning; the tooltip flips to the left of the cursor near
+    the right edge and stays inside the plot; the gas-switch markers and
+    the ceiling band draw without warnings."""
+    from PySide6.QtCore import QObject, Qt
+    from PySide6.QtTest import QTest
+    from desktop.controllers.convert import ConvertController
+    from src.core.convert.formats import ReadResult
+    from tests.test_convert_profile import _deco_dive
+    c = ConvertController()
+    c._apply_read(ReadResult(dives=[_deco_dive()], files=[("/x/deco.uddf", "uddf")]))
+    sel = c.selected
+    view, chart, warnings = _chart_view(qapp, tmp_path, c, sel["samples"], sel["markers"], sel["ceiling"])
+    line, dot, pin_mark, tip = (chart.findChild(QObject, n) for n in ("cursorLine", "cursorDot", "pinMark", "sampleTip"))
+    assert chart.property("activeIndex") == -1 and not line.property("visible") and not tip.property("visible")
+    # hover a third of the way in: the sample at 600 s (of 0..1800)
+    QTest.mouseMove(view, _plot_point(chart, 1 / 3))
+    wait(qapp, 50)
+    assert chart.property("hoverIndex") == 1 and chart.property("activeIndex") == 1 and not chart.property("pinned")
+    assert line.property("visible") and dot.property("visible") and tip.property("visible") and not pin_mark.property("visible")
+    assert _lines(chart) == c.sampleDetails(1)["lines"]
+    assert _lines(chart)[:4] == ["10:00", "30.0 m", "27.5 °C", "NDL 14 min"]
+    assert tip.property("x") > line.property("x")                         # right of the cursor
+    # click pins; the mouse moving on changes nothing shown
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, _plot_point(chart, 1 / 3))
+    wait(qapp, 50)
+    assert chart.property("pinned") and chart.property("pinnedIndex") == 1 and pin_mark.property("visible")
+    assert chart.property("activeFocus")
+    QTest.mouseMove(view, _plot_point(chart, 0.95))
+    wait(qapp, 50)
+    assert chart.property("hoverIndex") == 5 and chart.property("activeIndex") == 1 and _lines(chart)[0] == "10:00"
+    # the arrow keys step from the pinned sample and keep it pinned
+    QTest.keyClick(view, Qt.Key_Right)
+    wait(qapp, 30)
+    assert chart.property("activeIndex") == 2 and chart.property("pinned") and _lines(chart)[3] == "Deco: stop 6 m for 3 min, TTS 12 min"
+    QTest.keyClick(view, Qt.Key_Right, Qt.ShiftModifier)
+    wait(qapp, 30)
+    assert chart.property("activeIndex") == 5                             # clamped at the last sample
+    assert tip.property("x") + tip.property("width") <= 400 and tip.property("x") < line.property("x")   # flipped left
+    assert tip.property("y") >= 0 and tip.property("y") + tip.property("height") <= 160
+    QTest.keyClick(view, Qt.Key_Left, Qt.ShiftModifier)
+    wait(qapp, 30)
+    assert chart.property("activeIndex") == 0
+    QTest.keyClick(view, Qt.Key_Left)
+    wait(qapp, 30)
+    assert chart.property("activeIndex") == 0 and _lines(chart) == ["0:00", "0.0 m", "28.0 °C", "Air (Back gas)"]
+    # Esc unpins: the mouse's own sample shows again
+    QTest.keyClick(view, Qt.Key_Escape)
+    wait(qapp, 30)
+    assert not chart.property("pinned") and chart.property("activeIndex") == 5 and not pin_mark.property("visible")
+    # a click pins, a second click on the chart unpins
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, _plot_point(chart, 0.5))
+    wait(qapp, 30)
+    assert chart.property("pinnedIndex") == 2
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, _plot_point(chart, 0.1))
+    wait(qapp, 30)
+    assert not chart.property("pinned") and chart.property("activeIndex") == 0
+    # leaving the plot clears the hover; a new sample list drops a pin
+    QTest.mouseMove(view, _plot_point(chart, 0.5))
+    wait(qapp, 30)
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, _plot_point(chart, 0.5))
+    wait(qapp, 30)
+    assert chart.property("pinned")
+    chart.setProperty("samples", [{"time": 0, "depth": 0.0}, {"time": 60, "depth": 5.0}])
+    wait(qapp, 30)
+    assert not chart.property("pinned") and chart.property("activeIndex") == -1 and not tip.property("visible")
+    assert warnings == [], warnings
+    view.deleteLater()
+    wait(qapp, 30)
+
+
+def test_profile_chart_without_a_provider_shows_time_and_depth_in_the_axis_units(qapp, tmp_path):
+    """A chart given no ``detailsProvider`` (and no markers or ceiling) still
+    hovers: the sample's time and depth from the samples themselves, in the
+    unit of ``depthScale``."""
+    from PySide6.QtCore import QObject
+    from PySide6.QtTest import QTest
+    from desktop.controllers.units import UnitsController
+    samples = [{"time": 0, "depth": 0.0}, {"time": 1800, "depth": 12.5}, {"time": 3700, "depth": 0.0}]
+    view, chart, warnings = _chart_view(qapp, tmp_path, None, samples)
+    QTest.mouseMove(view, _plot_point(chart, 0.5))
+    wait(qapp, 50)
+    assert chart.property("activeIndex") == 1 and _lines(chart) == ["30:00", "12.5 m"]
+    units = UnitsController()
+    units.setUnits("imperial")
+    chart.setProperty("depthScale", units.scales["depth"])
+    wait(qapp, 30)
+    assert _lines(chart) == ["30:00", "41 ft"]
+    QTest.mouseMove(view, _plot_point(chart, 0.99))
+    wait(qapp, 30)
+    assert _lines(chart) == ["1:01:40", "0 ft"]
+    assert chart.findChild(QObject, "sampleTip").property("visible")
+    assert warnings == [], warnings
+    view.deleteLater()
+    wait(qapp, 30)
+
+
+def test_dives_page_chart_hovers_with_depth_and_temperature_only(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """The dives pages' controller has the same slot: a cache's samples hold
+    depth, temperature and time, so the tooltip there has those three lines
+    (in the chosen units), no markers and no ceiling; the page's chart is
+    wired to it and loads without warnings."""
+    from PySide6.QtCore import QObject
+    from desktop import app as desktop_app
+    from desktop import logging_bridge
+    from desktop.controllers.dives import DivesController
+    from desktop.controllers.units import UnitsController
+    from src.core import dive_cache
+    rows = [{"date": "2026-06-22", "time": "10:00:00", "date_time": "2026-06-22 10:00:00", "filename": "1.json", "max_depth": "12.5"}]
+    samples = [{"time": 0, "depth": 0.0, "temp": 20.0}, {"time": 600, "depth": 12.5, "temp": 19.0}, {"time": 1200, "depth": 0.0, "temp": None}]
+    monkeypatch.setattr(dive_cache, "list_dives", lambda service, *a, **k: [dict(r) for r in rows] if service == "garmin" else [])
+    monkeypatch.setattr(dive_cache, "get_samples", lambda *a, **k: [dict(s) for s in samples])
+    units = UnitsController()
+    c = DivesController("garmin", units=units)
+    assert c.sampleDetails(0) == {}                       # nothing selected
+    c.load()
+    c.select(0)
+    assert c.selected["markers"] == [] and c.selected["ceiling"] == [] and len(c.selected["samples"]) == 3
+    assert c.sampleDetails(1) == {"time": "10:00", "depth": "12.5 m", "temp": "19.0 °C", "lines": ["10:00", "12.5 m", "19.0 °C"]}
+    assert c.sampleDetails(2)["lines"] == ["20:00", "0.0 m"] and c.sampleDetails(3) == {}
+    units.setUnits("imperial")
+    assert c.sampleDetails(1)["lines"] == ["10:00", "41 ft", "66 °F"]
+    units.setUnits("metric")
+    c.select(-1)
+    assert c.sampleDetails(1) == {}
+    # the Garmin Dives page: its chart calls the controller through the provider
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    warnings = []
+    engine = desktop_app.create_engine(controllers, "Garmin Dives", on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    g = controllers["garminDives"]
+    g.select(0)
+    wait(qapp, 100)
+    chart = root.findChild(QObject, "profileChart")
+    assert chart is not None and chart.property("hasProfile") is True
+    chart.setProperty("hoverIndex", 1)
+    wait(qapp, 50)
+    assert _lines(chart) == ["10:00", "12.5 m", "19.0 °C"]
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)
+
+
+def test_dive_edit_page_chart_is_wired_to_the_controller(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """On the Dive edit page the chart's provider is the convert controller
+    and its markers and ceiling follow the selected dive, with no warnings."""
+    from PySide6.QtCore import QObject
+    from desktop import app as desktop_app
+    from desktop import logging_bridge
+    from src.core import dive_cache
+    from src.core.convert.formats import ReadResult
+    from tests.test_convert_profile import _deco_dive
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    warnings = []
+    engine = desktop_app.create_engine(controllers, "Dive edit", on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    c = controllers["convertController"]
+    c._apply_read(ReadResult(dives=[_deco_dive()], files=[("/x/deco.uddf", "uddf")]))
+    wait(qapp, 100)
+    chart = root.findChild(QObject, "convertPage").findChild(QObject, "profileChart")
+    assert chart.property("hasProfile") is True
+    assert list(_variant(chart.property("markers"))) == [{"time": 1200, "label": "EAN50"}]
+    assert len(_variant(chart.property("ceiling"))) == 3
+    chart.setProperty("hoverIndex", 2)
+    wait(qapp, 50)
+    assert _lines(chart)[3] == "Deco: stop 6 m for 3 min, TTS 12 min"
+    controllers["units"].setUnits("imperial")
+    wait(qapp, 100)
+    chart.setProperty("hoverIndex", 2)
+    wait(qapp, 50)
+    assert _lines(chart)[1] == "98 ft"
+    controllers["units"].setUnits("metric")
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)

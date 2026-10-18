@@ -693,7 +693,15 @@ ColumnLayout {
                         }
                     }
                     // the depth profile (ProfileChart.qml, shared with the dives pages)
-                    ProfileChart { objectName: "profileChart"; visible: page.editing; Layout.fillWidth: true; samples: page.editing ? (page.sel.samples || []) : []; depthScale: units.scales.depth }
+                    ProfileChart {
+                        objectName: "profileChart"; visible: page.editing; Layout.fillWidth: true
+                        samples: page.editing ? (page.sel.samples || []) : []
+                        depthScale: units.scales.depth
+                        // the hover tooltip asks the controller for one sample at a time (I19)
+                        markers: page.editing ? (page.sel.markers || []) : []
+                        ceiling: page.editing ? (page.sel.ceiling || []) : []
+                        detailsProvider: function (i) { return convertController.sampleDetails(i) }
+                    }
                     Text {
                         visible: page.editing
                         text: page.sel.sample_count > 0

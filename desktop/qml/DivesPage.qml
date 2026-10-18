@@ -667,7 +667,15 @@ ColumnLayout {
                     }
                 }
                 // The depth profile (ProfileChart.qml, shared with the Convert page)
-                ProfileChart { objectName: "profileChart"; Layout.fillWidth: true; samples: detailCard.sel.samples || []; depthScale: units.scales.depth }
+                ProfileChart {
+                    objectName: "profileChart"; Layout.fillWidth: true
+                    samples: detailCard.sel.samples || []
+                    depthScale: units.scales.depth
+                    // the hover tooltip: time, depth and temperature from the controller (I19)
+                    markers: detailCard.sel.markers || []
+                    ceiling: detailCard.sel.ceiling || []
+                    detailsProvider: function (i) { return controller.sampleDetails(i) }
+                }
             }
         }
     }

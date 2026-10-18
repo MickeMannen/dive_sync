@@ -4,6 +4,20 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
+## Unreleased
+
+- Dive edit page: the depth profile now shows a sample's data under the
+  mouse - a line and a dot on the profile and a tooltip with the time, depth
+  and temperature, the NDL (or, in deco, the next stop and the time to
+  surface), the gas breathed (Air, EAN32, O2, 18/45) and each tank's pressure
+  by tank name, CNS, PO2, setpoint, heart rate and gas time remaining, only
+  the lines the dive computer logged, in the chosen units. A click pins the
+  tooltip (click again or Esc unpins), the Left/Right arrow keys step through
+  the samples (Shift for ten at a time), a gas switch is marked with a tick
+  and the gas name on the profile, and a deco ceiling shades the profile from
+  the surface down to the next stop. The Dives pages' chart hovers too, with
+  the time, depth and temperature their caches hold.
+
 ## 0.4.3 - 2026-10-18
 
 Two big additions: the app can show everything in metric or imperial, and the Convert page has grown into **Dive edit** - edit any dive from a file, write it back as a Garmin `.fit`, and join the logs of a split dive.

@@ -102,7 +102,7 @@ from desktop.jobs import Worker
 from src.core import layout
 from src.core import units as core_units
 from desktop.controllers.editing import display_number, js_number, optional_float, si_number
-from src.core.convert import edit, enrich, fit_merge, formats
+from src.core.convert import edit, enrich, fit_merge, formats, profile
 from src.core.models import KNOWN_DIVE_MODES, KNOWN_WATER_TYPES, UnifiedDive
 
 logger = logging.getLogger("dive_sync.desktop.convert")
@@ -471,6 +471,9 @@ def dive_details(dive: UnifiedDive, source: str = "", enriched: str = "", system
         "tanks": tanks,
         "samples": samples,
         "sample_count": len(samples),
+        # the chart's gas-switch ticks and deco ceiling band (I19); depths in metres, the chart scales
+        "markers": profile.gas_switch_markers(dive),
+        "ceiling": profile.ceiling_series(dive),
         "channels": channels,
         "events": events,
         "event_count": len(dive.events),
@@ -599,6 +602,17 @@ class ConvertController(QObject):
         if 0 <= self._current < len(self._dives):
             return dive_details(self._dives[self._current], self._sources[self._current],
                                 self._enriched_summary(self._current), self._system())
+        return {}
+
+    @Slot(int, result="QVariantMap")
+    def sampleDetails(self, index: int):
+        """What the profile chart shows for sample ``index`` of the selected
+        dive under the mouse (I19): ``profile.sample_details`` in the current
+        unit system - time, depth, temperature, NDL or the deco stop, the
+        active gas, each tank's pressure, CNS, PO2, setpoint, heart rate and
+        gas time, only the lines the sample has. ``{}`` with no dive."""
+        if 0 <= self._current < len(self._dives):
+            return profile.sample_details(self._dives[self._current], int(index), self._system())
         return {}
 
     @Property(bool, notify=enrichChanged)
