@@ -91,7 +91,7 @@ KEPT_MESSAGES = {"file_id", "file_creator", "activity", "session", "lap", "event
 
 
 def _decode_fit(name):
-    pytest.importorskip("garmin_fit_sdk", reason="garmin-fit-sdk is a dev-only dependency (requirements-dev.txt)")
+    pytest.importorskip("garmin_fit_sdk", reason="garmin-fit-sdk is not installed (requirements.txt)")
     from garmin_fit_sdk import Decoder, Stream
 
     path = os.path.join(GARMIN_FIT, name)

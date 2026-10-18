@@ -282,6 +282,47 @@ ColumnLayout {
         }
         Text { visible: text !== ""; text: settingsController.message; color: Theme.muted }
 
+    // The unit system every page shows (Track J, plans/units.md J2): applies
+    // at once and is remembered on this computer; the stored data stays SI.
+    Card {
+        id: unitsCard
+        objectName: "unitsCard"
+        title: "Units"
+        // Two buttons rather than a Repeater over units.systems: a Repeater's
+        // items are not QObject children of the card, so the tests could not
+        // find them. The texts are still the controller's.
+        RadioButton {
+            id: metricRadio
+            objectName: "units-metric"
+            text: units.systems[0].label
+            checked: units.units === units.systems[0].key
+            onClicked: units.setUnits(units.systems[0].key)
+        }
+        RadioButton {
+            id: imperialRadio
+            objectName: "units-imperial"
+            text: units.systems[1].label
+            checked: units.units === units.systems[1].key
+            onClicked: units.setUnits(units.systems[1].key)
+        }
+        // A click writes `checked` and drops the bindings above, so re-assert
+        // them from the controller: the card follows a change made anywhere.
+        Connections {
+            target: units
+            function onUnitsChanged() {
+                metricRadio.checked = units.units === units.systems[0].key
+                imperialRadio.checked = units.units === units.systems[1].key
+            }
+        }
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.muted
+            font.pixelSize: 11
+            text: "Shown values only; dives, files and services stay metric."
+        }
+    }
+
     Card {
         title: "Sync profile"
         Text {

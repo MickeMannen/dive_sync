@@ -87,15 +87,16 @@ def components() -> List[Dict[str, str]]:
     out = [{"name": "Python", "version": platform.python_version()}]
     for label, package in (("Qt for Python (PySide6)", "PySide6"), ("FastAPI", "fastapi"),
                            ("garminconnect", "garminconnect"), ("pydantic", "pydantic"), ("dulwich", "dulwich"),
-                           ("fitdecode", "fitdecode")):
+                           ("fitdecode", "fitdecode"), ("Garmin FIT SDK", "garmin-fit-sdk")):
         version = _version_of(package)
         if version:
             out.append({"name": label, "version": version})
     return out
 
 
-# Work this project leans on for a file format, without using its code:
-# credited on the About pages and in README.md.
+# Work this project leans on for a file format - a reference whose code is
+# not used, or a library under its owner's own terms: credited on the About
+# pages (desktop "With thanks to", web About) and in README.md.
 REFERENCES: List[Dict[str, str]] = [
     {
         "name": "libdivecomputer",
@@ -104,6 +105,14 @@ REFERENCES: List[Dict[str, str]] = [
                 "shearwater_predator_parser.c, re-implemented in Python.",
         "license": "LGPL-2.1, Jef Driesen and contributors",
         "url": "https://github.com/libdivecomputer/libdivecomputer",
+    },
+    {
+        "name": "Garmin FIT SDK",
+        "role": "Garmin's own library for its FIT file format (the garmin-fit-sdk package): the Dive edit page writes a "
+                "Garmin .fit from a dive that did not come from one with its encoder (src/core/convert/fit_writer.py). "
+                "FIT files are read with fitdecode, and a dive opened from a .fit is saved by patching that file.",
+        "license": "Garmin FIT SDK licence - the Flexible and Interoperable Data Transfer (FIT) Protocol License, Garmin International",
+        "url": "https://developer.garmin.com/fit/download/",
     },
 ]
 

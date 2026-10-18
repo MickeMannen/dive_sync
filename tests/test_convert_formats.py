@@ -22,7 +22,9 @@ from src.core.convert.formats import (
     UnsupportedFileError,
     detect_format,
     get_format,
+    list_dive_files,
     open_name_filters,
+    readable_extensions,
     output_file_name,
     output_paths,
     read_file,
@@ -34,7 +36,7 @@ from src.core.convert.formats import (
 )
 from src.core.models import DiveEvent, GasMixture, SampleChannels, UnifiedDive, UnifiedSample
 from src.core.services.uddf import read_uddf
-from tests.test_convert_fit import build_fit, minimal_dive, _file_id, _record, _session
+from tests.test_convert_fit import build_fit, minimal_dive, _dive_summary, _file_id, _record, _session
 from tests.test_uddf import SAMPLE as UDDF_SAMPLE
 
 DATA = os.path.join(os.path.dirname(__file__), "data", "garmin_fit")
@@ -72,11 +74,11 @@ def test_registry_entries():
     ids = [f.id for f in FORMATS]
     assert ids == ["fit", "uddf", "ssrf"]
     fit, uddf, ssrf = (get_format(i) for i in ids)
-    assert (fit.can_read, fit.can_write, fit.extension) == (True, False, ".fit")
-    assert (uddf.can_read, uddf.can_write, uddf.extension) == (True, True, ".uddf")
-    assert (ssrf.can_read, ssrf.can_write, ssrf.extension) == (True, True, ".ssrf")
+    assert (fit.can_read, fit.can_write, fit.extension, fit.patches_source) == (True, True, ".fit", True)   # written by patching (I14b)
+    assert (uddf.can_read, uddf.can_write, uddf.extension, uddf.patches_source) == (True, True, ".uddf", False)
+    assert (ssrf.can_read, ssrf.can_write, ssrf.extension, ssrf.patches_source) == (True, True, ".ssrf", False)
     assert [f.id for f in formats.readable_formats()] == ["fit", "uddf", "ssrf"]
-    assert [f.id for f in formats.writable_formats()] == ["uddf", "ssrf"]
+    assert [f.id for f in formats.writable_formats()] == ["uddf", "ssrf", "fit"]          # the patch writer last
     for f in FORMATS:
         assert all(ext.startswith(".") and ext == ext.lower() for ext in f.extensions)
         assert set(f.ambiguous) <= set(f.extensions) and f.extension not in f.ambiguous
@@ -87,8 +89,9 @@ def test_registry_entries():
 def test_name_filters():
     assert open_name_filters() == ["Dive files (*.fit *.zip *.uddf *.xml *.ssrf)", "Garmin FIT (*.fit *.zip)",
                                    "UDDF (*.uddf *.xml)", "Subsurface (*.ssrf *.xml)", "All files (*)"]
-    assert save_name_filters() == ["UDDF (*.uddf)", "Subsurface (*.ssrf)"]
+    assert save_name_filters() == ["UDDF (*.uddf)", "Subsurface (*.ssrf)", "Garmin FIT (*.fit)"]
     assert save_name_filters("uddf") == ["UDDF (*.uddf)"]
+    assert save_name_filters("fit") == ["Garmin FIT (*.fit)"]                 # never *.zip: a plain .fit comes out
     assert FileFormat("x", "Example", (".a", ".b"), True, True).name_filter == "Example (*.a *.b)"
 
 
@@ -264,6 +267,46 @@ def test_read_files_merges_in_order_and_warns_per_failed_file(tmp_path):
     assert read_files([]).dives == [] and read_files([]).format_id is None
 
 
+def test_list_dive_files_takes_the_top_level_by_extension(tmp_path):
+    """I13, Open folder…: the files directly in the folder whose extension a
+    readable format claims, case-insensitively, in name order; hidden files
+    and subfolders are left alone; a .zip or .xml is listed by its extension
+    alone (read_files says what it really is). The ambiguous extensions are
+    in the list once each."""
+    import shutil
+    assert readable_extensions() == [".fit", ".zip", ".uddf", ".xml", ".ssrf"]      # registry order, each once
+    folder = tmp_path / "logs"
+    folder.mkdir()
+    (folder / "b.uddf").write_text(UDDF_SAMPLE, encoding="utf-8")
+    (folder / "a.ssrf").write_text(SSRF_SAMPLE, encoding="utf-8")
+    (folder / "DIVE.FIT").write_bytes(minimal_dive())                 # upper case: taken
+    (folder / "Zed.xml").write_text("<notes/>", encoding="utf-8")       # by extension only
+    _zip_of({"readme.txt": b"hello"}, folder / "nothing.zip")           # by extension only
+    (folder / "notes.txt").write_text("x")                              # not a dive extension
+    (folder / "README").write_text("x")                                 # no extension
+    (folder / ".hidden.ssrf").write_text(SSRF_SAMPLE, encoding="utf-8") # dot-file: skipped
+    (folder / "fit").mkdir()                                            # a folder named like an extension
+    (folder / "more").mkdir()
+    shutil.copy(folder / "a.ssrf", folder / "more" / "deeper.ssrf")    # a subfolder: not searched
+    files = list_dive_files(folder)
+    assert all(isinstance(f, type(folder)) for f in files)
+    assert [f.name for f in files] == ["a.ssrf", "b.uddf", "DIVE.FIT", "nothing.zip", "Zed.xml"]
+    assert all(f.parent == folder for f in files)
+    assert list_dive_files(str(folder)) == files                         # a plain path works too
+    # what the listing hands on reads the way Open files… does: the two by-extension-only files are warnings
+    result = read_files(files)
+    assert [os.path.basename(path) for path, _fmt in result.files] == ["a.ssrf", "b.uddf", "DIVE.FIT"]
+    assert sorted(w.split(":")[0] for w in result.warnings) == ["Zed.xml", "nothing.zip"]
+    # empty, and not a folder
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert list_dive_files(empty) == []
+    with pytest.raises(NotADirectoryError):
+        list_dive_files(tmp_path / "missing")
+    with pytest.raises(NotADirectoryError):
+        list_dive_files(folder / "a.ssrf")
+
+
 # --- writing --------------------------------------------------------------------
 
 def test_write_uddf_and_read_back(tmp_path):
@@ -315,13 +358,19 @@ def test_describe_drops_matches_what_the_writer_reports(tmp_path):
         assert formats.describe_drops([rich], format_id) == write_file([rich], format_id, tmp_path / f"d.{format_id}")
     assert formats.describe_drops([rich], "uddf")[0] == "UDDF: the time to surface is not written"
     assert formats.describe_drops([], "uddf") == []
-    with pytest.raises(UnsupportedFileError, match="read, not written"):
-        formats.describe_drops([rich], "fit")
+    assert formats.describe_drops([], "fit") == []
+    # a dive with no .fit behind it is encoded (I12): the encoder's drops, the same line the write reports
+    assert formats.describe_drops([rich], "fit") == ["Garmin FIT: not in a .fit, save as UDDF or Subsurface for these: GF99 channel"]
+    assert formats.describe_drops([rich], "fit") == write_file([rich], "fit", tmp_path / "d.fit")
+    assert formats.describe_drops([_dive()], "fit", sources=[""]) == []
 
 
 def test_write_refusals(tmp_path):
-    with pytest.raises(UnsupportedFileError, match="Garmin FIT files are read, not written"):
-        write_file([_dive()], "fit", tmp_path / "x.fit")
+    with pytest.raises(ValueError, match="a .fit holds one dive"):
+        write_file([_dive(), _dive()], "fit", tmp_path / "x.fit", sources=["a.fit", "b.fit"])
+    with pytest.raises(ValueError, match="a .fit holds one dive"):
+        write_file([_dive(), _dive()], "fit", tmp_path / "x.fit")
+    assert not (tmp_path / "x.fit").exists()
     with pytest.raises(UnsupportedFileError):
         write_file([_dive()], "csv", tmp_path / "x.csv")
     with pytest.raises(ValueError, match="no dives"):
@@ -401,6 +450,11 @@ def test_output_file_name():
     assert output_file_name(_dive(), "ssrf") == "2026-09-30 1432 dive 452.ssrf"
     assert output_file_name(_dive(number=None), "uddf") == "2026-09-30 1432.uddf"
     assert output_file_name(_dive(when=datetime(2026, 1, 5, 0, 7), number=1), "uddf") == "2026-01-05 0007 dive 1.uddf"
+    # the patch writer names the copy after the file it patches; a Connect zip's name with .fit
+    assert output_file_name(_dive(), "fit", "/dives/38_2026-08-29_095611_12345678901.fit") == "38_2026-08-29_095611_12345678901 (edited).fit"
+    assert output_file_name(_dive(), "fit", "/dives/12345678901.zip") == "12345678901 (edited).fit"
+    assert output_file_name(_dive(), "fit") == "2026-09-30 1432 dive 452.fit"      # no source known
+    assert output_file_name(_dive(), "uddf", "/dives/x.fit") == "2026-09-30 1432 dive 452.uddf"   # whole-file writers ignore it
     with pytest.raises(UnsupportedFileError):
         output_file_name(_dive(), "csv")
 
@@ -459,3 +513,112 @@ def test_write_each_writes_one_file_per_dive(tmp_path):
     ssrf = write_each([_dive(), _dive(when=datetime(2026, 10, 2, 9, 0))], "ssrf", folder)
     assert [os.path.basename(p) for p in ssrf.paths] == ["2026-09-30 1432 dive 452.ssrf", "2026-10-02 0900 dive 452.ssrf"]
     assert ssrf.warnings == []
+
+
+# --- Save as .fit: the patch writer behind the registry (I14b; the patcher's own tests are in test_convert_fit_patch) ---
+
+def test_cannot_write_reason_for_the_fit_target(tmp_path):
+    """Save as .fit is on for any dive (I12): dives opened from a .fit (or
+    a Connect zip holding one) are patched, the others encoded; only a
+    selection mixing the two kinds is refused, with the button's tip."""
+    fit = tmp_path / "d.fit"
+    fit.write_bytes(minimal_dive())
+    archive = _zip_of({"12345678901_ACTIVITY.fit": minimal_dive()}, tmp_path / "12345678901.zip")
+    (tmp_path / "s.ssrf").write_text(SSRF_SAMPLE)
+    ssrf = str(tmp_path / "s.ssrf")
+    assert formats.source_is("fit", str(fit)) and formats.source_is("fit", archive) and not formats.source_is("fit", ssrf)
+    assert not formats.source_is("fit", "") and not formats.source_is("fit", None) and formats.source_is("ssrf", ssrf)
+    assert formats.source_is("fit", str(tmp_path / "missing.fit")) and formats.source_is("fit", "/x/12345678901.zip")   # a missing file: by its name
+    assert not formats.source_is("fit", str(tmp_path / "missing.ssrf"))
+    assert formats.cannot_write_reason("fit", [str(fit)]) == ""
+    assert formats.cannot_write_reason("fit", [str(fit), archive]) == ""
+    assert formats.cannot_write_reason("fit", [ssrf]) == "" and formats.cannot_write_reason("fit", [ssrf, ""]) == ""
+    assert formats.cannot_write_reason("fit", []) == "" and formats.cannot_write_reason("fit", [""]) == ""
+    assert formats.cannot_write_reason("uddf", [ssrf]) == "" and formats.cannot_write_reason("ssrf", []) == ""
+    mixed = "Save as .fit patches a dive opened from a .fit file and writes any other dive from scratch: select one kind at a time"
+    assert formats.cannot_write_reason("fit", [str(fit), ssrf]) == mixed
+    assert formats.cannot_write_reason("fit", [str(fit), ""]) == mixed
+    with pytest.raises(UnsupportedFileError):
+        formats.cannot_write_reason("csv", [str(fit)])
+
+
+def test_write_file_fit_patches_a_copy_and_never_the_source(tmp_path):
+    """The patch writer: the edited values in a new file, the source byte
+    for byte as it was, the source path refused as the target, the
+    not-in-a-FIT fields in the warnings as one line; originals read again
+    from the source when the caller has none."""
+    from src.core.convert import edit
+    source = tmp_path / "dive.fit"
+    source.write_bytes(minimal_dive())
+    original = read_file(source).dives[0]
+    edited = edit.apply_edits(original, {"dive_number": "99", "location": "Jetty", "buddy": "Kim", "notes": "n", "weight": "3", "visibility": "10"})
+    drops = formats.describe_drops([edited], "fit", sources=[str(source)], originals=[original])
+    assert drops == ["Garmin FIT: not in a .fit, save as UDDF or Subsurface for these: site, buddy, notes, weight, visibility"]
+    assert formats.describe_drops([edited], "fit", sources=[str(source)]) == drops          # originals re-read
+    out = tmp_path / "out" / "dive (edited).fit"
+    assert write_file([edited], "fit", out, sources=[str(source)], originals=[original]) == drops
+    back = read_file(out)
+    assert back.format_id == "fit" and back.dives[0].dive_number == 99 and back.dives[0].location is None
+    assert source.read_bytes() == minimal_dive()
+    with pytest.raises(ValueError, match="is the file the dive was opened from"):
+        write_file([edited], "fit", source, sources=[str(source)], originals=[original])
+    with pytest.raises(ValueError, match="is the file the dive was opened from"):
+        write_file([edited], "fit", str(tmp_path / "." / "dive.fit"), sources=[str(source)])
+    assert source.read_bytes() == minimal_dive()
+    # an unedited dive gives a copy with no warning
+    assert write_file([original], "fit", tmp_path / "copy.fit", sources=[str(source)], originals=[original]) == []
+    assert (tmp_path / "copy.fit").read_bytes() == minimal_dive()
+
+
+def test_write_each_fit_names_the_copies_after_their_files(tmp_path):
+    from src.core.convert import edit
+    a, b = tmp_path / "a.fit", tmp_path / "b.zip"
+    a.write_bytes(minimal_dive())
+    _zip_of({"b_ACTIVITY.fit": build_fit([_file_id(), _session(timer=900.0), _record(0, 1.0), _record(60, 12.0), _dive_summary(number=2)])}, b)
+    result = read_files([a, b])
+    edited = [edit.apply_edits(result.dives[0], {"dive_number": "5"}), edit.apply_edits(result.dives[1], {"dive_number": "6"})]
+    folder = tmp_path / "out"
+    written = write_each(edited, "fit", folder, sources=result.sources, originals=result.dives)
+    assert [os.path.basename(p) for p in written.paths] == ["a (edited).fit", "b (edited).fit"] and written.warnings == []
+    assert [d.dive_number for d in read_files(written.paths).dives] == [5, 6]
+    assert read_file(written.paths[1]).format_id == "fit" and not zipfile.is_zipfile(written.paths[1])   # a plain .fit out of the zip
+    # into the source folder: the (edited) name never collides with the source, and a second run gets (2)
+    again = write_each(edited[:1], "fit", tmp_path, sources=result.sources[:1], originals=result.dives[:1])
+    assert [os.path.basename(p) for p in again.paths] == ["a (edited).fit"] and a.read_bytes() == minimal_dive()
+    again = write_each(edited[:1], "fit", tmp_path, sources=result.sources[:1], originals=result.dives[:1])
+    assert [os.path.basename(p) for p in again.paths] == ["a (edited) (2).fit"]
+
+
+def test_a_dive_from_an_ssrf_is_encoded_as_fit(tmp_path):
+    """A dive read from a .ssrf is saved as .fit by encoding it (I12), the
+    source and originals given or not; it reads back through the registry,
+    and the name is the date one, not "(edited)"."""
+    (tmp_path / "s.ssrf").write_text(SSRF_SAMPLE)
+    ssrf = read_file(tmp_path / "s.ssrf")
+    assert formats.cannot_write_reason("fit", ssrf.sources) == ""
+    assert output_file_name(ssrf.dives[0], "fit", ssrf.sources[0]) == "2026-06-22 0930 dive 1.fit"
+    out = tmp_path / "s.fit"
+    assert write_file(ssrf.dives, "fit", out, sources=ssrf.sources, originals=ssrf.dives) == []
+    back = read_file(out)
+    assert back.format_id == "fit" and back.dives[0].dive_number == 1 and back.dives[0].date_time == datetime(2026, 6, 22, 9, 30)
+    assert back.dives[0].duration == 3120 and back.dives[0].timezone is None
+    assert write_file(ssrf.dives, "fit", tmp_path / "t.fit") == [] and (tmp_path / "t.fit").read_bytes() == out.read_bytes()
+    # one file per dive: the encoded dive beside a patched one, each named its own way
+    (tmp_path / "d.fit").write_bytes(minimal_dive())
+    both = read_files([tmp_path / "s.ssrf", tmp_path / "d.fit"])
+    written = write_each(both.dives, "fit", tmp_path / "out", sources=both.sources, originals=both.dives)
+    assert [os.path.basename(p) for p in written.paths] == ["2026-06-22 0930 dive 1.fit", "d (edited).fit"]
+    assert [d.dive_number for d in read_files(written.paths).dives] == [1, 12]
+
+
+@fixtures
+def test_the_fixture_patched_through_the_registry_round_trips(tmp_path):
+    """The FIT fixture written as .fit through the registry is patched, not
+    encoded: the edits read back and the drops are the patcher's."""
+    from src.core.convert import edit
+    fit = read_file(TWO_TANKS)
+    edited = edit.apply_edits(fit.dives[0], {"gf_high": "90", "buddy": "Kim"})
+    out = tmp_path / "two_tanks (edited).fit"
+    assert write_file([edited], "fit", out, sources=fit.sources, originals=fit.dives) == [
+        "Garmin FIT: not in a .fit, save as UDDF or Subsurface for these: buddy"]
+    assert read_file(out).dives[0].gf_high == 90

@@ -22,7 +22,7 @@ ApplicationWindow {
     color: Theme.bg
 
     readonly property var sections: ["Sync", "Garmin Dives", "Divelogs Dives", "Subsurface Dives",
-                                     "Mapping", "Conflicts", "Convert", "Settings", "About"]
+                                     "Mapping", "Conflicts", "Dive edit", "Settings", "About"]
     property int currentSection: Math.max(0, sections.indexOf(initialSection))
 
     readonly property int unsavedDives: garminDives.pendingCount + divelogsDives.pendingCount + subsurfaceDives.pendingCount
@@ -38,6 +38,9 @@ ApplicationWindow {
         if (mappingController.dirty) {
             close.accepted = false
             leaveDialog.open()
+        } else if (convertController.hasEdits) {
+            close.accepted = false
+            leaveEditsDialog.open()
         } else if (unsavedDives > 0) {
             close.accepted = false
             leaveDivesDialog.open()
@@ -52,6 +55,19 @@ ApplicationWindow {
         anchors.centerIn: Overlay.overlay
         Text { text: "Some dives have unsaved changes. Discard them and quit?"; color: Theme.text }
         onDiscarded: window.quitDiscarding()
+    }
+    // Dive edit (plans/convert.md I15): dives edited on the page and not
+    // saved as a file; like the mapping board, Discard cleans the page and
+    // closes again, so unsaved dives are still asked about after it.
+    Dialog {
+        id: leaveEditsDialog
+        objectName: "leaveEditsDialog"
+        title: "Unsaved dive edits"
+        modal: true
+        standardButtons: Dialog.Discard | Dialog.Cancel
+        anchors.centerIn: Overlay.overlay
+        Text { text: "The Dive edit page has dives with edits not saved to a file. Discard them and quit?"; color: Theme.text }
+        onDiscarded: { leaveEditsDialog.close(); convertController.revertAll(); window.close() }
     }
     Dialog {
         id: leaveDialog
@@ -170,8 +186,9 @@ ApplicationWindow {
                         ConflictsPage { Layout.fillWidth: true; Layout.fillHeight: true }
                     }
                 }
-                // Fills the viewport: the dive list and the detail pane scroll
-                // on their own, the file and save controls stay put.
+                // Dive edit (ConvertPage.qml, "Convert" until I14) fills the
+                // viewport: the dive list and the editor scroll on their own,
+                // the file and save controls stay put.
                 Item {
                     ColumnLayout {
                         anchors { fill: parent; margins: 16 }

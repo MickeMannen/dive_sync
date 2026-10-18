@@ -278,6 +278,12 @@
       <h2>Sync settings</h2>
       <div class="inline-form">
         <label title="Pause between requests to Garmin and Divelogs; raise it if Garmin answers 429 (too many requests)">API cooldown (seconds) <input type="number" step="0.1" id="api-cooldown" min="0"></label>
+        <label title="How this dashboard shows depths, temperatures, weights and visibility (the Conflicts page, test mapping, run history). Your dives, files and the services stay metric whichever you pick; this choice is not part of the sync profile.">Units
+          <select id="units">
+            <option value="metric">Metric (m, bar, °C, L, kg)</option>
+            <option value="imperial">Imperial (ft, psi, °F, cuft, lb)</option>
+          </select>
+        </label>
         <button type="button" id="save-sync-settings">Save</button>
         <span id="sync-settings-message" class="muted"></span>
       </div>

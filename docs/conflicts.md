@@ -1,0 +1,5 @@
+# Conflicts
+
+Every pair's queued conflicts, with the two values side by side and **Keep this** per side. A pick turns its button green and is only staged (click it again to undo); one **Save** button per service that has updates waiting writes them, and the header with the buttons and progress stays in view while a long list scrolls. The app keeps each pair's sync history (links, last sync time, conflicts) per account combination, so a test account never mixes with a live one; boards are shared by all accounts. A conflict over a depth, temperature, weight or visibility shows both values in the units chosen with the **Units** switch on [Settings](settings.md); the pick writes the service's own stored value, whatever is shown.
+
+How a conflict gets queued, and the policies that avoid one, are on the [Mapping](mapping.md#the-mapping-board-fields-rules-templates-and-conflicts) page; the CLI's `--list-conflicts` / `--resolve` are in [Command line](cli.md).

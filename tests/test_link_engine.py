@@ -1210,3 +1210,39 @@ def test_sync_run_reports_real_progress(tmp_path, monkeypatch):
     counted = [s for s in seen if s[1] > 0]
     assert [(done, total) for done, total, _ in counted] == [(0, 2), (1, 2)]
     assert counted[0][2].startswith("New dive") and counted[1][2].startswith("Comparing dive")
+
+
+def test_log_units_hint_converts_the_rule_log_lines_only(tmp_path, caplog):
+    """plans/units.md J6: ``engine.log_units`` (the CLI's --units, the web
+    dashboard's setting through the scheduler) changes how the rule log
+    lines show a quantity, and nothing else: the recorded conflict, the
+    results and the services keep metres."""
+    import logging
+    from src.core.conflicts import ConflictStore
+    links = [FieldLink(id="depth", source=["garmin.max_depth"], target="divelogs.max_depth", conflict="manual"),
+             FieldLink(id="notes", source=["garmin.notes"], target="divelogs.notes", conflict="manual")]
+    g, d = _pair({"max_depth": 30.2, "notes": "A"}, {"max_depth": 30.5, "notes": "B"})
+    engine = _engine(tmp_path, [g], [d], field_links=links)
+    assert engine.log_units == "metric"
+    with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+        engine.run_sync(dry_run=True)
+    lines = [r.getMessage() for r in caplog.records]
+    assert any("(garmin.max_depth=30.2, divelogs.max_depth=30.5)" in l for l in lines)
+    assert any("(garmin.notes='A', divelogs.notes='B')" in l for l in lines)
+
+    caplog.clear()
+    engine.log_units = "imperial"
+    with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+        results = engine.run_sync()          # a real run: the conflicts are stored
+    lines = [r.getMessage() for r in caplog.records]
+    assert any("(garmin.max_depth='99 ft', divelogs.max_depth='100 ft')" in l for l in lines)
+    assert any("(garmin.notes='A', divelogs.notes='B')" in l for l in lines)      # text: as before
+    assert not any("30.2" in l for l in lines if "max_depth" in l)
+    # the data is untouched by the hint
+    depth = next(c for c in results["conflicts"] if c["link_id"] == "depth")
+    assert (depth["source_value"], depth["target_value"]) == (30.2, 30.5)
+    stored = next(c for c in ConflictStore(engine.conflicts_file).load() if c.link_id == "depth")
+    assert (stored.source_value, stored.target_value) == (30.2, 30.5)
+    out = engine.test_mapping()
+    row = next(r for r in out["rows"] if r["link"] == "depth")
+    assert (row["source_value"], row["target_value"]) == (30.2, 30.5)

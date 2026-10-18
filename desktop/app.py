@@ -26,6 +26,7 @@ from desktop.controllers.dives import DivesController
 from desktop.controllers.mapping import MappingController
 from desktop.controllers.settings import SettingsController
 from desktop.controllers.sync import SyncController
+from desktop.controllers.units import UnitsController
 
 QML_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qml")
 APP_NAME = "DiveSync"
@@ -34,22 +35,26 @@ logger = logging.getLogger("dive_sync.desktop.app")
 
 
 def build_controllers(log_queue) -> Dict[str, object]:
+    # the unit system every page shows (Track J); read as `units.units` in
+    # QML, and followed by the dives and Dive edit pages through their controllers
+    units = UnitsController()
     controllers = {
         "syncController": SyncController(log_queue),
-        "garminDives": DivesController("garmin", log_queue),
-        "divelogsDives": DivesController("divelogs", log_queue),
-        "subsurfaceDives": DivesController("subsurface", log_queue),
+        "garminDives": DivesController("garmin", log_queue, units=units),
+        "divelogsDives": DivesController("divelogs", log_queue, units=units),
+        "subsurfaceDives": DivesController("subsurface", log_queue, units=units),
         "settingsController": SettingsController(),
         "mappingController": MappingController(),
-        "conflictsController": ConflictsController(),
-        "convertController": ConvertController(),
+        "conflictsController": ConflictsController(units=units),
+        "convertController": ConvertController(units=units),
         "aboutController": AboutController(),
+        "units": units,
     }
     # An account added or removed in Settings shows up in every picker at once.
     settings = controllers["settingsController"]
     for name in ("syncController", "garminDives", "divelogsDives", "subsurfaceDives"):
         settings.credentialsChanged.connect(controllers[name].reloadAccounts)
-    # the MySSI login saved in Settings is what the Convert page sends with
+    # the MySSI login saved in Settings is what the Dive edit page sends with
     settings.credentialsChanged.connect(controllers["convertController"].reloadSsiLogin)
     return controllers
 

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.core import garmin_files, layout
 from src.core.config import ConfigManager
 from src.core.models import recorded_water_temp
+from src.core import units as core_units
 
 logger = logging.getLogger("dive_sync.dive_cache")
 
@@ -62,27 +63,46 @@ def _format_number(value: Any) -> str:
         return str(value)
 
 
-def _format_water_temp(temp_min: Any, temp_max: Any, temp_avg: Any) -> str:
+def _display_number(kind: str, value: Any, units: str) -> str:
+    """A stored SI number as the text helpers show it: exactly as before in
+    metric (``_format_number``), converted and rounded per the display rule
+    (``src/core/units.py``) in imperial; unparseable text stays as it is."""
+    if core_units.normalize(units) == core_units.METRIC:
+        return _format_number(value)
+    try:
+        return core_units.format_value(kind, float(value), units)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_water_temp(temp_min: Any, temp_max: Any, temp_avg: Any, units: str = core_units.METRIC) -> str:
     """Combines the three temperature readings both services can report into
     one compact display string for the dive list/edit form, e.g.
-    "17-19°C (avg 18°C)". Missing readings are simply omitted."""
+    "17-19°C (avg 18°C)". Missing readings are simply omitted. The readings
+    are °C (SI, as cached); ``units`` picks the system they are shown in -
+    imperial gives whole °F, "63-66°F (avg 64°F)" (plans/units.md J3)."""
+    unit = core_units.temperature_label(units)
     parts = []
     if temp_min not in (None, "") and temp_max not in (None, ""):
-        parts.append(f"{_format_number(temp_min)}-{_format_number(temp_max)}°C")
+        parts.append(f"{_display_number('temperature', temp_min, units)}-{_display_number('temperature', temp_max, units)}{unit}")
     elif temp_min not in (None, ""):
-        parts.append(f"{_format_number(temp_min)}°C")
+        parts.append(f"{_display_number('temperature', temp_min, units)}{unit}")
     elif temp_max not in (None, ""):
-        parts.append(f"{_format_number(temp_max)}°C")
+        parts.append(f"{_display_number('temperature', temp_max, units)}{unit}")
     if temp_avg not in (None, ""):
-        parts.append(f"(avg {_format_number(temp_avg)}°C)")
+        parts.append(f"(avg {_display_number('temperature', temp_avg, units)}{unit})")
     return " ".join(parts)
 
 
-def _format_tanks(tanks: List[Dict[str, Any]]) -> str:
+def _format_tanks(tanks: List[Dict[str, Any]], units: str = core_units.METRIC) -> str:
     """Formats a list of {oxygen, helium, start_pressure, end_pressure,
     volume, tank_name} dicts (one per cylinder) into one display string for
     the dive edit form's read-only "Tanks / Gas" field, e.g.
-    "Tank 1: 21% O2, 12L, 200->50 bar; Tank 2: 32% O2, 50->80 bar"."""
+    "Tank 1: 21% O2, 12L, 200->50 bar; Tank 2: 32% O2, 50->80 bar". Volumes
+    and pressures are litres and bar (SI, as cached); in imperial they show
+    as cubic feet (one decimal) and whole psi, "0.4cuft, 2901->725 psi"."""
+    volume_unit = core_units.volume_label(units)
+    pressure_unit = core_units.pressure_label(units)
     entries = []
     for idx, tank in enumerate(tanks, start=1):
         name = tank.get("tank_name") or f"Tank {idx}"
@@ -98,20 +118,22 @@ def _format_tanks(tanks: List[Dict[str, Any]]) -> str:
 
         volume = tank.get("volume")
         if volume not in (None, ""):
-            bits.append(f"{_format_number(volume)}L")
+            bits.append(f"{_display_number('volume', volume, units)}{volume_unit}")
 
         start_p, end_p = tank.get("start_pressure"), tank.get("end_pressure")
         if start_p not in (None, "") or end_p not in (None, ""):
-            sp = _format_number(start_p) if start_p not in (None, "") else "?"
-            ep = _format_number(end_p) if end_p not in (None, "") else "?"
-            bits.append(f"{sp}->{ep} bar")
+            sp = _display_number("pressure", start_p, units) if start_p not in (None, "") else "?"
+            ep = _display_number("pressure", end_p, units) if end_p not in (None, "") else "?"
+            bits.append(f"{sp}->{ep} {pressure_unit}")
 
         entries.append(f"{name}: {', '.join(bits)}" if bits else name)
     return "; ".join(entries)
 
 
-def _format_sac(tanks: List[Dict[str, Any]], avg_depth: Any, duration_seconds: Any) -> str:
-    """Surface Air Consumption in litres per minute, e.g. "14.2".
+def _format_sac(tanks: List[Dict[str, Any]], avg_depth: Any, duration_seconds: Any,
+                units: str = core_units.METRIC) -> str:
+    """Surface Air Consumption in litres per minute, e.g. "14.2" (or cubic
+    feet per minute with one decimal when ``units`` is imperial, "0.5").
 
     Gas breathed at the surface is ``pressure drop x cylinder volume``, and
     at depth a breath costs the ambient pressure in atmospheres, so::
@@ -149,7 +171,7 @@ def _format_sac(tanks: List[Dict[str, Any]], avg_depth: Any, duration_seconds: A
         return ""
 
     ata = depth / 10.0 + 1.0
-    return f"{litres / (minutes * ata):.1f}"
+    return core_units.format_sac(litres / (minutes * ata), units)
 
 
 def _dives_dirs(service: str, username: Optional[str], base_dir: Optional[str] = None) -> List[str]:
@@ -327,6 +349,8 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
                 "sac": _format_sac(tanks, avg_depth, duration),
                 "water_temp": water_temp,
                 "water_temp_value": water_temp_value,
+                # the three readings in °C, for a display in another unit system
+                "water_temps": [temp_min, temp_max, temp_avg],
                 "tanks": _format_tanks(tanks),
                 "tanks_detail": tanks,
                 "tanks_editable": False,  # Garmin's gas API is read-only (rework.md E4)
@@ -455,6 +479,7 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
                 "sac": _format_sac(tanks, data.get("meandepth"), data.get("duration")),
                 "water_temp": water_temp,
                 "water_temp_value": depthtemp,
+                "water_temps": [depthtemp, None, None],
                 "tanks": _format_tanks(tanks),
                 "tanks_detail": tanks,
                 "tanks_editable": True,
@@ -623,6 +648,8 @@ def _unified_row(data: Dict[str, Any], service: str, filename: str) -> Dict[str,
     date_part, time_part = _split_date_time(date_time)
     weight = data.get("weight")
     visibility = data.get("visibility")
+    # a 0 °C cached before it counted as "not recorded" is shown as none
+    temps = [recorded_water_temp(data.get(k)) for k in ("temp_min", "temp_max", "temp_avg")]
     return {
         "id": str((data.get("external_ids") or {}).get(service) or ""),
         "dive_number": data.get("dive_number") or "",
@@ -633,10 +660,9 @@ def _unified_row(data: Dict[str, Any], service: str, filename: str) -> Dict[str,
         "max_depth": f"{float(data['max_depth']):.2f}" if data.get("max_depth") is not None else "",
         "avg_depth": f"{float(data['avg_depth']):.2f}" if data.get("avg_depth") is not None else "",
         "sac": _format_sac(tanks, data.get("avg_depth"), data.get("duration")),
-        # a 0 °C cached before it counted as "not recorded" is shown as none
-        "water_temp": _format_water_temp(*(recorded_water_temp(data.get(k)) for k in ("temp_min", "temp_max", "temp_avg"))),
-        "water_temp_value": next((t for t in (recorded_water_temp(data.get("temp_avg")), recorded_water_temp(data.get("temp_min")))
-                                  if t is not None), None),
+        "water_temp": _format_water_temp(*temps),
+        "water_temp_value": next((t for t in (temps[2], temps[0]) if t is not None), None),
+        "water_temps": temps,
         "tanks": _format_tanks(tanks),
         "tanks_detail": tanks,
         "tanks_editable": True,

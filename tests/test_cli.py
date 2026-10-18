@@ -114,3 +114,73 @@ def test_test_mapping_is_read_only(tmp_path):
     assert "1 matched" in res.stdout and "kept" in res.stdout and "Read-only" in res.stdout
     assert (tmp_path / "mock" / "divelogs" / "default" / "data" / "1.json").read_text() == before
     assert not (tmp_path / "mock" / "sync" / "sync_state.json").exists()
+
+
+# --- --units (plans/units.md J6) ----------------------------------------------
+
+G_DEEP = {"summary": dict(G1["summary"], summaryDTO={"duration": 2700, "maxDepth": 30.2}), "details": {}}
+D_DEEP = dict(D1, maxdepth=30.5)
+
+
+def _table_lines(stdout):
+    """stdout without the timestamped log lines (the table and the notes)."""
+    import re
+    return [l for l in stdout.splitlines() if not re.match(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+ \[", l)]
+
+
+def test_units_flag_converts_the_conflict_list_and_the_test_mapping(tmp_path):
+    """``--units imperial`` shows a depth conflict and a depth rule's values
+    in feet with the label, found from the catalogue; text is left alone;
+    no flag (and ``--units metric``) prints exactly what it printed before."""
+    _write_mock(tmp_path, [G_DEEP], [D_DEEP])
+    settings = {"sync_filters": {"only_new": False}, "api_cooldown_seconds": 0,
+                "field_links": [{"id": "notes", "source": ["garmin.notes"], "target": "divelogs.notes", "conflict": "manual"},
+                                {"id": "depth", "source": ["garmin.max_depth"], "target": "divelogs.max_depth", "conflict": "manual"}]}
+    (tmp_path / "settings.json").write_text(json.dumps(settings))
+
+    # the rehearsal, before anything is written
+    res = _run(tmp_path, "--test-mapping")
+    assert res.returncode == 0, res.stdout + res.stderr
+    depth_row = next(l for l in _table_lines(res.stdout) if "garmin.max_depth" in l)
+    assert "30.2" in depth_row and "30.5" in depth_row and "ft" not in depth_row
+    # the engine's own log line about the conflict prints the recorded values
+    assert "(garmin.max_depth=30.2, divelogs.max_depth=30.5)" in res.stdout
+    assert _table_lines(_run(tmp_path, "--test-mapping", "--units", "metric").stdout) == _table_lines(res.stdout)
+    res = _run(tmp_path, "--test-mapping", "--units", "imperial")
+    assert res.returncode == 0, res.stdout + res.stderr
+    depth_row = next(l for l in _table_lines(res.stdout) if "garmin.max_depth" in l)
+    assert "99 ft" in depth_row and "100 ft" in depth_row and "30.2" not in depth_row
+    notes_row = next(l for l in _table_lines(res.stdout) if "garmin.notes" in l)
+    assert "garmin notes" in notes_row and "divelogs notes" in notes_row
+    assert "Read-only" in res.stdout
+    # ... and so does the log line, with the flag
+    assert "(garmin.max_depth='99 ft', divelogs.max_depth='100 ft')" in res.stdout
+
+    res = _run(tmp_path, "--full-sync")
+    assert res.returncode == 0, res.stderr
+    assert "Conflicts for manual resolution: 2" in res.stdout
+    assert "(garmin.max_depth=30.2, divelogs.max_depth=30.5)" in res.stdout
+
+    metric = _run(tmp_path, "--list-conflicts")
+    assert metric.returncode == 0, metric.stderr
+    assert "garmin.max_depth=30.2" in metric.stdout and "divelogs.max_depth=30.5" in metric.stdout
+    assert "garmin.notes='garmin notes'" in metric.stdout
+    # the default is metric, and metric is byte-identical to the unflagged run
+    assert _table_lines(_run(tmp_path, "--list-conflicts", "--units", "metric").stdout) == _table_lines(metric.stdout)
+
+    imperial = _run(tmp_path, "--list-conflicts", "--units", "imperial")
+    assert imperial.returncode == 0, imperial.stderr
+    assert "garmin.max_depth=99 ft" in imperial.stdout and "divelogs.max_depth=100 ft" in imperial.stdout
+    assert "30.2" not in imperial.stdout
+    assert "garmin.notes='garmin notes'" in imperial.stdout and "divelogs.notes='divelogs notes'" in imperial.stdout
+    assert "Resolve with: python sync.py --resolve <id> source|target" in imperial.stdout
+    # the flag changes nothing on disk: the conflicts file still holds metres
+    stored = json.loads(next((tmp_path / "mock" / "sync").glob("conflicts*.json")).read_text())
+    assert sorted(c["source_value"] for c in stored["conflicts"] if c["link_id"] == "depth") == [30.2]
+
+
+def test_units_flag_rejects_unknown_values(tmp_path):
+    res = _run(tmp_path, "--units", "bogus", "--list-conflicts")
+    assert res.returncode == 2 and "--units" in res.stderr and "invalid choice" in res.stderr
+    res = _run(tmp_path, "--help")
+    assert res.returncode == 0 and "--units {metric,imperial}" in res.stdout and "imperial (ft, psi" in res.stdout

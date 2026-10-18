@@ -229,6 +229,13 @@ class SyncEngine:
         self._resolving_logins: Set[str] = set()
         self.catalog: Dict[str, FieldSpec] = build_catalog(self.source.field_catalog(), self.target.field_catalog())
         self.conflicts_file = conflicts_path_for(self.state_file)
+        # How this run's log lines show a quantity (plans/units.md J6):
+        # "metric" (the default, the values as recorded) or "imperial" (a
+        # depth, temperature, pressure, volume, weight or visibility with
+        # its label). Set by the CLI's --units and the scheduler from the web
+        # dashboard's setting; only the log text changes, every value the
+        # engine compares, writes and records stays SI.
+        self.log_units: str = "metric"
         self.refresh_pair()
 
     # ------------------------------------------------------------------
@@ -668,6 +675,18 @@ class SyncEngine:
             return f"{len(value)} items"
         return value
 
+    def _shown(self, spec: FieldSpec, field_type: str, value: Any) -> Any:
+        """``_brief`` for the log lines, in ``log_units``: under imperial a
+        number of a quantity field (by the catalogue, src/core/display.py)
+        reads converted with its label (``'99 ft'``); everything else, and
+        everything in metric, is the value as before."""
+        if self.log_units != "metric":
+            from src.core.display import converted_text, quantity_kind
+            text = converted_text(value, field_type, quantity_kind(spec), self.log_units)
+            if text is not None:
+                return text
+        return self._brief(field_type, value)
+
     def _apply_rule(self, active: ActiveRule, a_dive: UnifiedDive, b_dive: UnifiedDive) -> LinkOutcome:
         """Apply one active rule to one matched pair in memory (rework.md G2).
 
@@ -705,7 +724,7 @@ class SyncEngine:
                 part = take_part(rule.take, snd_val)
                 if part is None:
                     logger.info("  %s: %s=%r does not match the 'use only part' pattern, %s left alone [rule %s on %s]",
-                                active.rcv_spec.label, active.sender_key, self._brief(snd_type, snd_val),
+                                active.rcv_spec.label, active.sender_key, self._shown(active.snd_spec, snd_type, snd_val),
                                 active.receiver_key, rule.id, active.receiver)
                     return LinkOutcome("take_unmatched", snd_val, rcv_val, warnings=warnings)
                 snd_val = part
@@ -719,7 +738,7 @@ class SyncEngine:
         snd_empty = is_empty(snd_type, snd_val)
         rcv_empty = is_empty(rcv_type, rcv_val)
         policy = active.policy
-        shown = (self._brief(snd_type, snd_val), self._brief(rcv_type, rcv_val))
+        shown = (self._shown(active.snd_spec, snd_type, snd_val), self._shown(active.rcv_spec, rcv_type, rcv_val))
         label = active.rcv_spec.label
         if policy == "source_wins":
             take = True

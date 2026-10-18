@@ -622,7 +622,9 @@ def test_about_and_version_endpoints(monkeypatch):
     about = c.get("/api/about").json()
     assert about["license_name"] == "MIT" and "Permission is hereby granted" in about["license_text"]
     assert about["version"] and about["version"] != "local-dev" and about["project_url"].startswith("https://")
-    assert [r["name"] for r in about["references"]] == ["libdivecomputer"] and about["references"][0]["url"].startswith("https://")
+    assert [r["name"] for r in about["references"]] == ["libdivecomputer", "Garmin FIT SDK"] and all(r["url"].startswith("https://") for r in about["references"])
+    assert about["references"][1]["url"] == "https://developer.garmin.com/fit/download/" and "(FIT) Protocol License" in about["references"][1]["license"]
+    assert any(c["name"] == "Garmin FIT SDK" and c["version"] for c in about["components"])
     assert 'id="about-references"' in c.get("/").text
     v = c.get("/api/version").json()                        # the keys the sidebar label reads
     assert v["current_version"] == about["version"] and "update_available" in v
@@ -815,3 +817,141 @@ def test_fields_preview_shows_the_take_sample():
     link["take"] = "^(.+?),"                                                          # the example has no comma
     assert client.post("/api/fields/preview", json={"link": link}).json()["take_sample"] is None
     assert 'id="editor-take"' in client.get("/").text
+
+
+# --- units (plans/units.md J6): app-local, never in the profile ----------------
+
+def _depth_conflict(**kw):
+    from src.core.conflicts import Conflict
+    base = dict(id="d1", link_id="depth", source_service="garmin", target_service="divelogs",
+                source_external_id="1", target_external_id="2", source_key="garmin.max_depth",
+                target_key="divelogs.max_depth", source_type="number", field_type="number",
+                dive_ids={"garmin": "1", "divelogs": "2"}, source_value=30.2, target_value=30.5,
+                dive_time="2026-06-27 09:20:00")
+    base.update(kw)
+    return Conflict(**base)
+
+
+def test_units_setting_is_app_local_and_never_in_the_profile(tmp_path, monkeypatch):
+    import json
+    from src.web import prefs
+    c = _web_client(tmp_path, monkeypatch, {"garmin": {"username": "g", "password": "p"},
+                                            "divelogs": {"username": "d", "password": "p"}})
+    assert prefs.prefs_file() == str(tmp_path / "web_prefs.json")
+    settings = c.get("/api/settings").json()
+    assert settings["units"] == "metric"                       # the default, no file needed
+    assert not (tmp_path / "web_prefs.json").exists()
+
+    payload = dict(settings, units="imperial")
+    assert c.post("/api/settings", json=payload).status_code == 200
+    assert json.loads((tmp_path / "web_prefs.json").read_text()) == {"units": "imperial"}
+    assert "units" not in (tmp_path / "settings.json").read_text()
+    assert "units" not in json.loads((tmp_path / "settings.json").read_text())
+    assert c.get("/api/settings").json()["units"] == "imperial"
+    # the sync profile carries no units, so an export / import moves none
+    profile = c.get("/api/settings/export").json()
+    assert "units" not in profile and "units" not in json.dumps(profile)
+    # omitted keeps what is stored; an unknown value falls back to metric
+    payload.pop("units")
+    assert c.post("/api/settings", json=payload).status_code == 200
+    assert c.get("/api/settings").json()["units"] == "imperial"
+    assert c.post("/api/settings", json=dict(payload, units="bogus")).status_code == 200
+    assert c.get("/api/settings").json()["units"] == "metric"
+    assert json.loads((tmp_path / "web_prefs.json").read_text()) == {"units": "metric"}
+    # a broken file is the default, not an error
+    (tmp_path / "web_prefs.json").write_text("{not json")
+    assert c.get("/api/settings").json()["units"] == "metric"
+    assert c.get("/api/settings").status_code == 200
+
+
+def test_dashboard_units_select_matches_the_core_labels(tmp_path, monkeypatch):
+    from src.core import units
+    c = _web_client(tmp_path, monkeypatch)
+    page = c.get("/").text
+    assert 'id="units"' in page and 'id="api-cooldown"' in page
+    for system, label in units.UNIT_LABELS.items():
+        assert f'<option value="{system}">{label}</option>' in page
+
+
+def test_conflicts_all_follow_the_units_setting_and_the_pick_stays_a_side(tmp_path, monkeypatch):
+    from src.core.conflicts import ConflictStore
+    from src.web import prefs
+    c = _web_client(tmp_path, monkeypatch, {"garmin": {"username": "g", "password": "p"},
+                                            "divelogs": {"username": "d", "password": "p"}})
+    ConflictStore(str(tmp_path / "sync" / "conflicts.json")).save([
+        _depth_conflict(),
+        _depth_conflict(id="t1", link_id="temp", source_key="garmin.temp_min", target_key="divelogs.temp_min",
+                        source_value=24.5, target_value=26.0),
+        _depth_conflict(id="w1", link_id="weight", source_key="garmin.weight", target_key="divelogs.weight",
+                        source_value=[4.0, "kilogram"], target_value=[10.0, "pound"]),
+        _depth_conflict(id="n1", link_id="notes", source_key="garmin.notes", target_key="divelogs.notes",
+                        source_type="text", field_type="text", source_value="Anna", target_value="Bob"),
+        _depth_conflict(id="u1", link_id="time", source_key="garmin.duration", target_key="divelogs.duration",
+                        source_value=2700, target_value=2760)])
+
+    def texts():
+        groups = c.get("/api/conflicts/all").json()["groups"]
+        return {x["id"]: (x["source_text"], x["target_text"]) for g in groups for x in g["conflicts"]}
+    # metric: exactly today's texts
+    assert texts() == {"d1": ("30.2", "30.5"), "t1": ("24.5", "26"), "w1": ("4.0, kilogram", "10.0, pound"),
+                       "n1": ("Anna", "Bob"), "u1": ("2700", "2760")}
+    prefs.set_units("imperial")
+    assert texts() == {"d1": ("99 ft", "100 ft"), "t1": ("76 °F", "79 °F"), "w1": ("8.8 lb", "10.0 lb"),
+                       "n1": ("Anna", "Bob"), "u1": ("2700", "2760")}
+    # the raw values travel unconverted, and the pick is a side
+    item = next(x for g in c.get("/api/conflicts/all").json()["groups"] for x in g["conflicts"] if x["id"] == "d1")
+    assert (item["source_value"], item["target_value"]) == (30.2, 30.5) and item["field_label"] == "Max depth"
+    import src.web.app as web
+    fake = _FakeEngine()
+    monkeypatch.setattr(web, "_engine_for_pair_id", lambda pair_id: fake)
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    assert c.post("/api/conflicts/abc123/resolve", json={"winner": "source"}).status_code == 200
+    assert fake.resolved == [("abc123", "source")]
+    prefs.set_units("metric")
+    assert texts()["d1"] == ("30.2", "30.5")
+
+
+def test_mapping_test_and_history_follow_the_units_setting(tmp_path, monkeypatch):
+    from datetime import datetime
+    from src.core import run_history
+    from src.core.pairs import field_catalog_of
+    from src.web import prefs
+    import src.web.app as web
+    c = _web_client(tmp_path, monkeypatch)
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+
+    class Engine(_FakeEngine):
+        catalog = {f.key: f for f in field_catalog_of("garmin") + field_catalog_of("divelogs")}
+
+        def test_mapping(self, links=None, limit=10, rules=None, match_keys=None):
+            return {"ok": True, "problems": [], "matched": 1, "fetched": {}, "unmatched": {},
+                    "rows": [{"dive_time": "t", "link": "depth", "receiver": "divelogs", "source_key": "garmin.max_depth",
+                              "target_key": "divelogs.max_depth", "source_value": 30.2, "target_value": 30.5,
+                              "result": "conflict", "conflict": True, "warnings": []},
+                             {"dive_time": "t", "link": "notes", "receiver": "divelogs", "source_key": "garmin.notes",
+                              "target_key": "divelogs.notes", "source_value": "A", "target_value": "B",
+                              "result": "kept", "conflict": False, "warnings": []}]}
+    monkeypatch.setattr(web, "_engine_for_pair_id", lambda pair_id: Engine())
+    monkeypatch.setattr(run_history, "HISTORY_FILE", str(tmp_path / "sync" / "sync_history.jsonl"))
+    now = datetime(2026, 6, 27, 9, 20)
+    run = run_history.record_run("Manual", "manual", now, now, False,
+                                 results={"conflicts": [_depth_conflict().model_dump(mode="json")], "uploaded_to_divelogs": []},
+                                 source="garmin", target="divelogs")
+
+    rows = c.post("/api/mapping/test", json={}).json()["rows"]
+    assert "source_text" not in rows[0] and "target_text" not in rows[0] and rows[0]["source_value"] == 30.2
+    conflict = c.get(f"/api/history/{run['id']}").json()["results"]["conflicts"][0]
+    assert "source_text" not in conflict and conflict["source_value"] == 30.2
+
+    prefs.set_units("imperial")
+    rows = c.post("/api/mapping/test", json={}).json()["rows"]
+    assert (rows[0]["source_text"], rows[0]["target_text"]) == ("99 ft", "100 ft")
+    assert (rows[0]["source_value"], rows[0]["target_value"]) == (30.2, 30.5)      # raw values kept
+    assert "source_text" not in rows[1] and "target_text" not in rows[1]           # text: the JS shows it as before
+    conflict = c.get(f"/api/history/{run['id']}").json()["results"]["conflicts"][0]
+    assert (conflict["source_text"], conflict["target_text"]) == ("99 ft", "100 ft")
+    assert (conflict["source_value"], conflict["target_value"]) == (30.2, 30.5)
+    # the stored history is never rewritten
+    assert "source_text" not in (tmp_path / "sync" / "sync_history.jsonl").read_text()
+    # the scheduler reads the same setting for its log lines
+    assert scheduler.units_for_log is prefs.get_units and scheduler.units_for_log() == "imperial"

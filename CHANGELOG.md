@@ -4,6 +4,94 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
+## Unreleased
+
+- Dive edit page (was Convert): the page is now called **Dive edit** and the
+  dive card is an editor. Click a dive and change any of its fields - date,
+  time and time zone (the whole profile moves along), depths and times on a
+  hand-logged dive, water temperatures, site and positions, buddy, weight,
+  visibility, notes, the dive computer and its settings, dive mode, water
+  type, and the tank table (add, remove, edit) - in the units you chose;
+  Save as UDDF / Subsurface writes the dive with its edits. The files you
+  opened are never changed.
+- Dive edit page: a dive with edits you have not saved yet carries a dot in
+  the list and "edited" on its card, and a **Revert** button puts it back as
+  it was read from the file (or as you last saved it); with several dives
+  selected, "Revert N" reverts the edited ones among them. Remove, Clear and
+  closing the app ask first when such a dive would be lost; saving a dive
+  (as UDDF, Subsurface or .fit) clears its mark.
+- Dive edit page: **Save as .fit…** for a dive opened from a Garmin `.fit`
+  (or a Connect zip): the edits are written into a copy of the watch's own
+  file - only the changed values are touched, every other byte stays as the
+  watch wrote it - named `<original name> (edited).fit` beside the original,
+  which is never overwritten. Start time and time zone, dive number, bottom
+  time, surface interval, CNS, entry and exit position, gases, tank pressures
+  and sizes, gradient factors, water type and density, dive mode and the
+  average water temperature go in; what no `.fit` holds (site, buddy, notes,
+  weight, visibility, a tank added on the page) is listed under the buttons
+  before you save, with the advice to save as UDDF or Subsurface for those.
+  Garmin Connect knows a dive by its start time and device: delete the
+  original activity there before uploading an edited file.
+- Dive edit page: **Save as .fit…** now works for every dive, not only for
+  one opened from a Garmin `.fit`: a dive from a UDDF or Subsurface file, a
+  hand-logged dive or one from another dive computer is written as a new
+  Garmin `.fit` from scratch, with its profile and channels, gases and
+  tanks, settings, summary, positions and time zone, named
+  `<date> <time> dive <number>.fit`; what no `.fit` holds (site, buddy,
+  notes, weight, visibility, a non-Garmin computer's name, a tank's role…)
+  is listed under the buttons before you save. A dive opened from a `.fit`
+  is still patched into a copy of its own file. Garmin's FIT SDK, which
+  writes these files, is now included in the app.
+- Dive edit page: **Merge…** joins a dive the computer split into several
+  Garmin `.fit` logs into one. Select the logs (Cmd/Ctrl-click) and click
+  Merge… under the list - on as soon as two or more dives are selected, with
+  a tooltip and a line under the list saying what it does; the dialog shows
+  the logs in start order and says in red why they cannot be merged (a dive
+  from another file type, another dive computer, more than 2 hours apart).
+  Choose to add the surface time (kept in the dive, so photos and videos
+  still line up) or to remove it (one continuous dive that ends earlier),
+  and Save puts the merged `.fit` beside the first log and adds it to the
+  list. The originals are never changed. Garmin Connect treats the merged
+  log as the first dive: delete the original activities there before
+  uploading it.
+- Installers and Docker image: Garmin's FIT SDK (`garmin-fit-sdk`, under
+  Garmin's FIT Protocol License) is now part of every build, credited on the
+  About pages.
+- Dive edit page: a new **Open folder…** button adds every dive file directly
+  in a folder you pick (Garmin `.fit` or Connect zip, UDDF, Subsurface) to
+  the list in one go; subfolders are not searched, dives already listed are
+  skipped and counted, and a file that is no dive is named under the list.
+- Desktop app: a **Units** card on the Settings page picks Metric (m, bar,
+  °C, L, kg) or Imperial (ft, psi, °F, cuft, lb); the choice applies at once
+  and is remembered on this computer. Your dives, files and the services
+  stay metric whichever you pick.
+- Dives pages (Garmin, Divelogs, Subsurface): the table, the dive form and
+  the tank table now show depths, water temperature, SAC, tank sizes and
+  pressures, weight and visibility in the chosen units, rounded like a dive
+  computer in imperial (whole ft, psi and °F), and you type edits in those
+  units too; a field you did not touch is saved exactly as it was. A dive
+  logged in pounds or feet is shown in the chosen system as well, and keeps
+  its own unit on the service when saved.
+- Dive edit page: the dive list, the dive's details and its tank table follow
+  the Units setting too (depths, temperatures, tank sizes and pressures,
+  weight, visibility), and the depth profile chart on the Convert and Dives
+  pages labels its axis in the chosen unit. The files you save stay metric,
+  whichever units are shown.
+- Conflicts page: a conflict over a depth, temperature, weight or visibility
+  shows both values in the chosen units (a weight logged in pounds reads in
+  kilograms under metric, and the other way round); text conflicts are as
+  before. Keeping a side still writes the service's own value, unconverted.
+- CLI: a new `--units metric|imperial` flag shows depths, temperatures,
+  pressures, weights and visibility in the chosen units for that run, in
+  `--list-conflicts`, `--test-mapping` and the log lines about a rule's two
+  values ("garmin.max_depth=99 ft"). Without the flag everything prints as
+  before; the data and the services stay metric.
+- Web dashboard: a **Units** select next to the API cooldown on the Settings
+  page (Metric / Imperial) applies to the Conflicts page, the Mapping page's
+  test table, a run's conflicts in the history and the live log of the runs
+  started here. The choice is kept by the dashboard alone - it is not part
+  of the sync profile export, so importing a profile never changes it.
+
 ## 0.4.2 - 2026-10-04
 
 - Convert page: a new **Open Cached** button next to Open files… opens the

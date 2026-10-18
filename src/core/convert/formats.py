@@ -11,8 +11,13 @@ them: Connect's "export original" holds one, but every ``.fit`` entry is
 read, so a zip of several gives all their dives) and the UDDF reader of the
 UDDF adapter, and the Subsurface ``.ssrf`` reader of I6b. Writers: UDDF
 through the existing `UddfDocument`, Subsurface ``.ssrf`` through
-`ssrf_writer.SsrfDocument` (I6). A later format (the Shearwater database,
-"to Garmin") is one more entry here.
+`ssrf_writer.SsrfDocument` (I6), and Garmin FIT two ways: a dive opened
+from a ``.fit`` or a Connect zip is written by patching that file
+(`fit_patch`, I14b: only the edited values are rewritten, so the writer
+needs the dive's source file and the dive as read from it; the opened
+file itself is never overwritten), and any other dive is encoded from
+scratch (`fit_writer`, I12, on Garmin's FIT SDK). A later format (the
+Shearwater database) is one more entry here.
 
 The core is pure: no adapter, engine, settings or credentials, and nothing
 is written but the paths the caller names.
@@ -24,10 +29,13 @@ import os
 import re
 import zipfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set, Tuple, Union
 from xml.etree import ElementTree as ET
 
+from src.core.convert.fit_patch import patch_fit
 from src.core.convert.fit_reader import FitReadError, read_fit
+from src.core.convert.fit_writer import FIT_DROPS_PREFIX, fit_drops, write_fit
 from src.core.convert.ssrf_reader import SsrfReadError, read_ssrf
 from src.core.convert.ssrf_writer import ssrf_drops, write_ssrf
 from src.core.models import UnifiedDive
@@ -61,6 +69,7 @@ class FileFormat:
     can_read: bool
     can_write: bool
     ambiguous: Tuple[str, ...] = ()
+    patches_source: bool = False     # a dive opened from a file of this format is written by patching that file (one dive per file)
 
     @property
     def extension(self) -> str:
@@ -73,11 +82,12 @@ class FileFormat:
 
 
 FORMATS: Tuple[FileFormat, ...] = (
-    FileFormat(FIT, "Garmin FIT", (".fit", ".zip"), can_read=True, can_write=False, ambiguous=(".zip",)),
+    FileFormat(FIT, "Garmin FIT", (".fit", ".zip"), can_read=True, can_write=True, ambiguous=(".zip",), patches_source=True),
     FileFormat(UDDF, "UDDF", (".uddf", ".xml"), can_read=True, can_write=True, ambiguous=(".xml",)),
     FileFormat(SSRF, "Subsurface", (".ssrf", ".xml"), can_read=True, can_write=True, ambiguous=(".xml",)),
 )
 ALL_FILES_FILTER = "All files (*)"
+EDITED_SUFFIX = " (edited)"        # the suggested name of a patched copy: "<original name> (edited).fit"
 
 
 def get_format(format_id: str) -> FileFormat:
@@ -93,7 +103,47 @@ def readable_formats() -> List[FileFormat]:
 
 
 def writable_formats() -> List[FileFormat]:
-    return [f for f in FORMATS if f.can_write]
+    """The targets, the whole-file writers first and the patch writers
+    (Save as .fit) after them."""
+    return sorted((f for f in FORMATS if f.can_write), key=lambda f: f.patches_source)
+
+
+def source_is(format_id: str, source: Optional[str]) -> bool:
+    """Whether ``source`` (the file a dive was opened from; "" or None for
+    none) is a file of ``format_id`` - for Garmin FIT a ``.fit`` or a
+    Connect zip holding one, which Save as .fit patches rather than
+    encodes. By content when the file is there, by its extension when it
+    is not (a name is all `output_file_name` needs); False for a file of
+    another format or one that cannot be read."""
+    if not source:
+        return False
+    source = os.fspath(source)
+    if not os.path.isfile(source):
+        return os.path.splitext(source)[1].lower() in get_format(format_id).extensions
+    try:
+        return detect_format(source).id == format_id
+    except (UnsupportedFileError, OSError):
+        return False
+
+
+def cannot_write_reason(format_id: str, sources: Sequence[Optional[str]]) -> str:
+    """Why ``format_id`` cannot be written for dives that came from
+    ``sources`` (one path per dive, "" or None for a dive without a file);
+    "" when it can. Every writable format can be written for any dive; a
+    patch format (Garmin FIT) patches the dives opened from a file of that
+    format and encodes the others from scratch, and takes one kind at a
+    time (the suggested names and the drops differ), so a selection mixing
+    the two is refused."""
+    fmt = get_format(format_id)
+    if not fmt.can_write:
+        return f"{fmt.label} files are read, not written"
+    if not fmt.patches_source:
+        return ""
+    kinds = {source_is(fmt.id, source) for source in sources}
+    if len(kinds) > 1:
+        return (f"Save as {fmt.extension} patches a dive opened from a {fmt.extension} file and writes any other dive "
+                f"from scratch: select one kind at a time")
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +153,7 @@ def writable_formats() -> List[FileFormat]:
 def open_name_filters() -> List[str]:
     """The filters of the Open dialog: every readable format's extensions in
     one entry first, then one entry per format, then all files."""
-    extensions: List[str] = []
-    for fmt in readable_formats():
-        extensions += [ext for ext in fmt.extensions if ext not in extensions]
+    extensions = readable_extensions()
     return ([f"Dive files ({' '.join('*' + ext for ext in extensions)})"]
             + [fmt.name_filter for fmt in readable_formats()] + [ALL_FILES_FILTER])
 
@@ -177,6 +225,34 @@ def detect_format(path: PathLike) -> FileFormat:
             raise UnsupportedFileError(f"{os.path.basename(path)}: the zip holds no .fit file")
         raise UnsupportedFileError(f"{os.path.basename(path)}: not a Garmin FIT, UDDF or Subsurface file")
     return fmt
+
+
+def readable_extensions() -> List[str]:
+    """Every extension a readable format claims (lower case, with the dot),
+    the ambiguous ones included, in registry order: ``.fit .zip .uddf .xml .ssrf``."""
+    extensions: List[str] = []
+    for fmt in readable_formats():
+        extensions += [ext for ext in fmt.extensions if ext not in extensions]
+    return extensions
+
+
+def list_dive_files(folder: PathLike) -> List[Path]:
+    """The files the Convert page's Open folder… reads (plans/convert.md
+    I13): the files directly in ``folder`` - subfolders are not searched,
+    the owner's choice - whose extension is one a readable format claims
+    (`readable_extensions`, compared case-insensitively, so ``DIVE.FIT`` is
+    taken like ``dive.fit``), in name order (case-insensitive). Hidden
+    files (a name starting with a dot) are skipped. Only the extension is
+    looked at: a ``.zip`` without a FIT or an ``.xml`` that is neither UDDF
+    nor Subsurface is listed and left for `read_files` to report.
+    `NotADirectoryError` when ``folder`` is not a folder."""
+    base = Path(os.fspath(folder))
+    if not base.is_dir():
+        raise NotADirectoryError(os.fspath(folder))
+    accepted = set(readable_extensions())
+    files = [entry for entry in base.iterdir()
+             if entry.is_file() and not entry.name.startswith(".") and entry.suffix.lower() in accepted]
+    return sorted(files, key=lambda entry: (entry.name.lower(), entry.name))
 
 
 # ---------------------------------------------------------------------------
@@ -334,22 +410,96 @@ def _write_ssrf(dives: Sequence[UnifiedDive], path: str) -> List[str]:
 _WRITERS = {UDDF: _write_uddf, SSRF: _write_ssrf}
 _DROPS = {UDDF: _uddf_drops, SSRF: _ssrf_drops}
 
+# The FIT drop line's prefix is the writer's (fit_writer.FIT_DROPS_PREFIX,
+# imported above), shared by the patch and the encode path and used by the page.
 
-def describe_drops(dives: Sequence[UnifiedDive], format_id: str) -> List[str]:
+
+def _same_file(a: str, b: str) -> bool:
+    """Whether two paths name one file (case-insensitively, through links)."""
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except OSError:
+        return False
+
+
+def _fit_originals(dives: Sequence[UnifiedDive], sources: Optional[Sequence[Optional[str]]],
+                   originals: Optional[Sequence[Optional[UnifiedDive]]]) -> List[Tuple[UnifiedDive, Optional[str], Optional[UnifiedDive]]]:
+    """(dive, its source path, the dive as read from that file) per dive,
+    for the FIT target: the source when it is a ``.fit`` (else None - the
+    dive is encoded, not patched) and ``originals`` as given (the Dive
+    edit page keeps the dive as read), else read again from the source."""
+    out = []
+    for i, dive in enumerate(dives):
+        source = sources[i] if sources and i < len(sources) else None
+        if not source_is(FIT, source):
+            out.append((dive, None, None))
+            continue
+        original = originals[i] if originals and i < len(originals) else None
+        if original is None:
+            original = read_fit(source)
+        out.append((dive, os.fspath(source), original))
+    return out
+
+
+def _fit_drops(dives: Sequence[UnifiedDive], sources=None, originals=None) -> List[str]:
+    """What the FIT target cannot carry, one line for all the dives:
+    ``Garmin FIT: not in a .fit, save as UDDF or Subsurface for these: site, buddy``
+    - the patcher's report for a dive opened from a ``.fit`` (only what an
+    edit touched), the encoder's for any other (everything the dive holds)."""
+    names: List[str] = []
+    for dive, source, original in _fit_originals(dives, sources, originals):
+        dropped = fit_drops(dive) if source is None else patch_fit(source, None, original, dive).not_carried
+        for name in dropped:
+            if name not in names:
+                names.append(name)
+    return [FIT_DROPS_PREFIX + ", ".join(names)] if names else []
+
+
+def _write_fit(dives: Sequence[UnifiedDive], path: str, sources=None, originals=None) -> List[str]:
+    """The one dive as a ``.fit`` at ``path``: its source file patched
+    (`fit_patch`) when it was opened from one, which is never overwritten,
+    else encoded from scratch (`fit_writer`). A FIT holds one dive, so one
+    dive per file."""
+    if len(dives) != 1:
+        raise ValueError("a .fit holds one dive: pick a folder, one file is written per dive")
+    (dive, source, original), = _fit_originals(dives, sources, originals)
+    if source is None:
+        return write_fit(dive, path)
+    if _same_file(source, path):
+        raise ValueError(f"{os.path.basename(path)} is the file the dive was opened from; pick another name")
+    report = patch_fit(source, path, original, dive)
+    return [FIT_DROPS_PREFIX + ", ".join(report.not_carried)] if report.not_carried else []
+
+
+def describe_drops(dives: Sequence[UnifiedDive], format_id: str, sources: Optional[Sequence[Optional[str]]] = None,
+                   originals: Optional[Sequence[Optional[UnifiedDive]]] = None) -> List[str]:
     """What writing ``dives`` as ``format_id`` would leave out, as the
     writer reports it after a write (the Convert page shows it before one).
-    `UnsupportedFileError` for a format that is not written."""
+    For the FIT target ``sources`` (one path per dive) and ``originals``
+    (the dive as read from it; read again when left out) say which dives
+    are patched and what their files hold; a dive without a ``.fit``
+    source is encoded and drops what no FIT holds. `UnsupportedFileError`
+    for a format that is not written."""
     fmt = get_format(format_id)
     if not fmt.can_write:
         raise UnsupportedFileError(f"{fmt.label} files are read, not written")
-    return _DROPS[fmt.id](list(dives)) if dives else []
+    if not dives:
+        return []
+    if fmt.id == FIT:
+        return _fit_drops(list(dives), sources, originals)
+    return _DROPS[fmt.id](list(dives))
 
 
-def write_file(dives: Sequence[UnifiedDive], format_id: str, path: PathLike) -> List[str]:
+def write_file(dives: Sequence[UnifiedDive], format_id: str, path: PathLike,
+               sources: Optional[Sequence[Optional[str]]] = None,
+               originals: Optional[Sequence[Optional[UnifiedDive]]] = None) -> List[str]:
     """Write ``dives`` into one file of ``format_id`` at ``path`` (which is
     overwritten: the caller chose it in a dialog). Returns the lines worth
     showing about what the format could not hold. `UnsupportedFileError` for
-    a format that is not written."""
+    a format that is not written. The FIT target takes one dive: opened
+    from a ``.fit`` (``sources``, with the dive as read from it in
+    ``originals``, read again when left out) it is patched into ``path``,
+    which must not be the source; otherwise it is encoded from scratch."""
     fmt = get_format(format_id)
     if not fmt.can_write:
         raise UnsupportedFileError(f"{fmt.label} files are read, not written")
@@ -359,7 +509,10 @@ def write_file(dives: Sequence[UnifiedDive], format_id: str, path: PathLike) -> 
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    warnings = _WRITERS[fmt.id](dives, path)
+    if fmt.id == FIT:
+        warnings = _write_fit(dives, path, sources, originals)
+    else:
+        warnings = _WRITERS[fmt.id](dives, path)
     logger.info("Wrote %d dive(s) as %s to %s", len(dives), fmt.id, path)
     return warnings
 
@@ -372,15 +525,20 @@ class WriteResult:
     warnings: List[str] = field(default_factory=list)
 
 
-def write_each(dives: Sequence[UnifiedDive], format_id: str, folder: PathLike, overwrite: bool = False) -> WriteResult:
+def write_each(dives: Sequence[UnifiedDive], format_id: str, folder: PathLike, overwrite: bool = False,
+               sources: Optional[Sequence[Optional[str]]] = None,
+               originals: Optional[Sequence[Optional[UnifiedDive]]] = None) -> WriteResult:
     """One file per dive in ``folder`` (created when missing), named by
     `output_file_name`; a name taken by another dive of the batch or, unless
-    ``overwrite``, by a file already there gets a ``(2)``, ``(3)`` suffix."""
+    ``overwrite``, by a file already there gets a ``(2)``, ``(3)`` suffix.
+    ``sources`` / ``originals`` are the FIT patch writer's (`write_file`)."""
     folder = os.fspath(folder)
     os.makedirs(folder, exist_ok=True)
     result = WriteResult()
-    for dive, path in zip(dives, output_paths(dives, format_id, folder, overwrite=overwrite)):
-        for line in write_file([dive], format_id, path):
+    for i, (dive, path) in enumerate(zip(dives, output_paths(dives, format_id, folder, overwrite=overwrite, sources=sources))):
+        source = [sources[i]] if sources and i < len(sources) else None
+        original = [originals[i]] if originals and i < len(originals) else None
+        for line in write_file([dive], format_id, path, sources=source, originals=original):
             if line not in result.warnings:
                 result.warnings.append(line)
         result.paths.append(path)
@@ -418,26 +576,35 @@ def safe_file_name(name: str, fallback: str = "dive") -> str:
     return stem + ext.rstrip(" .")
 
 
-def output_file_name(dive: UnifiedDive, format_id: str) -> str:
+def output_file_name(dive: UnifiedDive, format_id: str, source: Optional[str] = None) -> str:
     """``2026-09-30 1432 dive 452.uddf`` from the local start time and the
-    dive number; ``2026-09-30 1432.uddf`` when the dive has no number."""
+    dive number; ``2026-09-30 1432.uddf`` when the dive has no number. A
+    patch format with a ``source`` of its own kind names the copy after
+    the file it patches: ``<original name> (edited).fit`` (a Connect zip's
+    name with the ``.fit`` extension); a dive it encodes gets the date name."""
     fmt = get_format(format_id)
+    if fmt.patches_source and source_is(fmt.id, source):
+        stem = os.path.splitext(os.path.basename(os.fspath(source)))[0]
+        return safe_file_name(stem + EDITED_SUFFIX + fmt.extension)
     stem = dive.date_time.strftime("%Y-%m-%d %H%M")
     if dive.dive_number is not None:
         stem += f" dive {dive.dive_number}"
     return safe_file_name(stem + fmt.extension)
 
 
-def output_paths(dives: Sequence[UnifiedDive], format_id: str, folder: PathLike, overwrite: bool = False) -> List[str]:
+def output_paths(dives: Sequence[UnifiedDive], format_id: str, folder: PathLike, overwrite: bool = False,
+                 sources: Optional[Sequence[Optional[str]]] = None) -> List[str]:
     """The path each dive gets under ``folder``, one per dive in order. Two
     dives that would share a name (same minute and number) get ``(2)``,
     ``(3)``... on the later ones; a name already taken by a file in the
-    folder is skipped the same way unless ``overwrite``."""
+    folder is skipped the same way unless ``overwrite``. ``sources`` (one
+    per dive) name a patch format's copies after their files where the
+    file is one it patches."""
     folder = os.fspath(folder)
     taken: Set[str] = set()  # lower case: Windows and macOS file systems are case-insensitive
     out: List[str] = []
-    for dive in dives:
-        name = output_file_name(dive, format_id)
+    for i, dive in enumerate(dives):
+        name = output_file_name(dive, format_id, sources[i] if sources and i < len(sources) else None)
         stem, ext = os.path.splitext(name)
         candidate, n = name, 1
         while candidate.lower() in taken or (not overwrite and os.path.exists(os.path.join(folder, candidate))):

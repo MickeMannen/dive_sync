@@ -25,6 +25,14 @@ last_sync_results: Dict[str, Dict[str, Any]] = {}
 is_download_running = False
 last_download_results: Dict[str, Any] = {}
 
+# How a run started here shows a quantity in its log lines (plans/units.md
+# J6): a provider returning "metric" or "imperial", read when the engine is
+# built. The web dashboard points it at its own stored setting
+# (src/web/prefs.get_units); without a front end the log stays metric. A
+# callable, not a value, so a changed setting reaches the next run without
+# any web import here.
+units_for_log = lambda: "metric"   # noqa: E731
+
 
 def run_download_thread(
     overwrite: bool = False,
@@ -211,6 +219,10 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
         else:
             engine = SyncEngine(garmin_username=garmin_username, divelogs_username=divelogs_username,
                                 account_scoped_state=bool(account_kwargs.get("account_scoped_state")))
+        try:
+            engine.log_units = units_for_log()
+        except Exception as e:                   # a broken provider never stops a sync
+            logger.warning("Could not read the units setting for the log (%s); metric", e)
         if custom_settings:
             # run_sync re-reads settings.json before every run, so per-job
             # values must go in as explicit overrides rather than by editing

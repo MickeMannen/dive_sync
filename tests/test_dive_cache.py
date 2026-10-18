@@ -114,6 +114,40 @@ def test_format_sac_needs_a_volume_a_drop_a_depth_and_a_time():
     assert dive_cache._format_sac([{"volume": "x", "start_pressure": "y", "end_pressure": "z"}], 20.0, 3600) == ""
 
 
+def test_text_helpers_take_a_unit_system(cache_dirs):
+    """The three text helpers keep their SI readings (°C, L, bar, L/min) and
+    their exact metric strings by default; ``units="imperial"`` shows the
+    same readings as whole °F, cuft with one decimal, whole psi and cuft/min
+    (plans/units.md J3). Every listing also carries the raw °C triple
+    (``water_temps``) so a front end can re-express the summary."""
+    assert dive_cache._format_water_temp(17.0, 19.0, 18.0) == "17-19°C (avg 18°C)"
+    assert dive_cache._format_water_temp(17.0, 19.0, 18.0, "metric") == "17-19°C (avg 18°C)"
+    assert dive_cache._format_water_temp(17.0, 19.0, 18.0, "imperial") == "63-66°F (avg 64°F)"
+    assert dive_cache._format_water_temp(20.0, None, None, "imperial") == "68°F"
+    assert dive_cache._format_water_temp(None, 20.5, None, "imperial") == "69°F"
+    assert dive_cache._format_water_temp(None, None, None, "imperial") == ""
+    tanks = [{"tank_name": "Left", "oxygen": 21, "helium": 0, "volume": 12.0, "start_pressure": 200.0, "end_pressure": 50.0},
+             {"oxygen": 32, "volume": None, "start_pressure": None, "end_pressure": 80.0}]
+    assert dive_cache._format_tanks(tanks) == "Left: 21% O2, 12L, 200->50 bar; Tank 2: 32% O2, ?->80 bar"
+    assert dive_cache._format_tanks(tanks, "metric") == dive_cache._format_tanks(tanks)
+    assert dive_cache._format_tanks(tanks, "imperial") == "Left: 21% O2, 0.4cuft, 2901->725 psi; Tank 2: 32% O2, ?->1160 psi"
+    assert dive_cache._format_tanks([{"volume": "x"}], "imperial") == "Tank 1: xcuft"      # unparseable text stays
+    full = [{"volume": 12.0, "start_pressure": 200.0, "end_pressure": 50.0}]
+    assert dive_cache._format_sac(full, 20.0, 3600) == "10.0"
+    assert dive_cache._format_sac(full, 20.0, 3600, "metric") == "10.0"
+    assert dive_cache._format_sac(full, 20.0, 3600, "imperial") == "0.4"     # 10 L/min = 0.35 cuft/min
+    assert dive_cache._format_sac([], 20.0, 3600, "imperial") == ""
+    # the raw readings ride along on every service's rows
+    garmin = dive_cache.list_garmin_dives(base_dir=cache_dirs)[0]
+    assert garmin["water_temps"] == [None, None, None] and garmin["water_temp"] == ""
+    divelogs = dive_cache.list_divelogs_dives(base_dir=cache_dirs)[0]
+    assert divelogs["water_temps"] == [None, None, None]
+    dive_cache.update_dive_fields("garmin", "1.json", base_dir=cache_dirs, water_temp=28.5)
+    dive_cache.update_dive_fields("divelogs", "1.json", base_dir=cache_dirs, water_temp=27.0)
+    assert dive_cache.list_garmin_dives(base_dir=cache_dirs)[0]["water_temps"] == [28.5, 28.5, 28.5]
+    assert dive_cache.list_divelogs_dives(base_dir=cache_dirs)[0]["water_temps"] == [27.0, None, None]
+
+
 def test_normalize_date_time_swaps_iso_t_separator():
     assert dive_cache._normalize_date_time("2026-06-22T10:15:30") == "2026-06-22 10:15:30"
 
@@ -435,6 +469,7 @@ def test_unified_cache_rows_match_the_other_services(tmp_path):
     assert row["duration"] == 69 and row["max_depth"] == "18.30" and row["avg_depth"] == "8.20"   # two decimals, as Garmin
     assert row["sac"] == "12.3"                      # both cylinders counted
     assert row["water_temp"] == "27-29°C (avg 28°C)" and row["water_temp_value"] == 28.0
+    assert row["water_temps"] == [27.0, 29.0, 28.0]
     assert row["weight"] == "6 kg" and row["visibility"] == "20 m"
     assert row["location"] == "Racha Yai Bay 2" and row["buddy"] == "Ann" and row["dive_number"] == 42
     assert row["tanks"].startswith("Left: 21% O2, 11.1L, 162.57->78.04 bar")

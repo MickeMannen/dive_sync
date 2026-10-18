@@ -21,6 +21,7 @@ from src.core.services.divelogs import DivelogsAdapter
 import src.core.scheduler as scheduler
 from src.core import layout, run_history
 from src.core.conflicts import prune_stale_conflicts
+from src.web import prefs as web_prefs
 
 # Configure logger
 logger = logging.getLogger("dive_sync.web")
@@ -45,6 +46,10 @@ class SSELogHandler(logging.Handler):
 sse_handler = SSELogHandler(sse_log_queue)
 sse_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
 logging.getLogger("dive_sync").addHandler(sse_handler)
+
+# The runs the scheduler starts (Sync now, scheduled jobs) show quantities in
+# their log lines in the dashboard's own unit system (plans/units.md J6).
+scheduler.units_for_log = web_prefs.get_units
 
 
 @asynccontextmanager
@@ -112,6 +117,10 @@ class SettingsSchema(BaseModel):
     # Same omitted-keeps-current rule; an explicit "" (an emptied form field,
     # as opposed to a missing key) disables alerts.
     notify_url: Optional[str] = None
+    # The dashboard's unit system (plans/units.md J6): app-local, kept in
+    # web_prefs.json by src/web/prefs.py, never in SettingsModel / settings.json
+    # and never part of the sync profile. Omitted keeps what is stored.
+    units: Optional[str] = None
 
 class SyncTriggerRequest(BaseModel):
     dry_run: bool = False
@@ -153,6 +162,8 @@ def get_settings():
     settings = ConfigManager.load_settings()
     data = settings.model_dump()
     data["directionality"] = settings.directionality
+    # the dashboard's own unit system, read from web_prefs.json, not settings.json
+    data["units"] = web_prefs.get_units()
     return data
 
 @app.post("/api/settings")
@@ -237,6 +248,8 @@ def save_settings(data: SettingsSchema):
         if problems:
             raise HTTPException(status_code=400, detail={"message": "Field links are invalid.", "errors": problems})
         ConfigManager.save_settings(settings)
+        if data.units is not None:
+            web_prefs.set_units(data.units)          # app-local: web_prefs.json, not settings.json
         from src.core import config
         dropped = prune_stale_conflicts(settings, os.path.dirname(config.SETTINGS_FILE) or ".")
         if dropped:
@@ -521,11 +534,45 @@ def test_mapping(data: MappingTestRequest):
         raise HTTPException(status_code=409, detail="A synchronization run is in progress; try again when it has finished.")
     try:
         engine = _engine_for_pair_id(data.pair)
-        return engine.test_mapping(data.field_links, limit=max(1, min(data.limit, 50)),
-                                   rules=data.rules, match_keys=data.match_keys)
+        out = engine.test_mapping(data.field_links, limit=max(1, min(data.limit, 50)),
+                                  rules=data.rules, match_keys=data.match_keys)
+        return _with_row_texts(out, getattr(engine, "catalog", None))
     except Exception as e:
         logger.error("Test mapping failed: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _with_row_texts(out: Dict[str, Any], catalog=None) -> Dict[str, Any]:
+    """Under the dashboard's imperial setting (plans/units.md J6) each
+    test-mapping row whose value is a quantity gets a ``source_text`` /
+    ``target_text`` with the converted, labelled value for the table; the
+    raw SI values stay in the row. Metric rows are returned untouched."""
+    from src.core.display import row_texts
+    system = web_prefs.get_units()
+    for row in out.get("rows", []) if isinstance(out, dict) else []:
+        source_text, target_text = row_texts(row, system, catalog)
+        if source_text is not None:
+            row["source_text"] = source_text
+        if target_text is not None:
+            row["target_text"] = target_text
+    return out
+
+
+def _with_conflict_texts(conflicts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Same for a run's recorded conflicts (``results["conflicts"]`` in the
+    history): under imperial a quantity side gets ``source_text`` /
+    ``target_text``; the stored record is never changed."""
+    from src.core.display import conflict_texts
+    system = web_prefs.get_units()
+    for c in conflicts:
+        if not isinstance(c, dict):
+            continue
+        source_text, target_text = conflict_texts(c, system)
+        if source_text is not None:
+            c["source_text"] = source_text
+        if target_text is not None:
+            c["target_text"] = target_text
+    return conflicts
 
 
 @app.get("/api/conflicts")
@@ -545,6 +592,7 @@ def list_all_conflicts():
     import os
     from src.core import config
     from src.core.conflicts import ConflictStore, display_value
+    from src.core.display import conflict_texts
     from src.core.pairs import conflicts_file_for, display_name_of, field_catalog_of, service_id_of
 
     def label(key: str) -> str:
@@ -552,6 +600,17 @@ def list_all_conflicts():
             return next((f.label for f in field_catalog_of(key.split(".")[0]) if f.key == key), key)
         except ValueError:
             return key
+
+    # The dashboard's unit system (plans/units.md J6): under imperial a
+    # depth, temperature, weight or visibility side is shown converted with
+    # its label; in metric every value reads exactly as before. The pick
+    # stays a side (resolve writes the service's own value).
+    system = web_prefs.get_units()
+
+    def texts(c) -> Dict[str, str]:
+        source_text, target_text = conflict_texts(c, system)
+        return {"source_text": source_text if source_text is not None else display_value(c.source_value),
+                "target_text": target_text if target_text is not None else display_value(c.target_value)}
 
     groups = []
     for board in _boards():
@@ -567,8 +626,7 @@ def list_all_conflicts():
                                source_name=names.get(c.source_service, c.source_service),
                                target_name=names.get(c.target_service, c.target_service),
                                field_label=label(c.target_key),
-                               source_text=display_value(c.source_value),
-                               target_text=display_value(c.target_value)) for c in items],
+                               **texts(c)) for c in items],
         })
     return {"groups": groups}
 
@@ -898,6 +956,9 @@ def get_history_run(run_id: str):
     run = run_history.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="No such run in the history.")
+    conflicts = (run.get("results") or {}).get("conflicts")
+    if isinstance(conflicts, list):
+        _with_conflict_texts(conflicts)
     return run
 
 

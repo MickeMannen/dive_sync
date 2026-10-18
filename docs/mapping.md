@@ -1,0 +1,53 @@
+# Mapping
+
+The mapping board for a source → target (see below on this page); pair options (scheduled direction, grace window, propagate deletes, create on Garmin) are on their own card.
+
+<p align="center"><img src="../media/app_mapping.png" alt="Mapping page" width="800"></p>
+
+## The mapping board (fields, rules, templates and conflicts)
+
+Every synced field is controlled by the *mapping board*, identical whether you edit it in the desktop app, on the web dashboard, or by hand in `settings.json`. There's one board per pair of services — the Garmin ↔ Divelogs pair (`garmin_divelogs`), one for every pair you add (a UDDF file, a Subsurface checkout, ...), and one for each combination of the services you have accounts for (e.g. Garmin ↔ Subsurface Cloud), which starts from the shipped defaults and is saved into `sync_pairs` the first time you save it. A board is two lists of **rules**, one per receiving side: *what Divelogs takes from Garmin* and *what Garmin takes from Divelogs*. A sync run writes exactly one side, and applies that side's list.
+
+**Field catalogue.** Each service publishes what it can read and write (`GET /api/fields`) — a read-only field (e.g. Divelogs numbers its own dives) can never be written by a rule; the board UIs show these as locked.
+
+**A rule** says what one field of the receiving side *accepts*: `receiver field ← sender field(s) [+ template], policy`. It has:
+- **A policy**, read from the receiver's side — what happens when the sender's value differs from mine:
+  - `manual` *(the default for most fields)* — a blank field is filled for free; a genuine disagreement is queued in the **Conflicts** view for you to pick a winner. Nothing is ever silently overwritten.
+  - `prefer_non_empty` — the same "fill me when blank, never overwrite a real value" behaviour as `manual`, except a real disagreement is just logged, not queued. Used for `samples` (a depth/temperature profile "conflict" is hundreds of points — nothing to usefully arbitrate one at a time).
+  - `prefer_source` — take the sender's value whenever it has one, even over a different value already here — but an *empty* sender never blanks a field that already has data. Used for `tanks`, so the dive computer stays the source of truth for gas data even after the other side has stale readings.
+  - `source_wins` — always take the sender's value, blank or not. Available if you want stricter behaviour than `manual`.
+  - `target_wins` — "never overwrite me": the receiving side owns this field and the rule is a deliberate no-op (new dives are not filled from it either). Useful to state the intent on the board rather than leave the field without a rule.
+- **A template** (composite rules), optionally with a **reverse pattern** — see below.
+- Fields without a rule are not synced. A field that syncs both ways is simply the same rule on both receivers.
+
+**Templates (composite rules).** A rule's field can be rendered from a small text template combining several of the sender's fields instead of copying one field verbatim. The shipped `activity_name` rule is the example: Garmin's activity title is built from Divelogs' region and dive site —
+```
+template: "{divelogs.location}, {divelogs.divesite}"
+```
+so a Divelogs dive with location `Larnaca` and dive site `Zenobia` uploads to Garmin titled `Larnaca, Zenobia`. In either board UI, you build one by dropping a *second* field onto a field that already has a rule; the editor shows a live preview as you edit the template.
+
+**Splits (a composite taken apart).** A composite rule can also work backwards: on a run *towards the sources' side* its field is split back into the fields it is built from. With the template `{divelogs.location}, {divelogs.divesite}`, Garmin's activity name "Gozo, Blue Hole" becomes Divelogs location "Gozo" and dive site "Blue Hole" — on matched dives and on newly uploaded ones. The value is cut at the text between the fields in the template (spacing around it doesn't matter; the first occurrence wins); a value without that text is left alone rather than guessed at. The easiest way to make one: in the source → target panel, drag the same text field onto two fields of the target, and the board offers to split it. In the rule editor it is the **"Split … back into …"** checkbox with its own policy; a custom regex with named groups is still possible under *Custom split pattern*. In `settings.json` a split is `"reverse": "auto"` (or the regex) with `"reverse_conflict"` as its policy. Only text fields can be split.
+
+**Matching.** Dives are paired in passes: first the links remembered from earlier runs (and the ids Subsurface stores on its dives), then **start times** within the grace window (closest first), and only then the pair's ordered `match_keys` — a field both sides carry, such as the dive number — for dives whose clocks disagree (a time-zone shift), within a day of each other. Start time comes first on purpose: a number can go stale when a log is renumbered, a start time doesn't.
+
+**Shipped defaults (Garmin ↔ Divelogs).** Buddy, notes, weight, visibility, GPS, and site name are accepted on both sides with `manual`; tanks and depth/temperature profiles are accepted by Divelogs only (Garmin's gas API can't be written, and can't record samples at all); Garmin's activity title is built from Divelogs' location/dive site for new dives (see the template above). A pair beyond Garmin ↔ Divelogs starts from a smaller, generic default board covering the fields both sides actually have; where both services let you set the dive number (e.g. Garmin → Subsurface), the number is a match key and follows the source. If you want the old pre-board behaviour (Garmin always wins every difference), that board is still available as `fields.legacy_field_links()`.
+
+**The conflict queue.** Any `manual`-policy rule where both sides hold a value and they differ gets recorded (`conflicts.json`) instead of being resolved automatically. Resolve them from the **Conflicts** page of the desktop app or the web dashboard (all pairs; **Keep this** on the value to keep turns green and stages the pick, click it again to undo; a **Save** button per receiving service then writes its picks in one go) or from the CLI (`--list-conflicts`, `--resolve <id> source|target`). An unresolved conflict is re-evaluated — and re-queued if it's still unresolved — on the next run that revisits that dive.
+
+**Editing the board.** Visually: pick a **source** and a **target** (⇄ shows the other direction) and the board shows what the target takes from the source — the source's fields on the left, the target's on the right. Drag a field from the left onto a field on the right (or click one, then the other) to add a rule; drop a second field onto a rule to make a composite; drag the same text field onto a second field to split it (shown as "⇠ split of …"). Click a rule to change its policy (and, where it applies, its template or split). **Save board** asks whether to re-apply the changed mapping to every already-matched dive on the next run. The pair's own options — the direction scheduled runs write, grace window, propagate deletes, create on Garmin — sit apart from the board. By hand: `sync_pairs[].rules` in `settings.json` (see [Configuration files](configuration.md)), or `POST /api/settings` — the API also still accepts a version-1 board as `field_links` (top level for the `garmin_divelogs` pair, or on a pair) and stores it as rules.
+
+**How a board is stored (`settings_version` 2).** Under the receiver's id in the pair's `rules`, plus the pair's `match_keys`:
+```json
+"sync_pairs": [{
+  "id": "garmin_divelogs", "source": "garmin", "target": "divelogs", "directionality": "to_divelogs",
+  "rules": {
+    "divelogs": [{"id": "buddy", "target": "divelogs.buddy", "source": ["garmin.buddy"], "conflict": "manual"}],
+    "garmin":   [{"id": "buddy", "target": "garmin.buddy",   "source": ["divelogs.buddy"], "conflict": "manual"},
+                 {"id": "activity_name", "target": "garmin.activityName",
+                  "source": ["divelogs.location", "divelogs.divesite"], "conflict": "manual",
+                  "template": "{divelogs.location}, {divelogs.divesite}"}]
+  },
+  "match_keys": []
+}]
+```
+`python sync.py --show-mapping` prints a board as "what X takes from Y" per side, and `--test-mapping` names the receiver on every row. Settings files and sync profiles written before version 2 (a top-level `field_links` list with a direction per link) are upgraded on load; a profile exported by this version is version 2 and older builds refuse it.

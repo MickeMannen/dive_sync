@@ -9,15 +9,33 @@ import QtQuick.Layouts
 // Temperature is deliberately not plotted: the services record it as whole
 // degrees, so the curve is a staircase of 1° steps that reads as noise next
 // to the depth line.
+// The samples stay metres; the depth axis is labelled in the unit system
+// chosen on the Settings page (plans/units.md J4) through ``depthScale``,
+// which the pages bind to ``units.scales.depth`` ({factor, label, decimals}
+// from src/core/units.py). The default is metres, exactly as before.
 ColumnLayout {
     id: chart
     property var samples: []
     property int chartHeight: 160
+    property var depthScale: ({ factor: 1, label: "m", decimals: 1 })
     // two samples make a line; with fewer the whole component hides
     readonly property bool hasProfile: (samples || []).length > 1
+    // the deepest sample in metres (1 for a flat profile, so the scale holds)
+    readonly property real maxDepth: {
+        var list = samples || []
+        var deepest = 0
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].depth > deepest) deepest = list[i].depth
+        }
+        return deepest > 0 ? deepest : 1
+    }
+    // the axis labels, in the chosen unit ("0 m" / "12.5 m", "0 ft" / "41 ft")
+    readonly property string depthAxisTop: "0 " + depthScale.label
+    readonly property string depthAxisBottom: (maxDepth * depthScale.factor).toFixed(depthScale.decimals) + " " + depthScale.label
     spacing: 4
     visible: hasProfile
     onSamplesChanged: canvas.requestPaint()
+    onDepthScaleChanged: canvas.requestPaint()
 
     RowLayout {
         spacing: 12
@@ -47,11 +65,7 @@ ColumnLayout {
             if (plotW <= 0 || plotH <= 0) return
 
             var maxTime = samples[samples.length - 1].time || 0
-            var maxDepth = 0
-            for (var i = 0; i < samples.length; i++) {
-                if (samples[i].depth > maxDepth) maxDepth = samples[i].depth
-            }
-            if (maxDepth <= 0) maxDepth = 1
+            var maxDepth = chart.maxDepth
             if (maxTime <= 0) maxTime = 1
 
             function xAt(t) { return pad.left + (t / maxTime) * plotW }
@@ -77,8 +91,8 @@ ColumnLayout {
 
             ctx.fillStyle = Theme.muted
             ctx.font = "10px sans-serif"
-            ctx.fillText("0 m", 4, pad.top + 8)
-            ctx.fillText(maxDepth.toFixed(1) + " m", 4, pad.top + plotH)
+            ctx.fillText(chart.depthAxisTop, 4, pad.top + 8)
+            ctx.fillText(chart.depthAxisBottom, 4, pad.top + plotH)
             ctx.fillText(Math.round(maxTime / 60) + " min", pad.left + plotW - 26, height - 4)
         }
     }

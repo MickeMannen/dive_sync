@@ -15,9 +15,17 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from desktop import accounts, credentials
 from desktop.jobs import Worker
+from src.core import units as core_units
+from src.core.conflicts import display_value as brief  # noqa: F401  (kept importable as brief)
 
 
-from src.core.conflicts import display_value as brief  # noqa: E402  (kept importable as brief)
+# Units (rework.md Track J, plans/units.md J5): a conflict records both
+# values as the services hold them (SI numbers, a weight or visibility as
+# ``[number, unit]`` in the dive's own unit); only what the page shows
+# converts, through the shared src/core/display.py (J6: one implementation
+# for this page, the CLI and the web dashboard). ``quantity_kind`` /
+# ``quantity_text`` stay importable from here for the tests and older callers.
+from src.core.display import _own_system, _split_quantity, quantity_kind, quantity_text  # noqa: E402,F401
 
 
 class ConflictsController(QObject):
@@ -26,8 +34,14 @@ class ConflictsController(QObject):
     busyChanged = Signal()
     stagedChanged = Signal()
 
-    def __init__(self, parent: Optional[QObject] = None):
+    def __init__(self, parent: Optional[QObject] = None, units=None):
+        """``units``: the app's ``UnitsController`` (``desktop/app.py``);
+        the compared values follow its setting (plans/units.md J5). Without
+        one the page is metric."""
         super().__init__(parent)
+        self._units = units
+        if units is not None:
+            units.unitsChanged.connect(self._units_changed)
         self._groups: List[Dict[str, Any]] = []
         self._message = ""
         self._busy = False
@@ -135,13 +149,41 @@ class ConflictsController(QObject):
         return f"{display_name_of(spec)} ({account})" if account else display_name_of(spec)
 
     @staticmethod
-    def _label(key: str) -> str:
+    def _spec(key: str):
+        """The catalogue entry of a conflict side's key; None for a key no
+        catalogue has (a rendered template's source)."""
         from src.core.pairs import field_catalog_of
         service, _, _name = key.partition(".")
         try:
-            return next((f.label for f in field_catalog_of(service) if f.key == key), key)
+            return next((f for f in field_catalog_of(service) if f.key == key), None)
         except ValueError:
-            return key
+            return None
+
+    @classmethod
+    def _label(cls, key: str) -> str:
+        spec = cls._spec(key)
+        return spec.label if spec is not None else key
+
+    def _system(self) -> str:
+        return self._units.units if self._units is not None else core_units.METRIC
+
+    def _texts(self, row: Dict[str, Any]) -> None:
+        """Set a row's ``source_text`` / ``target_text`` for the current unit
+        system: a side whose recorded type is a number and whose field is a
+        quantity (``source_kind`` / ``target_kind``) converts, the rest is
+        ``brief`` as before."""
+        system = self._system()
+        row["source_text"] = (quantity_text(row["source_value"], row["source_kind"], system)
+                              if row["source_type"] == "number" else brief(row["source_value"]))
+        row["target_text"] = (quantity_text(row["target_value"], row["target_kind"], system)
+                              if row["field_type"] == "number" else brief(row["target_value"]))
+
+    def _units_changed(self) -> None:
+        """The Units setting changed: the same conflicts, re-expressed."""
+        for group in self._groups:
+            for row in group["conflicts"]:
+                self._texts(row)
+        self.conflictsChanged.emit()
 
     @Slot()
     @Slot(str)
@@ -172,11 +214,18 @@ class ConflictsController(QObject):
             conflicts = []
             for c in items:
                 row = c.model_dump(mode="json")
+                source_spec, target_spec = self._spec(c.source_key), self._spec(c.target_key)
+                # a linked pair of number fields is the same quantity on both
+                # sides; a side the catalogue does not know takes the other's
+                source_kind = quantity_kind(source_spec) or quantity_kind(target_spec)
+                target_kind = quantity_kind(target_spec) or quantity_kind(source_spec)
                 row.update(pair_id=key,
                            source_name=names.get(c.source_service, c.source_service),
                            target_name=names.get(c.target_service, c.target_service),
-                           source_label=self._label(c.source_key), target_label=self._label(c.target_key),
-                           source_text=brief(row["source_value"]), target_text=brief(row["target_value"]))
+                           source_label=source_spec.label if source_spec is not None else c.source_key,
+                           target_label=target_spec.label if target_spec is not None else c.target_key,
+                           source_kind=source_kind, target_kind=target_kind)
+                self._texts(row)
                 conflicts.append(row)
             groups.append({"pair_id": key,
                            "label": f"{self._side_label(board['source'], source_account)} ↔ "

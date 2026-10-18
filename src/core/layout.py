@@ -3,7 +3,7 @@
 ::
 
     <data root>/
-        settings.json, credentials.json, desktop_prefs.json
+        settings.json, credentials.json, desktop_prefs.json, web_prefs.json
         backups/<timestamp>/            pre-sync snapshots, one per run
         sync/                           sync_state_*.json, conflicts_*.json, sync_history.jsonl
         <service>/<account>/data/       that account's cached dives (JSON)

@@ -392,3 +392,23 @@ def test_run_download_thread_one_service_with_several_accounts_on_both(monkeypat
     scheduler.run_download_thread(base_dir=str(tmp_path), services=["divelogs"], accounts={"divelogs": "test-d"})
     assert scheduler.last_download_results == {"success": True}
     assert used == [("test-g", "live-d"), ("live-g", "test-d")]
+
+
+def test_run_sync_thread_gives_the_engine_the_units_for_its_log(monkeypatch):
+    """plans/units.md J6: the scheduler asks ``units_for_log`` (the web
+    dashboard points it at its stored setting) when it builds the engine;
+    a broken provider leaves the log metric and the run running."""
+    from src.core.sync_engine import SyncEngine
+    seen = []
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False, **kw: seen.append(self.log_units) or {"status": "ok"})
+    assert scheduler.units_for_log() == "metric"
+    scheduler.run_sync_thread(dry_run=True)
+    monkeypatch.setattr(scheduler, "units_for_log", lambda: "imperial")
+    scheduler.run_sync_thread(dry_run=True, custom_settings={"id": "job", "only_new": True})
+
+    def boom():
+        raise RuntimeError("no prefs")
+    monkeypatch.setattr(scheduler, "units_for_log", boom)
+    scheduler.run_sync_thread(dry_run=True)
+    assert seen == ["metric", "imperial", "metric"]
+    assert scheduler.last_sync_results["Manual"] == {"status": "ok"} and scheduler.is_sync_running is False

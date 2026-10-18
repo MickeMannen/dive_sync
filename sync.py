@@ -109,18 +109,34 @@ def import_profile_file(engine, path, assume_yes: bool = False) -> bool:
     return True
 
 
-def print_conflicts(engine):
+def print_conflicts(engine, units="metric"):
+    """The waiting conflicts as a table. ``units`` (``--units``, plans/units.md
+    J6): under imperial a depth, temperature, weight or visibility side is
+    shown converted with its label (``garmin.max_depth=99 ft``), found from
+    the pair's field catalogue; text and every other value, and every value
+    in metric, print as they always have (``repr``)."""
+    from src.core.display import conflict_texts
     conflicts = engine.list_conflicts()
     if not conflicts:
         print(f"No conflicts waiting ({engine.conflicts_file}).")
         return
-    rows = [[c.id, c.dive_time, c.link_id, f"{c.source_key}={c.source_value!r}",
-             f"{c.target_key}={c.target_value!r}", c.seen_at] for c in conflicts]
+    rows = []
+    for c in conflicts:
+        source_text, target_text = conflict_texts(c, units, getattr(engine, "catalog", None))
+        rows.append([c.id, c.dive_time, c.link_id,
+                     f"{c.source_key}={source_text if source_text is not None else repr(c.source_value)}",
+                     f"{c.target_key}={target_text if target_text is not None else repr(c.target_value)}", c.seen_at])
     print(_table(["id", "dive", "link", "source", "target", "seen"], rows))
     print("\nResolve with: python sync.py --resolve <id> source|target")
 
 
-def print_test_mapping(out):
+def print_test_mapping(out, catalog=None, units="metric"):
+    """The read-only rehearsal as a table. ``units`` (``--units``): under
+    imperial the two value columns show a depth, temperature, pressure,
+    volume, weight or visibility converted with its label, by the kind
+    ``catalog`` (the engine's, key -> FieldSpec) gives the field; a rendered
+    template and every value in metric print as before."""
+    from src.core.display import row_texts
     if not out.get("ok"):
         print("The board is not valid:")
         for p in out.get("problems", []):
@@ -131,9 +147,13 @@ def print_test_mapping(out):
     for side, times in out["unmatched"].items():
         if times:
             print(f"  only on {side}: {', '.join(times)}")
-    rows = [[r["dive_time"], r["link"] + (" (split)" if r.get("split") else ""), r.get("receiver", ""),
-             r["source_key"], r["source_value"], r["target_key"], r["target_value"],
-             r["result"], "; ".join(r["warnings"])] for r in out["rows"]]
+    rows = []
+    for r in out["rows"]:
+        source_text, target_text = row_texts(r, units, catalog)
+        rows.append([r["dive_time"], r["link"] + (" (split)" if r.get("split") else ""), r.get("receiver", ""),
+                     r["source_key"], source_text if source_text is not None else r["source_value"],
+                     r["target_key"], target_text if target_text is not None else r["target_value"],
+                     r["result"], "; ".join(r["warnings"])])
     print()
     print(_table(["dive", "rule", "receiver", "from", "value", "receiver field", "value", "result", "warnings"], rows))
     print("\nRead-only: nothing was written.")
@@ -327,6 +347,15 @@ def main():
     )
 
     parser.add_argument(
+        "--units",
+        choices=("metric", "imperial"),
+        default="metric",
+        help="How this run shows depths, temperatures, pressures, weights and visibility in --list-conflicts and "
+             "--test-mapping: metric (m, bar, °C, L, kg; the default) or imperial (ft, psi, °F, cuft, lb, rounded like "
+             "a dive computer). For this run only; the data, the services and the files stay metric."
+    )
+
+    parser.add_argument(
         "-v", "--verbose", 
         action="store_true", 
         help="Enable verbose DEBUG logs."
@@ -371,6 +400,10 @@ def main():
                 divelogs_username=args.divelogs
             )
 
+        # --units: how this run's output shows a quantity (the conflict list, the
+        # test-mapping table, the engine's log lines); the data stays metric
+        engine.log_units = args.units
+
         if args.show_mapping:
             print_mapping(engine)
             return
@@ -384,7 +417,7 @@ def main():
         if args.import_profile:
             sys.exit(0 if import_profile_file(engine, args.import_profile, assume_yes=args.yes) else 1)
         if args.list_conflicts:
-            print_conflicts(engine)
+            print_conflicts(engine, units=args.units)
             return
         if args.resolve:
             conflict_id, side = args.resolve
@@ -392,7 +425,7 @@ def main():
             print(f"Resolved conflict {resolved.id} ({resolved.link_id}) in favour of the {side}.")
             return
         if args.test_mapping:
-            print_test_mapping(engine.test_mapping())
+            print_test_mapping(engine.test_mapping(), catalog=engine.catalog, units=args.units)
             return
 
         if args.backup:

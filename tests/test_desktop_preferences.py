@@ -64,3 +64,21 @@ def test_convert_enrich_checkbox_is_on_by_default_and_remembered(tmp_path, monke
     # a stray value in the file falls back to the default
     prefs._save({"convert": {"enrich_from_garmin": "no"}})
     assert prefs.get_convert_enrich() is True and prefs.get_convert_enrich(False) is False
+
+
+def test_units_preference_defaults_to_metric_and_round_trips(tmp_path, monkeypatch):
+    """The unit system the app shows (plans/units.md J2) is app-local in
+    desktop_prefs.json: metric until changed, remembered, and an unknown
+    value in the file falls back to metric."""
+    monkeypatch.setattr(prefs, "PREFS_FILE", str(tmp_path / "prefs.json"))
+    assert prefs.get_units() == "metric"
+    prefs.set_units("imperial")
+    assert prefs.get_units() == "imperial"
+    assert prefs._load()["units"] == "imperial"
+    prefs.set_units("metric")
+    assert prefs.get_units() == "metric"
+    # the setter normalises too: an alias is stored as the system it names
+    prefs.set_units("ft")
+    assert prefs._load()["units"] == "imperial"
+    prefs._save({"units": "furlongs"})
+    assert prefs.get_units() == "metric"

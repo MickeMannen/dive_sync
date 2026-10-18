@@ -35,7 +35,7 @@ __pycache__/
 /logs/
 /build/
 /backups/
-/docs/
+/docs/submersion_field_inventory.md
 /test_data/
 
 # Claude Code: personal permission settings stay local; .claude/agents/ is shared

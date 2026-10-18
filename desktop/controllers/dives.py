@@ -22,6 +22,8 @@ from PySide6.QtCore import (
 from desktop import accounts, credentials, preferences
 from desktop.jobs import Worker
 from src.core import dive_cache, scheduler
+from src.core import units as core_units
+from desktop.controllers.editing import display_number, js_number, si_number  # shared with the Dive edit page (I14)
 
 logger = logging.getLogger("dive_sync.desktop.dives")
 
@@ -73,7 +75,11 @@ SERVICE_HIDDEN_COLUMNS = {"subsurface": {"visibility"}}      # Subsurface rates 
 SERVICE_COLUMN_LABELS = {"subsurface": {"location": "Dive site"}, "divelogs": {"location": "Location, dive site"}}
 
 
-def column_label(service: str, key: str) -> str:
+def column_label(service: str, key: str, units: str = core_units.METRIC) -> str:
+    """A column's heading on a service; the SAC heading names the unit system
+    it is shown in (plans/units.md J3), the others carry no unit."""
+    if key == "sac":
+        return f"SAC ({core_units.sac_label(units)})"
     return SERVICE_COLUMN_LABELS.get(service, {}).get(key) or COLUMN_LABELS.get(key, key)
 
 
@@ -118,6 +124,159 @@ def _garmin_table_values(rows: List[Dict[str, Any]]) -> None:
         r["location"] = r.get("location_name") or ""
 
 
+# ---------------------------------------------------------------------------
+# Units (rework.md Track J, plans/units.md J3). The rows dive_cache lists are
+# SI (metres, bar, °C, litres; weight and visibility in the dive's own unit,
+# "4 kg" / "30 ft"), and so is everything the save path sends. Only what the
+# table and the form show converts, here, through src/core/units.py: in
+# metric every value is shown exactly as stored (nothing is reformatted), in
+# imperial converted and rounded per the display rule. Sorting always runs
+# on the stored rows, so the order is the same in both systems.
+
+_IMPERIAL_SUFFIXES = ("lb", "lbs", "pound", "pounds", "ft", "foot", "feet")
+_NUMBER_WITH_UNIT = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*([a-zA-Z]*)\s*$")
+# The tank table's numbers and their kinds (name, O2 and He carry no unit).
+_TANK_NUMBERS = (("volume", "volume"), ("start_pressure", "pressure"), ("end_pressure", "pressure"))
+
+
+def _split_unit(text: Any) -> tuple:
+    """``"4 kg"`` -> (4.0, "kg"), ``"10"`` -> (10.0, ""), anything else -> (None, "")."""
+    m = _NUMBER_WITH_UNIT.match("" if text is None else str(text))
+    return (float(m.group(1)), m.group(2).lower()) if m else (None, "")
+
+
+def _unit_system(suffix: str) -> str:
+    """The system a weight / visibility suffix belongs to; none means metric
+    (the services' default: kilograms, metres)."""
+    return core_units.IMPERIAL if suffix in _IMPERIAL_SUFFIXES else core_units.METRIC
+
+
+def tidy_unit_text(text: Any) -> str:
+    """A weight / visibility text with its number shortened for the table
+    (``"4.535923700100354 kg"`` -> ``"4.53592 kg"``, ``"4 kg"`` as it is):
+    the staged overlay only, the stored full-precision text is what is
+    saved."""
+    number, suffix = _split_unit(text)
+    if number is None:
+        return "" if text is None else str(text)
+    return f"{number:g} {suffix}".strip()
+
+
+def unit_text(kind: str, text: Any, system: str) -> str:
+    """A weight (``"4 kg"``, ``"10 lbs"``, ``"4"``) or visibility (``"10 m"``,
+    ``"30 ft"``; ``kind`` is ``depth``) as the row holds it, shown in
+    ``system``: a value already in that system (a bare number counts as
+    metric) is shown exactly as stored, one in the other system is converted
+    and rounded per the display rule, with the system's label."""
+    number, suffix = _split_unit(text)
+    if number is None or _unit_system(suffix) == system:
+        return "" if text is None else str(text)
+    si = core_units.convert_back(kind, number, _unit_system(suffix))
+    return f"{core_units.format_value(kind, si, system)} {core_units.unit_label(kind, system)}"
+
+
+def display_value(row: Dict[str, Any], key: str, system: str) -> str:
+    """One table cell: the row's value as text, converted for ``system`` when
+    the column carries a unit (depths, SAC, the water temperature and tank
+    summaries, weight, visibility)."""
+    value = row.get(key)
+    # weight and visibility are in the dive's own unit: a dive logged in
+    # pounds / feet converts to metric too (one in the shown system is left
+    # exactly as stored)
+    if key == "weight":
+        return unit_text("weight", value, system)
+    if key == "visibility":
+        return unit_text("depth", value, system)
+    if system != core_units.METRIC:
+        if key in ("max_depth", "avg_depth"):
+            return display_number("depth", value, system)
+        if key == "sac":
+            return display_number("sac", value, system)
+        if key == "water_temp" and row.get("water_temps") is not None:
+            return dive_cache._format_water_temp(*row["water_temps"], units=system)
+        if key == "tanks" and row.get("tanks_detail") is not None:
+            return dive_cache._format_tanks(row["tanks_detail"], system)
+    return "" if value is None else str(value)
+
+
+def display_tank(tank: Dict[str, Any], system: str) -> Dict[str, Any]:
+    """One tank of the editable tank table, its volume and pressures
+    converted (as text) for ``system``; untouched in metric."""
+    if system == core_units.METRIC:
+        return tank
+    out = dict(tank)
+    for key, kind in _TANK_NUMBERS:
+        if tank.get(key) not in (None, ""):
+            out[key] = display_number(kind, tank[key], system)
+    return out
+
+
+def display_row(row: Dict[str, Any], system: str) -> Dict[str, Any]:
+    """The row as the form shows it: a copy as stored in metric (except a
+    weight or visibility the dive holds in pounds / feet, converted); in
+    imperial with every unit-bearing value converted (``display_value``),
+    the editable water temperature as converted text and the tank table's
+    numbers converted too. The stored row is never changed."""
+    out = dict(row)
+    for key in ("weight", "visibility"):
+        if key in row:
+            out[key] = display_value(row, key, system)
+    if system == core_units.METRIC:
+        return out
+    for key in ("max_depth", "avg_depth", "sac", "water_temp", "tanks"):
+        if key in row:
+            out[key] = display_value(row, key, system)
+    if row.get("water_temp_value") not in (None, ""):
+        out["water_temp_value"] = display_number("temperature", row["water_temp_value"], system)
+    if row.get("tanks_detail"):
+        out["tanks_detail"] = [display_tank(t, system) for t in row["tanks_detail"]]
+    return out
+
+
+def si_unit_text(kind: str, typed: Any, shown: str, original: Any, system: str) -> str:
+    """A typed weight / visibility as the save path takes it (text, the
+    adapters parse the unit suffix): the stored text while the field is
+    untouched; a number typed in the chosen system (bare, or with that
+    system's unit) converted to the dive's own unit so the service's unit
+    field stays what it was, at full precision and with the stored suffix
+    (or none, as stored; a bare number on a dive stored with a suffix gets
+    that suffix too); a number typed with the other system's unit, or
+    text that is no number, sent exactly as typed, as before. With nothing
+    stored, a bare number typed in imperial gets that system's label (the
+    adapters read a bare number as metric)."""
+    typed_text = ("" if typed is None else str(typed)).strip()
+    if typed_text == shown.strip():
+        return str(original) if original not in (None, "") else typed_text
+    number, suffix = _split_unit(typed_text)
+    if number is None or (suffix and _unit_system(suffix) != system):
+        return typed_text
+    own_number, own_suffix = _split_unit(original)
+    if own_number is None:
+        # nothing stored to keep the unit of: a bare number is in the chosen
+        # system, and the adapters take a bare number as metric
+        return typed_text if suffix or system == core_units.METRIC else f"{typed_text} {core_units.unit_label(kind, system)}"
+    own_system = _unit_system(own_suffix)
+    if own_system == system:
+        # a bare number keeps the stored suffix, so the adapter keeps the unit
+        return typed_text if suffix or not own_suffix else f"{typed_text} {own_suffix}"
+    value = core_units.convert(kind, core_units.convert_back(kind, number, system), own_system)
+    return f"{value!r} {own_suffix}".strip()
+
+
+def si_tanks(typed: List[Dict[str, Any]], shown: List[Dict[str, Any]], original: List[Dict[str, Any]],
+             system: str) -> List[Dict[str, Any]]:
+    """The tank table's typed values with volumes and pressures brought back
+    to litres and bar (``si_number`` per cell, against the tank shown at the
+    same place); names and gas fractions pass through."""
+    out = []
+    for i, tank in enumerate(typed):
+        shown_tank = shown[i] if i < len(shown) else {}
+        original_tank = original[i] if i < len(original) else {}
+        out.append(dict(tank, **{key: si_number(kind, tank[key], js_number(shown_tank.get(key)), original_tank.get(key), system)
+                                 for key, kind in _TANK_NUMBERS if key in tank}))
+    return out
+
+
 def sort_value(row: Dict[str, Any], key: str) -> Any:
     """What a row is sorted on for a column: its value, except that sorting
     by date orders the dives of one day by their time too, whichever way
@@ -151,6 +310,9 @@ class DiveTableModel(QAbstractTableModel):
         # Which columns this service offers - the shared set plus its own.
         self._allowed = {key for key, _, _ in columns_for(service)}
         self._service = service
+        # the unit system the cells and the SAC heading are shown in; the
+        # rows stay SI (display_value)
+        self._units = core_units.METRIC
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -164,14 +326,16 @@ class DiveTableModel(QAbstractTableModel):
         row = self._rows[index.row()]
         key = self._columns[index.column()]
         staged = self._overlay.get(row.get("filename"))
-        value = staged[key] if staged and key in staged else row.get(key)
-        return "" if value is None else str(value)
+        if staged and key in staged:
+            value = staged[key]      # already display text (DivesController._staged_columns)
+            return "" if value is None else str(value)
+        return display_value(row, key, self._units)
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:
             return None
         if orientation == Qt.Horizontal and section < len(self._columns):
-            return column_label(self._service, self._columns[section])
+            return column_label(self._service, self._columns[section], self._units)
         return str(section + 1)
 
     def roleNames(self):
@@ -191,6 +355,15 @@ class DiveTableModel(QAbstractTableModel):
         self._overlay = overlay
         if self._rows and self._columns:
             self.dataChanged.emit(self.index(0, 0), self.index(len(self._rows) - 1, len(self._columns) - 1))
+
+    def set_units(self, system: str) -> None:
+        """Show every cell (and the SAC heading) in ``system``; the rows and
+        the sort are untouched."""
+        self._units = system
+        if self._rows and self._columns:
+            self.dataChanged.emit(self.index(0, 0), self.index(len(self._rows) - 1, len(self._columns) - 1))
+        if self._columns:
+            self.headerDataChanged.emit(Qt.Horizontal, 0, len(self._columns) - 1)
 
     def set_columns(self, columns: List[str]) -> None:
         self.beginResetModel()
@@ -294,10 +467,17 @@ class DivesController(QObject):
     _saveStep = Signal(int, int, str, str)
     _itemSaved = Signal(str, bool, bool)
 
-    def __init__(self, service: str, log_queue=None, parent: Optional[QObject] = None):
+    def __init__(self, service: str, log_queue=None, parent: Optional[QObject] = None, units=None):
+        """``units`` is the app's ``UnitsController`` (plans/units.md J2):
+        the page shows its system and follows ``unitsChanged``; without one
+        everything is metric."""
         super().__init__(parent)
         self.service = service
         self._model = DiveTableModel(self, service=service)
+        self._units_controller = units
+        if units is not None:
+            units.unitsChanged.connect(self._on_units_changed)
+            self._model.set_units(self._system())
         self._status = ""
         self._list_status = ""
         self._busy = False
@@ -316,7 +496,12 @@ class DivesController(QObject):
         self._live_known: Optional[Dict[str, float]] = None
         self._live_account: Optional[str] = None
         self._selected: Dict[str, Any] = {}
+        # filename -> the form's values brought back to SI (_si_fields): what
+        # the overlay formats and the save sends
         self._pending: Dict[str, Dict[str, Any]] = {}
+        # filename -> the form's values as typed, in the shown unit system:
+        # what the form shows again when the dive is re-selected
+        self._typed: Dict[str, Dict[str, Any]] = {}
         # dives marked for deletion: removed from the service (and the cache)
         # by Save all changes, like staged edits; Undo unmarks one
         self._deleting: List[str] = []
@@ -481,9 +666,9 @@ class DivesController(QObject):
     def selected(self):
         return dict(self._selected)
 
-    @Property("QVariantList", constant=True)
+    @Property("QVariantList", notify=columnsChanged)
     def allColumns(self):
-        return [{"key": k, "label": column_label(self.service, k)} for k, _h, _ in columns_for(self.service)]
+        return [{"key": k, "label": column_label(self.service, k, self._system())} for k, _h, _ in columns_for(self.service)]
 
     @Property("QVariantList", notify=columnsChanged)
     def visibleColumns(self):
@@ -500,6 +685,83 @@ class DivesController(QObject):
     def _set(self, attr: str, value, signal) -> None:
         setattr(self, attr, value)
         signal.emit()
+
+    # -- units (plans/units.md J3) ------------------------------------------
+
+    def _system(self) -> str:
+        """The unit system the page shows: the UnitsController's, else metric."""
+        if self._units_controller is None:
+            return core_units.METRIC
+        return core_units.normalize(self._units_controller.units)
+
+    def _on_units_changed(self) -> None:
+        """The Settings page switched the system: every cell, heading, the
+        form and the staged overlay show the new one at once. Staged edits
+        are kept as SI (``_pending``), so nothing is converted twice; only
+        their echo in the form (``_typed``) is re-expressed."""
+        system = self._system()
+        self._model.set_units(system)
+        for filename, fields in self._pending.items():
+            self._typed.setdefault(filename, {}).update(self._typed_from_si(fields, system))
+        self._pending_changed()
+        self.columnsChanged.emit()          # the SAC heading in the columns dialog
+        if self._selected.get("filename"):
+            self._select_filename(self._selected["filename"])
+
+    def _si_fields(self, filename: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        """The form's values with every unit-bearing one brought back to SI
+        (``si_number`` / ``si_unit_text`` / ``si_tanks``), each compared
+        against what the form showed for the stored dive in the current
+        system: a field left as shown keeps the stored value (no drift from
+        the rounded display), an edited one converts back at full precision.
+        In metric every value passes through as typed."""
+        system = self._system()
+        original = self._row_for(filename) or {}
+        shown = display_row(original, system)
+        out = dict(fields)
+        if "max_depth" in fields:
+            out["max_depth"] = si_number("depth", fields["max_depth"], js_number(shown.get("max_depth")),
+                                         original.get("max_depth"), system)
+        if "water_temp" in fields:
+            out["water_temp"] = si_number("temperature", fields["water_temp"], js_number(shown.get("water_temp_value")),
+                                          original.get("water_temp_value"), system)
+        if "weight" in fields:
+            out["weight"] = si_unit_text("weight", fields["weight"], js_number(shown.get("weight")),
+                                         original.get("weight"), system)
+        if "visibility" in fields:
+            out["visibility"] = si_unit_text("depth", fields["visibility"], js_number(shown.get("visibility")),
+                                             original.get("visibility"), system)
+        if fields.get("tanks") is not None:
+            out["tanks"] = si_tanks([dict(t) for t in fields["tanks"]], shown.get("tanks_detail") or [],
+                                    original.get("tanks_detail") or [], system)
+        return out
+
+    @staticmethod
+    def _echo_number(kind: str, value: Any, system: str) -> str:
+        """A staged SI value as the form echoes it after a units switch: the
+        display rule in imperial; in metric a converted float rounded to
+        six decimals so the field does not show a float's tail."""
+        if system == core_units.METRIC and isinstance(value, float):
+            return js_number(round(value, 6))
+        return display_number(kind, value, system)
+
+    def _typed_from_si(self, fields: Dict[str, Any], system: str) -> Dict[str, Any]:
+        """The unit-bearing staged values expressed in ``system`` for the
+        form (the inverse of ``_si_fields``, used when the system changes
+        while edits are staged)."""
+        out: Dict[str, Any] = {}
+        if "max_depth" in fields:
+            out["max_depth"] = self._echo_number("depth", fields["max_depth"], system)
+        if "water_temp" in fields:
+            out["water_temp"] = self._echo_number("temperature", fields["water_temp"], system)
+        if "weight" in fields:
+            out["weight"] = unit_text("weight", fields["weight"], system)
+        if "visibility" in fields:
+            out["visibility"] = unit_text("depth", fields["visibility"], system)
+        if fields.get("tanks") is not None:
+            out["tanks"] = [dict(t, **{key: self._echo_number(kind, t[key], system) for key, kind in _TANK_NUMBERS if key in t})
+                            for t in fields["tanks"]]
+        return out
 
     # -- listing ----------------------------------------------------------
 
@@ -522,7 +784,7 @@ class DivesController(QObject):
         # staged edits and deletions of dives no longer listed (deleted elsewhere) go
         dropped = [f for f in list(self._pending) + self._deleting if not self._row_for(f)]
         for f in dropped:
-            self._pending.pop(f, None)
+            self._drop_pending(f)
         self._deleting = [f for f in self._deleting if f not in dropped]
         if dropped:
             self._pending_changed()
@@ -543,8 +805,9 @@ class DivesController(QObject):
 
     @Slot(int)
     def select(self, row: int) -> None:
-        self._selected = self._model.row(row) if row >= 0 else {}
-        staged = self._pending.get(self._selected.get("filename"))
+        # the form shows the dive in the chosen unit system (display_row)
+        self._selected = display_row(self._model.row(row), self._system()) if row >= 0 else {}
+        staged = self._typed.get(self._selected.get("filename"))
         if staged:
             # the form shows the dive as edited, not as stored
             self._selected = dict(self._selected, **self._staged_as_row(staged), pending=True)
@@ -789,12 +1052,20 @@ class DivesController(QObject):
         self.pendingChanged.emit()
 
     def _staged_columns(self, fields: Dict[str, Any]) -> Dict[str, Any]:
-        """The table's column values for a dive's staged edits, formatted the
-        way the list formats stored ones (dive_cache.list_*_dives)."""
+        """The table's column values for a dive's staged edits (SI, see
+        ``_si_fields``), formatted the way the list formats stored ones
+        (dive_cache.list_*_dives) in the shown unit system."""
+        system = self._system()
         out: Dict[str, Any] = {}
-        for key in ("date", "time", "duration", "max_depth", "buddy", "weight", "visibility", "notes"):
+        for key in ("date", "time", "duration", "buddy", "notes"):
             if key in fields:
                 out[key] = str(fields[key])
+        if "max_depth" in fields:
+            out["max_depth"] = self._echo_number("depth", fields["max_depth"], system)
+        if "weight" in fields:
+            out["weight"] = unit_text("weight", tidy_unit_text(fields["weight"]), system)
+        if "visibility" in fields:
+            out["visibility"] = unit_text("depth", tidy_unit_text(fields["visibility"]), system)
         if self.diveNumberEditable and "dive_number" in fields:
             out["dive_number"] = str(fields["dive_number"])
         if self.splitSiteNames:
@@ -806,12 +1077,12 @@ class DivesController(QObject):
             out["location"] = str(fields["location"])
         if "water_temp" in fields:
             temp = self._optional_float(str(fields["water_temp"] or ""))
-            out["water_temp"] = dive_cache._format_water_temp(temp, temp, temp) if temp is not None else ""
+            out["water_temp"] = dive_cache._format_water_temp(temp, temp, temp, system) if temp is not None else ""
         if self.tanksEditable and fields.get("tanks") is not None:
             tanks = [{k: (self._optional_float(str(t.get(k, ""))) if k != "tank_name" else (t.get(k) or None))
                       for k in ("tank_name", "oxygen", "helium", "volume", "start_pressure", "end_pressure")}
                      for t in fields["tanks"]]
-            out["tanks"] = dive_cache._format_tanks(tanks)
+            out["tanks"] = dive_cache._format_tanks(tanks, system)
         return out
 
     def _staged_as_row(self, fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -911,17 +1182,25 @@ class DivesController(QObject):
 
     @Slot(str, "QVariantMap")
     def stage(self, filename: str, fields) -> None:
-        """Keep the form's values for ``filename`` until it is saved or undone."""
+        """Keep the form's values for ``filename`` until it is saved or undone:
+        as typed for the form, and brought back to SI (``_si_fields``) for
+        the table and the save."""
         if not filename or not self._row_for(filename) or filename in self._deleting:
             return
-        self._pending[filename] = dict(fields)
+        fields = dict(fields)
+        self._typed[filename] = fields
+        self._pending[filename] = self._si_fields(filename, fields)
         self._pending_changed()
+
+    def _drop_pending(self, filename: str) -> None:
+        self._pending.pop(filename, None)
+        self._typed.pop(filename, None)
 
     @Slot(str)
     def discard(self, filename: str) -> None:
         """Undo: drop the dive's staged edits (or its deletion mark) and show
         its stored values again."""
-        self._pending.pop(filename, None)
+        self._drop_pending(filename)
         if filename in self._deleting:
             self._deleting.remove(filename)
         self._pending_changed()
@@ -1081,14 +1360,14 @@ class DivesController(QObject):
         if deleted:
             if filename in self._deleting:
                 self._deleting.remove(filename)
-            self._pending.pop(filename, None)
+            self._drop_pending(filename)
             self._model.remove_row(filename)
             self.diveCountChanged.emit()
         else:
             # only the values that were sent: a dive edited again while it
             # uploaded keeps its newer edits pending
             if self._pending.get(filename) is self._save_sent.get(filename):
-                self._pending.pop(filename, None)
+                self._drop_pending(filename)
             self._refresh_saved_row(filename)
         self._pending_changed()
 
@@ -1117,7 +1396,7 @@ class DivesController(QObject):
         filename = self._selected.get("filename")
         if not filename:
             return
-        self._pending.pop(filename, None)
+        self._drop_pending(filename)
         if filename not in self._deleting:
             self._deleting.append(filename)
         self._pending_changed()

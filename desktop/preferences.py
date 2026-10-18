@@ -209,3 +209,24 @@ def set_convert_enrich(enabled: bool) -> None:
     prefs = _load()
     prefs.setdefault("convert", {})["enrich_from_garmin"] = bool(enabled)
     _save(prefs)
+
+
+# -- the unit system the app shows (rework.md Track J, plans/units.md J2) ----
+#
+# "metric" or "imperial"; app-local by the owner's decision (2026-10-18): it
+# is how this computer shows numbers, so it lives here and not in
+# settings.json's sync profile. Every stored value stays SI (src/core/units).
+
+def get_units() -> str:
+    """The unit system the app shows: ``"metric"`` (the default, and what an
+    unknown value falls back to) or ``"imperial"``."""
+    from src.core import units
+    prefs = _load()
+    return units.normalize(prefs.get("units"))
+
+
+def set_units(system: str) -> None:
+    from src.core import units
+    prefs = _load()
+    prefs["units"] = units.normalize(system)
+    _save(prefs)

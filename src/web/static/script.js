@@ -223,7 +223,7 @@ function renderHistoryRun(run) {
     sections.push(`<h3>Conflicts (${results.conflicts.length})</h3>` +
       historyTable(["Dive", "Field", serviceName(results.conflicts[0].source_service), serviceName(results.conflicts[0].target_service)],
         results.conflicts.map((c) => [c.dive_time || "", c.source_key === c.target_key ? c.target_key : `${c.source_key} → ${c.target_key}`,
-          formatValue(c.source_value), formatValue(c.target_value)])));
+          c.source_text ?? formatValue(c.source_value), c.target_text ?? formatValue(c.target_value)])));
   }
   if (results.skipped && results.skipped.length) {
     sections.push(`<h3>Skipped (${results.skipped.length})</h3>` +
@@ -579,6 +579,7 @@ async function testCredentials() {
 
 function populateDefaults(settings) {
   $("api-cooldown").value = settings.api_cooldown_seconds;
+  $("units").value = settings.units === "imperial" ? "imperial" : "metric";
   $("notify-url").value = settings.notify_url || "";
 }
 
@@ -834,6 +835,7 @@ function settingsPayload(extra) {
     sync_filters: Object.assign({}, saved.sync_filters || {}),
     grace_window_minutes: saved.grace_window_minutes,
     api_cooldown_seconds: parseFloat($("api-cooldown").value),
+    units: $("units").value,            // app-local (web_prefs.json), never in the profile
     propagate_deletes: !!saved.propagate_deletes,
     create_on_garmin: !!saved.create_on_garmin,
     create_device_dives_on_submersion: !!saved.create_device_dives_on_submersion,
@@ -1795,8 +1797,8 @@ async function testBoard() {
       const tr = document.createElement("tr");
       const cls = r.conflict ? "result-conflict" : (r.result.startsWith("write") ? "result-write" : "");
       tr.innerHTML = `<td>${escapeHtml(r.dive_time)}</td><td>${escapeHtml(r.link)}${r.split ? " (split)" : ""}</td><td>${escapeHtml(r.receiver || "")}</td>
-        <td class="key">${escapeHtml(r.source_key)}</td><td>${escapeHtml(JSON.stringify(r.source_value))}</td>
-        <td class="key">${escapeHtml(r.target_key)}</td><td>${escapeHtml(JSON.stringify(r.target_value))}</td>
+        <td class="key">${escapeHtml(r.source_key)}</td><td>${escapeHtml(r.source_text ?? JSON.stringify(r.source_value))}</td>
+        <td class="key">${escapeHtml(r.target_key)}</td><td>${escapeHtml(r.target_text ?? JSON.stringify(r.target_value))}</td>
         <td class="${cls}">${escapeHtml(r.result)}${r.warnings?.length ? " ⚠" : ""}</td>`;
       body.appendChild(tr);
     });

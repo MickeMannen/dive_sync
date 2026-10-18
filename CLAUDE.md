@@ -3,12 +3,12 @@
 This file is the entry point for Claude Code sessions in this repo. It points to the existing docs rather than duplicating them — read those first, keep this file thin.
 
 ## What this project is
-`dive_sync` is a bidirectional dive log sync engine between **Garmin Connect**, **Divelogs.org** and **Subsurface** (Subsurface Cloud, a git checkout, or a UDDF file), with three front ends: a **desktop app** (DiveSync, PySide6/Qt Quick in `desktop/`, for manual syncs, browsing and editing dives, the mapping board and conflicts), a **FastAPI web dashboard** shipped in the Docker image for unattended scheduled syncs, and a **CLI** (`sync.py`). Beta quality; author has tested Garmin→Divelogs more than the reverse direction. See [README.md](README.md) for features, install, CLI usage, Docker deployment and the desktop app.
+`dive_sync` is a bidirectional dive log sync engine between **Garmin Connect**, **Divelogs.org** and **Subsurface** (Subsurface Cloud, a git checkout, or a UDDF file), with three front ends: a **desktop app** (DiveSync, PySide6/Qt Quick in `desktop/`, for manual syncs, browsing and editing dives, the mapping board and conflicts), a **FastAPI web dashboard** shipped in the Docker image for unattended scheduled syncs, and a **CLI** (`sync.py`). Beta quality; author has tested Garmin→Divelogs more than the reverse direction. See [README.md](README.md) for features and install, and [docs/](docs/README.md) for the user docs (one page per desktop-app page, CLI, configuration, Docker, web dashboard, building).
 
 ## Where to look
-- [CONTEXT.md](CONTEXT.md) — architecture, directory layout, core concepts (dive normalization via `UnifiedDive`, three-tier dive matching in `SyncEngine`, deletion flow). Read this before touching `src/core/`.
+- [docs/technical.md](docs/technical.md) (was `CONTEXT.md` until 2026-10-18) — architecture, directory layout, core concepts (dive normalization via `UnifiedDive`, three-tier dive matching in `SyncEngine`, deletion flow). Read this before touching `src/core/`.
 - [AGENTS.md](AGENTS.md) — coding conventions and constraints for AI agents working in this repo (Pydantic models, `BaseDiveAdapter` interface, declarative JSONPath mappings in `src/core/mapping/`, API rate-limit/cooldown rules, test requirements). Follow these when writing or editing code here.
-- [README.md](README.md) — user-facing docs: features, credentials setup, CLI flags, Docker deployment, known limitations.
+- [README.md](README.md) and [docs/](docs/README.md) — user-facing docs: features, credentials setup, CLI flags, Docker deployment, known limitations. A user-facing change updates the docs page it belongs to, not only the README.
 
 ## Quick commands
 ```bash
@@ -57,4 +57,4 @@ The owner does the coding, testing and the release builds; Claude keeps the reco
 Tagging and creating the release are public and hard to undo, so if the tree is dirty, tests have not been run this session, or the version already exists as a tag, say so and stop instead of proceeding.
 
 ## Notes for this migration
-This project's docs (CONTEXT.md, AGENTS.md) were originally written while developing with Gemini; they're tool-agnostic and still accurate against the current code (verified against `src/` on 2026-08-16). No Claude-specific rework was needed — just this pointer file so Claude Code picks up context automatically each session.
+This project's docs (docs/technical.md, then CONTEXT.md; AGENTS.md) were originally written while developing with Gemini; they're tool-agnostic and still accurate against the current code (verified against `src/` on 2026-08-16). No Claude-specific rework was needed — just this pointer file so Claude Code picks up context automatically each session.

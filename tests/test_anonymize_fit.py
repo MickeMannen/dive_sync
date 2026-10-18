@@ -9,7 +9,7 @@ import struct
 
 import pytest
 
-garmin_fit_sdk = pytest.importorskip("garmin_fit_sdk", reason="garmin-fit-sdk is a dev-only dependency (requirements-dev.txt)")
+garmin_fit_sdk = pytest.importorskip("garmin_fit_sdk", reason="garmin-fit-sdk is not installed (requirements.txt)")
 from garmin_fit_sdk import Decoder, Stream  # noqa: E402
 
 from tests.tools import anonymize_fit as tool

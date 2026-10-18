@@ -537,6 +537,9 @@ ColumnLayout {
                 }
                 // A regular grid: when and which dive, then depths and conditions,
                 // then names, then people and position. Wide fields span two columns.
+                // Depths, temperature, weight, visibility and the tank table are
+                // shown and typed in the Settings page's unit system (units.labels,
+                // Track J): the controller converts them, the form only shows them.
                 GridLayout {
                     columns: 4
                     columnSpacing: 16
@@ -555,17 +558,17 @@ ColumnLayout {
                     }
                     LabeledField { id: fDuration; label: page.profileLocked ? "Duration (from the dive profile)" : "Duration (min)"; readOnly: page.profileLocked; fieldWidth: 150; text: detailCard.sel.duration || ""; onEditingFinished: page.stageCurrent() }
 
-                    LabeledField { id: fMaxDepth; label: page.profileLocked ? "Max depth (from the dive profile)" : "Max depth (m)"; readOnly: page.profileLocked; fieldWidth: 150; text: detailCard.sel.max_depth || ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { label: "Avg depth (m)"; fieldWidth: 150; readOnly: true; text: detailCard.sel.avg_depth || "" }
-                    LabeledField { id: fWaterTemp; label: "Water temp (°C)"; fieldWidth: 150; text: detailCard.sel.water_temp_value !== undefined && detailCard.sel.water_temp_value !== null ? String(detailCard.sel.water_temp_value) : ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fVisibility; visible: controller.hasVisibility; label: "Visibility"; fieldWidth: 150; text: detailCard.sel.visibility || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fMaxDepth; objectName: "field-max-depth"; label: page.profileLocked ? "Max depth (from the dive profile)" : "Max depth (" + units.labels.depth + ")"; readOnly: page.profileLocked; fieldWidth: 150; text: detailCard.sel.max_depth || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { label: "Avg depth (" + units.labels.depth + ")"; fieldWidth: 150; readOnly: true; text: detailCard.sel.avg_depth || "" }
+                    LabeledField { id: fWaterTemp; objectName: "field-water-temp"; label: "Water temp (" + units.labels.temperature + ")"; fieldWidth: 150; text: detailCard.sel.water_temp_value !== undefined && detailCard.sel.water_temp_value !== null ? String(detailCard.sel.water_temp_value) : ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fVisibility; visible: controller.hasVisibility; label: "Visibility (" + units.labels.depth + ")"; fieldWidth: 150; text: detailCard.sel.visibility || ""; onEditingFinished: page.stageCurrent() }
 
                     LabeledField { id: fLocation; Layout.columnSpan: 4; label: controller.locationLabel; placeholder: controller.locationHint; fieldWidth: 682; visible: !controller.splitSiteNames; text: detailCard.sel.location || ""; onEditingFinished: page.stageCurrent() }
                     LabeledField { id: fActivityName; Layout.columnSpan: 2; label: "Activity name"; fieldWidth: 316; visible: controller.splitSiteNames; text: detailCard.sel.activity_name || ""; onEditingFinished: page.stageCurrent() }
                     LabeledField { id: fLocationName; Layout.columnSpan: 2; label: "Location name"; fieldWidth: 316; visible: controller.splitSiteNames; text: detailCard.sel.location_name || ""; onEditingFinished: page.stageCurrent() }
 
                     LabeledField { id: fBuddy; objectName: "field-buddy"; label: "Buddy"; fieldWidth: 150; text: detailCard.sel.buddy || ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fWeight; label: "Weight"; fieldWidth: 150; text: detailCard.sel.weight || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fWeight; objectName: "field-weight"; label: "Weight (" + units.labels.weight + ")"; fieldWidth: 150; text: detailCard.sel.weight || ""; onEditingFinished: page.stageCurrent() }
                     LabeledField { id: fLat; label: "Latitude"; fieldWidth: 150; text: page.coordText(detailCard.sel.lat); onEditingFinished: page.stageCurrent() }
                     LabeledField { id: fLng; label: "Longitude"; fieldWidth: 150; text: page.coordText(detailCard.sel.lng); onEditingFinished: page.stageCurrent() }
 
@@ -617,14 +620,15 @@ ColumnLayout {
                         spacing: 4
                         // headings and fields share one width per column, so they line up
                         RowLayout {
+                            objectName: "tankHeadings"
                             visible: tankModel.count > 0
                             spacing: 8
                             Text { text: "Name"; Layout.preferredWidth: 160; color: Theme.muted; font.pixelSize: 11 }
                             Text { text: "O2 %"; Layout.preferredWidth: 70; color: Theme.muted; font.pixelSize: 11 }
                             Text { text: "He %"; Layout.preferredWidth: 70; color: Theme.muted; font.pixelSize: 11 }
-                            Text { text: "Volume (L)"; Layout.preferredWidth: 80; color: Theme.muted; font.pixelSize: 11 }
-                            Text { text: "Start (bar)"; Layout.preferredWidth: 80; color: Theme.muted; font.pixelSize: 11 }
-                            Text { text: "End (bar)"; Layout.preferredWidth: 80; color: Theme.muted; font.pixelSize: 11 }
+                            Text { text: "Volume (" + units.labels.volume + ")"; Layout.preferredWidth: 80; color: Theme.muted; font.pixelSize: 11 }
+                            Text { text: "Start (" + units.labels.pressure + ")"; Layout.preferredWidth: 80; color: Theme.muted; font.pixelSize: 11 }
+                            Text { text: "End (" + units.labels.pressure + ")"; Layout.preferredWidth: 80; color: Theme.muted; font.pixelSize: 11 }
                         }
                         Repeater {
                             model: tankModel
@@ -663,7 +667,7 @@ ColumnLayout {
                     }
                 }
                 // The depth profile (ProfileChart.qml, shared with the Convert page)
-                ProfileChart { Layout.fillWidth: true; samples: detailCard.sel.samples || [] }
+                ProfileChart { objectName: "profileChart"; Layout.fillWidth: true; samples: detailCard.sel.samples || []; depthScale: units.scales.depth }
             }
         }
     }
