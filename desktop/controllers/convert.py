@@ -79,12 +79,24 @@ between two - the rule being `fit_merge.merge_problem`'s on the dives as
 read, "" when they can; `mergeProblemOf(rows)` re-checks the dialog's
 ticked rows. The page's Merge… button (under the list) is on with two or
 more dives selected and the dialog shows the reason in red with Save… off.
-`merge(rows, url, close_gap)` runs `fit_merge.merge_fits` on the worker,
+`mergeSerialsOf(rows)` is what the dialog shows when a ticked log has no
+dive computer serial (the choices among the logs' serials and the note;
+I20); `merge(rows, url, close_gap, serial)` runs `fit_merge.merge_fits` on the worker,
 refusing a target equal to a source, and on success adds the merged
 file's dive to the list through the normal open path (its source is the
 merged file; a stale row of the same file is dropped first) and selects
 it; a refusal or a failure is `mergeError`, shown under the list, and
 nothing is added.
+
+Debug report (I21): `canReport` is on when the selection cannot be merged
+(`mergeProblem`, two or more selected) or the last merge failed
+(`mergeError`); `debugReportUrl()` suggests ``DiveSync debug report <date
+time>.txt`` in the dialogs' folder and `saveDebugReport(url[, rows])`
+writes `debug_report.merge_report` there - for the dialog's ticked rows
+when given, else for the last failed request (its paths, mode, serial,
+error and traceback are kept when a merge fails), else for the selection
+- with the app's recent log lines (`logging_bridge.recent_lines`). It
+never writes anywhere but the file picked.
 """
 from __future__ import annotations
 
@@ -95,14 +107,14 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from PySide6.QtCore import Property, QObject, QStandardPaths, QUrl, Signal, Slot
 
-from desktop import accounts
+from desktop import accounts, logging_bridge
 from desktop import credentials as creds_store
 from desktop import preferences
 from desktop.jobs import Worker
 from src.core import layout
 from src.core import units as core_units
 from desktop.controllers.editing import display_number, js_number, optional_float, si_number
-from src.core.convert import edit, enrich, fit_merge, formats, profile
+from src.core.convert import debug_report, edit, enrich, fit_merge, formats, profile
 from src.core.models import KNOWN_DIVE_MODES, KNOWN_WATER_TYPES, UnifiedDive
 
 logger = logging.getLogger("dive_sync.desktop.convert")
@@ -519,6 +531,7 @@ class ConvertController(QObject):
         self._originals: Dict[int, UnifiedDive] = {}  # row -> the baseline Revert goes back to: the dive before its first edit, or as last saved (I15)
         self._edit_error = ""
         self._merge_error = ""                  # why the last merge was refused or failed (I17)
+        self._last_failed: Optional[Dict[str, Any]] = None   # the request that failed, for the debug report (I21)
         self._fit_sources: Dict[str, bool] = {}   # path -> opened from a .fit / Connect zip (read once per file)
         self._cached: Dict[str, enrich.CachedDive] = {}   # the Garmin cache entries of the dives read (enrich.load_cached_dives keys)
         self._enrichments: List[enrich.Enrichment] = []
@@ -1219,6 +1232,31 @@ class ConvertController(QObject):
         re-checked when a tick changes."""
         return self._merge_problem_of([int(r) for r in (rows or [])])
 
+    @Slot("QVariantList", result="QVariantMap")
+    def mergeSerialsOf(self, rows) -> dict:
+        """What the Merge dialog needs about the dive computer serial of
+        the dives at ``rows`` (the ticked rows, in order; I20): ``choices``
+        - the distinct serials among them in order of first appearance
+        (`fit_merge.serial_choices`; the first is the first log's when it
+        has one, the dialog's default) -, ``missing`` - the names of the
+        dives without one (`fit_merge.missing_serials`) - and ``note``: with
+        two or more rows and a dive without a serial, why the dialog asks
+        ("dive 9 has no dive computer serial; the merged file needs one so
+        Garmin Connect knows which watch it came from") or, when no dive
+        has one, that the merged file will have none; "" otherwise."""
+        rows = [int(r) for r in (rows or []) if 0 <= int(r) < len(self._dives_as_read)]
+        dives = [self._dives_as_read[r] for r in rows]
+        choices, missing = fit_merge.serial_choices(dives), fit_merge.missing_serials(dives)
+        note = ""
+        if len(rows) > 1 and missing:
+            if choices:
+                names = missing[0] if len(missing) == 1 else ", ".join(missing[:-1]) + " and " + missing[-1]
+                note = (f"{names} {'has' if len(missing) == 1 else 'have'} no dive computer serial; the merged file needs one "
+                        "so Garmin Connect knows which watch it came from.")
+            else:
+                note = "No log carries a dive computer serial; Garmin Connect may not accept the merged file."
+        return {"choices": choices, "missing": missing, "note": note}
+
     @Property(str, notify=mergeChanged)
     def mergeError(self) -> str:
         """Why the last merge was refused or failed (`fit_merge.MergeError`'s
@@ -1239,10 +1277,15 @@ class ConvertController(QObject):
         return QUrl.fromLocalFile(os.path.join(folder, fit_merge.merged_file_name(source))).toString()
 
     @Slot("QVariantList", str, bool)
-    def merge(self, rows, url: str, close_gap: bool) -> None:
+    @Slot("QVariantList", str, bool, str)
+    def merge(self, rows, url: str, close_gap: bool, serial: str = "") -> None:
         """Join the logs of ``rows`` (the dialog's ticked chain, in order;
         two or more) into the file picked, keeping the real times and
         filling the gaps or closing them (``close_gap``), on the worker.
+        ``serial`` is the dive computer serial the merged file gets when
+        the first log has none (the dialog's choice among
+        `mergeSerialsOf`'s; "" for none chosen, when `fit_merge` takes the
+        first serial any log carries, or none at all with a warning).
         A target equal to one of the logs is refused (`mergeError`) and
         nothing written; `fit_merge.MergeError` or a write failure is
         `mergeError` too and nothing is added. On success the merged file's
@@ -1253,19 +1296,30 @@ class ConvertController(QObject):
         dest = local_path(url)
         if self._busy or not dest:
             return
+        request: Dict[str, Any] = {"paths": [self._paths[r] for r in rows if 0 <= r < len(self._paths)],
+                                   "mode": bool(close_gap), "serial": (serial or "").strip(), "traceback": None}
+
+        def refuse(text: str) -> None:
+            self._last_failed = {**request, "error": text}
+            self._set_merge_error(text)
+
         if len(rows) < 2 or any(not 0 <= r < len(self._paths) or not self._paths[r] for r in rows):
-            self._set_merge_error("Two or more logs are needed; pick the first and at least one later log.")
+            refuse("Two or more logs are needed; pick the first and at least one later log.")
             return
-        paths = [self._paths[r] for r in rows]
+        paths = request["paths"]
         if any(os.path.abspath(dest) == os.path.abspath(p) for p in paths):
-            self._set_merge_error("The merged file cannot replace one of the logs; choose another name.")
+            refuse("The merged file cannot replace one of the logs; choose another name.")
             return
         self._set_merge_error("")
         self._set_busy(True)
         self._set_message(f"Merging {len(paths)} logs…")
 
         def work():
-            return fit_merge.merge_fits(paths, dest, bool(close_gap))
+            try:
+                return fit_merge.merge_fits(paths, dest, bool(close_gap), request["serial"] or None)
+            except Exception as e:  # the worker reports str(e); the report wants the traceback too
+                request["traceback"] = debug_report.format_exception(e)
+                raise
 
         def report(result: fit_merge.MergeResult):
             def one(n, word):
@@ -1282,6 +1336,7 @@ class ConvertController(QObject):
 
         def done(result):
             self._set_busy(False)
+            self._last_failed = None
             stale = [r for r, p in enumerate(self._paths) if p and os.path.abspath(p) == os.path.abspath(dest)]
             if stale:
                 self._drop_rows(stale)
@@ -1291,13 +1346,70 @@ class ConvertController(QObject):
         def fail(text):
             self._set_busy(False)
             self._set_message(self._read_text + self._enrich_text() if self._read_text else "")
-            self._set_merge_error(text)
+            refuse(text)
 
         worker = Worker(work, parent=self)
         worker.finished_ok.connect(done)
         worker.failed.connect(fail)
         self._worker = worker
         worker.start()
+
+    # -- debug report (I21) --------------------------------------------------
+
+    @Property(bool, notify=mergeChanged)
+    def canReport(self) -> bool:
+        """Whether there is a refusal or a failure to report: the selection
+        (two or more) cannot be merged (`mergeProblem`), or the last merge
+        failed (`mergeError`). The page shows Generate debug report… in
+        the dialog next to the reason and under the list next to the error."""
+        return bool(self._merge_error) or (len(self._merge_rows()) > 1 and bool(self.mergeProblem))
+
+    @Slot(result=str)
+    def debugReportUrl(self) -> str:
+        """The Save dialog's file for the report: ``DiveSync debug report
+        <YYYY-MM-DD HHMM>.txt`` in the dialogs' folder (the last one used,
+        else Documents), as a file URL."""
+        name = f"DiveSync debug report {datetime.now().strftime('%Y-%m-%d %H%M')}.txt"
+        return QUrl.fromLocalFile(os.path.join(preferences.get_convert_folder(documents_folder()), name)).toString()
+
+    def _report_request(self, rows: Optional[Sequence[int]]) -> Dict[str, Any]:
+        """What the report describes: the dialog's ticked ``rows`` when
+        given (the refusal being `mergeProblemOf` theirs), else the last
+        failed merge (paths, mode, serial, error, traceback), else the
+        selection in start order with its `mergeProblem`."""
+        if rows is not None:
+            rows = [int(r) for r in rows if 0 <= int(r) < len(self._paths)]
+            return {"paths": [self._paths[r] for r in rows if self._paths[r]], "problem": self._merge_problem_of(rows) or None,
+                    "error": None, "traceback": None, "mode": None, "serial": None}
+        if self._last_failed is not None:
+            return {"paths": self._last_failed["paths"], "problem": None, "error": self._last_failed.get("error"),
+                    "traceback": self._last_failed.get("traceback"), "mode": self._last_failed.get("mode"),
+                    "serial": self._last_failed.get("serial") or None}
+        rows = self._merge_rows()
+        return {"paths": [self._paths[r] for r in rows if self._paths[r]], "problem": self._merge_problem_of(rows) or None,
+                "error": None, "traceback": None, "mode": None, "serial": None}
+
+    @Slot(str)
+    @Slot(str, "QVariantList")
+    def saveDebugReport(self, url: str, rows=None) -> None:
+        """Write `debug_report.merge_report` for `_report_request` (``rows``:
+        the dialog's ticked rows, None from under the list) and the recent
+        log lines to the file picked (``url``), and say so in `message`;
+        a write failure is `mergeError`. Nothing else is written anywhere."""
+        dest = local_path(url)
+        if not dest:
+            return
+        request = self._report_request(rows)
+        text = debug_report.merge_report(request["paths"], problem=request["problem"], error=request["error"],
+                                         traceback_text=request["traceback"], mode=request["mode"], serial=request["serial"],
+                                         log_lines=logging_bridge.recent_lines())
+        try:
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            self._set_merge_error(f"Could not write {os.path.basename(dest)}: {e.strerror or e}")
+            return
+        self._set_message(f"Wrote the debug report to {dest}. Send it to the developer with a note of what you did.")
 
     # -- selection ---------------------------------------------------------
 

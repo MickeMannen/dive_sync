@@ -4,6 +4,26 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
+## Unreleased
+
+- Dive edit page: merging a split dive no longer stops at "dive 9 has no dive
+  computer serial". The serial is now also read from the file's device
+  record when the file header leaves it out, and when a log still has none
+  the Merge dialog asks which serial the merged file gets (from the serials
+  of the logs being merged) and writes it into the file, so Garmin Connect
+  knows which watch it came from; with no serial in any log the merge goes
+  ahead and says that Connect may not accept the file. Logs from two
+  different computers are still refused.
+- Dive edit page: when a merge is refused or fails, a **Generate debug
+  report…** button (next to the reason in the Merge dialog, and next to the
+  error under the list) saves a text file you can send to the developer: the
+  app, system and library versions, the merge that was asked for, why it was
+  refused or how it failed, and per log the file name, size and checksum, the
+  dive computer and its serial, times, sample count, gases, tanks and event
+  counts, plus the app's recent log lines. It holds no GPS positions, site or
+  location names, notes, buddy, full file paths, passwords or tokens, and
+  says so at the top.
+
 ## 0.4.4 - 2026-10-18
 
 - Dive edit page: the depth profile shows a sample's data under the mouse -

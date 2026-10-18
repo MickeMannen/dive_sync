@@ -362,15 +362,52 @@ def _events(messages: _Messages, start: int, gases: Sequence[_Gas], tanks: Seque
     return out
 
 
+def _product_number(message: Optional[fitdecode.FitDataMessage]) -> Optional[int]:
+    """A file_id's or device_info's product number (raw: fitdecode names the
+    products it knows and leaves the newer ones as numbers)."""
+    product = _int(_value(message, "garmin_product", raw=True))
+    return product if product is not None else _int(_value(message, "product", raw=True))
+
+
+def _is_creator(info: fitdecode.FitDataMessage) -> bool:
+    return _value(info, "device_index") in ("creator", 0)
+
+
+def _creators(messages: _Messages) -> List[fitdecode.FitDataMessage]:
+    """The dive computer's own device_info messages (Garmin writes several
+    over a dive): those with device_index 0 (the 'creator'), else - for a
+    writer that does not number its devices - those without a device_index
+    whose manufacturer and product are file_id's; [] when the file has
+    neither (a tank pod, device_index 1 and up, never is the computer)."""
+    infos = messages.all("device_info")
+    creators = [info for info in infos if _is_creator(info)]
+    if creators:
+        return creators
+    file_id = messages.first("file_id")
+    maker, product = _value(file_id, "manufacturer"), _product_number(file_id)
+    if maker is None and product is None:
+        return []
+    return [info for info in infos if _value(info, "device_index") is None
+            and _value(info, "manufacturer") == maker and _product_number(info) == product]
+
+
+def _serial(messages: _Messages) -> Optional[int]:
+    """The dive computer's serial: file_id's ``serial_number``, else - when
+    that is missing or unset (some files leave it 0) - the first creator
+    device_info's that has one (`_creators`; plans/convert.md I20)."""
+    serial = _int(_value(messages.first("file_id"), "serial_number"))
+    if serial:
+        return serial
+    return next((s for s in (_int(_value(info, "serial_number")) for info in _creators(messages)) if s), None)
+
+
 def _firmware(messages: _Messages) -> Optional[str]:
-    """The watch's firmware from its own device_info (the 'creator'), else
-    from file_creator (an integer, hundredths)."""
-    for info in messages.all("device_info"):
-        index = _value(info, "device_index")
-        if index in ("creator", 0):
-            version = _float(_value(info, "software_version"))
-            if version is not None:
-                return f"{version:.2f}"
+    """The watch's firmware from its own device_info (the 'creator',
+    `_creators`), else from file_creator (an integer, hundredths)."""
+    for info in _creators(messages):
+        version = _float(_value(info, "software_version"))
+        if version is not None:
+            return f"{version:.2f}"
     version = _float(_value(messages.first("file_creator"), "software_version"))
     return f"{version / 100.0:.2f}" if version is not None else None
 
@@ -379,10 +416,7 @@ def _model(messages: _Messages) -> Optional[str]:
     """The watch's model from file_id's product number (raw: fitdecode names
     the products it knows, e.g. 'descent_mk3i', and leaves the newer ones as
     numbers), through the same table the Garmin cache uses."""
-    file_id = messages.first("file_id")
-    product = _int(_value(file_id, "garmin_product", raw=True))
-    if product is None:
-        product = _int(_value(file_id, "product", raw=True))
+    product = _product_number(messages.first("file_id"))
     return garmin_files.FIT_PRODUCT_NAMES.get(product) if product is not None else None
 
 
@@ -450,7 +484,7 @@ def to_unified(messages: _Messages, name: Optional[str] = None, member: Optional
         external_ids["garmin"] = activity_id
 
     vendor = _value(file_id, "manufacturer")
-    serial = _int(_value(file_id, "serial_number"))
+    serial = _serial(messages)
     water_type = _value(settings, "water_type")
     model = _value(settings, "model")
     return UnifiedDive(

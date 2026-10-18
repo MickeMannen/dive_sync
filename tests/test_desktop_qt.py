@@ -1,6 +1,7 @@
 """Qt desktop app (rework.md Track D): controllers and the QML front end,
 run offscreen. Never touches the real keychain or the real app-data dir."""
 import json
+import logging
 import os
 from datetime import datetime
 
@@ -3812,6 +3813,82 @@ def test_dive_edit_merge_chain_and_merge(qapp, scratch_data_dir, fake_keyring, t
     assert c.mergeError == "" and c.mergeChain == [] and c.mergeProblem == too_few
 
 
+def _serial_folder(tmp_path):
+    """A folder for the serial tests (I20): a and c with the computer's
+    serial, b between them without one (file_id and creator device_info
+    unset) and n, 300 s after c, without one either."""
+    from tests.test_convert_fit_merge import C_START, _a, _b, _c, _log
+    folder = tmp_path / "serials"
+    folder.mkdir()
+    files = {"a.fit": _a(), "b.fit": _b(serial=0), "c.fit": _c(),
+             "n.fit": _log(C_START + 180 + 300, (0, 60, 120), (1.0, 8.0, 1.0), number=15, serial=0)}
+    for name, data in files.items():
+        (folder / name).write_bytes(data)
+    return folder, files
+
+
+def test_dive_edit_merge_serial_choice(qapp, scratch_data_dir, fake_keyring, tmp_path):
+    """Merge with a log that has no dive computer serial (I20) through the
+    controller: `mergeSerialsOf` gives the serials to choose from, the
+    dives without one and the note (the explanation when there is a
+    choice, the no-serial line when no log has one, "" when every log has
+    one or with one row); `merge` takes the chosen serial as a fourth
+    argument - the merged file carries it - and still works with three
+    (the first log's serial stands; with none anywhere the message says
+    so); a log without a serial no longer blocks the chain, two serials
+    still do."""
+    from desktop.controllers.convert import ConvertController
+    from src.core.convert.fit_reader import read_fit
+    from tests.test_convert_fit_merge import SERIAL
+    folder, files = _serial_folder(tmp_path)
+    c = ConvertController()
+    c.openFolder(_file_url(folder))
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c._sources[:4] == ["a.fit", "b.fit", "c.fit", "n.fit"] and c.diveCount == 4
+    assert [d.computer_serial for d in c._dives_as_read] == [str(SERIAL), None, str(SERIAL), None]
+    explain = "dive 13 has no dive computer serial; the merged file needs one so Garmin Connect knows which watch it came from."
+    no_serial = "No log carries a dive computer serial; Garmin Connect may not accept the merged file."
+    assert c.mergeSerialsOf([0, 2]) == {"choices": [str(SERIAL)], "missing": [], "note": ""}
+    assert c.mergeSerialsOf([0, 1]) == {"choices": [str(SERIAL)], "missing": ["dive 13"], "note": explain}
+    assert c.mergeSerialsOf([1, 2]) == {"choices": [str(SERIAL)], "missing": ["dive 13"], "note": explain}
+    assert c.mergeSerialsOf([0, 1, 2, 3]) == {"choices": [str(SERIAL)], "missing": ["dive 13", "dive 15"],
+                                              "note": explain.replace("dive 13 has", "dive 13 and dive 15 have")}
+    assert c.mergeSerialsOf([1, 3]) == {"choices": [], "missing": ["dive 13", "dive 15"], "note": no_serial}
+    assert c.mergeSerialsOf([1]) == {"choices": [], "missing": ["dive 13"], "note": ""}
+    assert c.mergeSerialsOf([]) == {"choices": [], "missing": [], "note": ""} and c.mergeSerialsOf([9]) == {"choices": [], "missing": [], "note": ""}
+    # the chain: b without a serial merges with a and c; n too; the problem is "" for all four
+    c.clickRow(0, False, False)
+    for r in (1, 2, 3):
+        c.clickRow(r, True, False)
+    assert _chain_rows(c) == [0, 1, 2, 3] and c.mergeProblem == "" and c.mergeProblemOf([1, 3]) == ""
+    # b first with the serial chosen: the merged file carries it, the message says so
+    dest = folder / "b (merged).fit"
+    c.merge([1, 2], _file_url(dest), False, str(SERIAL))
+    assert wait_until(qapp, lambda: not c.busy and c.diveCount == 5)
+    assert c.message == (f"Merged 2 logs into {dest}: the surface time added, 1 sample filling it. "
+                         f"b.fit has no dive computer serial; the merged file carries serial {SERIAL}.")
+    assert c._dives[4].computer_serial == str(SERIAL) and read_fit(str(dest)).computer_serial == str(SERIAL)
+    assert c._dives[4].duration == 120 + 90 + 180 and c.currentRow == 4
+    # the old three-argument call: a first with its own serial, nothing to choose
+    dest2 = folder / "a (merged).fit"
+    c.merge([0, 1], _file_url(dest2), True)
+    assert wait_until(qapp, lambda: not c.busy and c.diveCount == 6)
+    assert c.message == f"Merged 2 logs into {dest2}: the surface time removed, 120 seconds taken out of the dive."
+    assert read_fit(str(dest2)).computer_serial == str(SERIAL)
+    # no serial anywhere: merged without one, the warning in the message
+    dest3 = folder / "b+n.fit"
+    c.merge([1, 3], _file_url(dest3), False, "")
+    assert wait_until(qapp, lambda: not c.busy and c.diveCount == 7)
+    assert c.message == f"Merged 2 logs into {dest3}: the surface time added, 9 samples filling it. {no_serial}"
+    assert read_fit(str(dest3)).computer_serial is None and c._dives[6].computer_serial is None
+    # a serial that is not the first log's is refused by the merge, nothing added
+    c.merge([0, 1], _file_url(folder / "x.fit"), False, "42")
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.mergeError == f"a.fit carries serial {SERIAL}; the merged file cannot be given serial 42" and c.diveCount == 7
+    assert not (folder / "x.fit").exists()
+    assert all((folder / name).read_bytes() == data for name, data in files.items())
+
+
 @pytest.mark.skipif(not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "test_data", "fit")),
                     reason="the owner's test_data/fit dives are not present")
 def test_dive_edit_merge_the_owners_split_dive(qapp, scratch_data_dir, fake_keyring, tmp_path):
@@ -3994,8 +4071,308 @@ def test_dive_edit_page_merge_dialog(qapp, scratch_data_dir, fake_keyring, monke
     QMetaObject.invokeMethod(page, "runMerge", Q_ARG("QVariant", _file_url(folder / "a.fit")))
     wait(qapp, 100)
     assert error.property("visible") is True and error.property("text") == "⚠ Merge: " + c.mergeError and c.diveCount == 10
-    assert error.parent() == hint.parent().parent()
+    assert error.parent().parent() == hint.parent().parent()      # the error's row (with the report button, I21) under the hint's row
     click("mergeCancelButton")
+    assert warnings == [], warnings
+    root.close()
+    engine.deleteLater()
+    wait(qapp, 50)
+
+
+def test_dive_edit_page_merge_serial_choice(qapp, scratch_data_dir, fake_keyring, monkeypatch, tmp_path):
+    """The Merge dialog with a log that has no dive computer serial (I20):
+    the serial row (a label and a ComboBox of the logs' serials, the first
+    log's first) and its explanation show when a ticked log has none and
+    another has one, stay hidden when every log has the same serial, and
+    give way to the no-serial note when no log has one; they follow the
+    ticks; Save hands the chosen serial to the controller and the merged
+    file carries it; no QML warning."""
+    from PySide6.QtCore import QMetaObject, QObject, Q_ARG
+    from desktop import app as desktop_app
+    from desktop import logging_bridge
+    from src.core import dive_cache
+    from src.core.convert import formats
+    from src.core.convert.fit_reader import read_fit
+    from tests.test_convert_fit_merge import SERIAL
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    folder, files = _serial_folder(tmp_path)
+    warnings = []
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    c = controllers["convertController"]
+    c._apply_read(formats.read_files([str(folder / n) for n in ("a.fit", "b.fit", "c.fit", "n.fit")]), {})
+    engine = desktop_app.create_engine(controllers, "Dive edit", on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    root.show()
+    wait(qapp, 300)
+    page = root.findChild(QObject, "convertPage")
+    find = lambda name: page.findChild(QObject, name)
+    click = lambda name: (QMetaObject.invokeMethod(find(name), "click"), wait(qapp, 150))
+
+    def find_item(item, name):
+        for child in item.childItems():
+            if child.objectName() == name:
+                return child
+            found = find_item(child, name)
+            if found is not None:
+                return found
+        return None
+
+    def select(*rows):
+        c.clickRow(rows[0], False, False)
+        for r in rows[1:]:
+            c.clickRow(r, True, False)
+        wait(qapp, 150)
+    dialog, note, save, problem = find("mergeDialog"), find("mergeSerialNote"), find("mergeSaveButton"), find("mergeProblem")
+    content = lambda: dialog.property("contentItem")
+    serial_row = lambda: find_item(content(), "mergeSerialRow")
+    combo = lambda: find_item(content(), "mergeSerialChoice")
+    row_box = lambda i: find_item(content(), f"mergeRow-{i}")
+    explain = "dive 13 has no dive computer serial; the merged file needs one so Garmin Connect knows which watch it came from."
+    # a and c, both with the serial: no row, no note
+    select(0, 2)
+    click("mergeButton")
+    assert dialog.property("opened") is True and problem.property("visible") is False and save.property("enabled") is True
+    assert serial_row().property("visible") is False and note.property("visible") is False
+    assert dialog.property("serialMissing") is False and list(dialog.property("serialChoices")) == [str(SERIAL)]
+    assert dialog.property("serialNote") == ""
+    click("mergeCancelButton")
+    # b (no serial) and c: the row with the one serial to choose and the explanation; unticking c hides them with the reason
+    select(1, 2)
+    click("mergeButton")
+    assert dialog.property("opened") is True and problem.property("visible") is False and save.property("enabled") is True
+    assert serial_row().property("visible") is True and combo().property("currentText") == str(SERIAL) and combo().property("count") == 1
+    assert combo().property("currentIndex") == 0 and list(dialog.property("serialChoices")) == [str(SERIAL)]
+    assert note.property("visible") is True and note.property("text") == explain
+    QMetaObject.invokeMethod(row_box(1), "click")
+    wait(qapp, 100)
+    assert problem.property("text") == "⚠ Cannot merge: two or more dives are needed" and serial_row().property("visible") is False
+    assert note.property("visible") is False
+    QMetaObject.invokeMethod(row_box(1), "click")
+    wait(qapp, 100)
+    assert serial_row().property("visible") is True and note.property("visible") is True and combo().property("currentText") == str(SERIAL)
+    click("mergeCancelButton")
+    # a, b, c, n: the serial is a's, b and n are named
+    select(3, 2, 1, 0)
+    click("mergeButton")
+    assert serial_row().property("visible") is True and combo().property("currentText") == str(SERIAL)
+    assert note.property("text") == explain.replace("dive 13 has", "dive 13 and dive 15 have")
+    QMetaObject.invokeMethod(row_box(1), "click")
+    wait(qapp, 100)
+    assert dialog.property("tickedCount") == 1 and serial_row().property("visible") is False
+    click("mergeCancelButton")
+    # b and n: no serial anywhere - the note instead of the row
+    select(1, 3)
+    click("mergeButton")
+    assert problem.property("visible") is False and save.property("enabled") is True
+    assert serial_row().property("visible") is False and combo().property("count") == 0
+    assert note.property("visible") is True and note.property("text") == "No log carries a dive computer serial; Garmin Connect may not accept the merged file."
+    click("mergeCancelButton")
+    # b and c merged through Save: the chosen serial reaches the controller and the merged file
+    select(1, 2)
+    click("mergeButton")
+    assert serial_row().property("visible") is True
+    dest = folder / "b (merged).fit"
+    QMetaObject.invokeMethod(page, "runMerge", Q_ARG("QVariant", _file_url(dest)))
+    assert wait_until(qapp, lambda: not c.busy and c.diveCount == 5)
+    wait(qapp, 150)
+    assert c.message == (f"Merged 2 logs into {dest}: the surface time added, 1 sample filling it. "
+                         f"b.fit has no dive computer serial; the merged file carries serial {SERIAL}.")
+    assert read_fit(str(dest)).computer_serial == str(SERIAL) and c._sources[4] == "b (merged).fit"
+    assert all((folder / name).read_bytes() == data for name, data in files.items())
+    assert warnings == [], warnings
+
+
+def test_dive_edit_debug_report_controller(qapp, scratch_data_dir, fake_keyring, tmp_path, monkeypatch):
+    """The debug report (I21) through the controller: `canReport` is off
+    with a selection that merges, on when it cannot be merged (two or
+    more selected) and after a failed merge; `debugReportUrl` suggests
+    "DiveSync debug report <date time>.txt" in the remembered folder;
+    `saveDebugReport(url, rows)` writes the report for the dialog's rows
+    with the refusal, `saveDebugReport(url)` the one for the last failed
+    request - its files, mode, serial, the MergeError and its traceback -
+    else for the selection; the recent log lines go in; a write failure
+    is `mergeError`; nothing lands in the data folder."""
+    from PySide6.QtCore import QUrl
+    from desktop import logging_bridge, preferences
+    from desktop.controllers.convert import ConvertController
+    folder, files = _split_dive_folder(tmp_path)
+    logging_bridge.install()
+    out = tmp_path / "out"
+    out.mkdir()
+    c = ConvertController()
+    c.openFolder(_file_url(folder))
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c._sources[:4] == ["a.fit", "b.fit", "c.fit", "d.fit"]
+    before = sorted(os.listdir(scratch_data_dir))
+    # the suggested file: the dialogs' folder (the split folder, remembered by Open folder) and the date
+    url = c.debugReportUrl()
+    path = QUrl(url).toLocalFile()
+    assert os.path.dirname(path) == preferences.get_convert_folder("") == str(folder)
+    assert os.path.basename(path).startswith("DiveSync debug report " + datetime.now().strftime("%Y-%m-%d ")) and path.endswith(".txt")
+    # a and b merge: nothing to report; a and d (three hours on) do not
+    c.clickRow(0, False, False)
+    c.clickRow(1, True, False)
+    assert c.mergeProblem == "" and c.canReport is False
+    c.clickRow(3, True, False)
+    c.clickRow(1, True, False)
+    assert c.mergeProblem.startswith("dive 12 and dive 15 are 3.2 hours apart") and c.canReport is True
+    c.clickRow(0, False, False)
+    assert c.mergeProblem != "" and c.canReport is False      # one dive selected: the dialog cannot open
+    # the dialog's ticked rows: the report for them with the refusal
+    c.saveDebugReport(_file_url(out / "dialog.txt"), [0, 3])
+    text = (out / "dialog.txt").read_text(encoding="utf-8")
+    assert c.message == f"Wrote the debug report to {out / 'dialog.txt'}. Send it to the developer with a note of what you did."
+    assert "Files: 2\n  1. a.fit\n  2. d.fit\n" in text and "Refused: dive 12 and dive 15 are 3.2 hours apart" in text
+    assert "Mode: not chosen (the merge was not run)" in text and "File: d.fit\n" in text and "dive_number=15" in text
+    assert str(folder) not in text and c.mergeError == ""
+    # no failure yet: without rows the report is the selection's
+    c.clickRow(1, False, False)
+    c.clickRow(2, True, False)
+    c.saveDebugReport(_file_url(out / "selection.txt"))
+    text = (out / "selection.txt").read_text(encoding="utf-8")
+    assert "  1. b.fit\n  2. c.fit\n" in text and "(none recorded)" in text and "merge_problem: none (the logs merge)" in text
+    # a failed merge: a and d through merge_fits raise a MergeError; the request is kept with its traceback
+    logging.getLogger("dive_sync.test").info("about to merge a and d")
+    c.merge([0, 3], _file_url(out / "ad.fit"), True, "")
+    assert wait_until(qapp, lambda: not c.busy and c.mergeError != "")
+    assert c.mergeError.startswith("a.fit and d.fit are 3.2 hours apart") and c.canReport is True
+    assert c._last_failed["paths"] == [str(folder / "a.fit"), str(folder / "d.fit")] and c._last_failed["mode"] is True
+    assert "MergeError" in c._last_failed["traceback"] and "fit_merge.py" in c._last_failed["traceback"]
+    c.saveDebugReport(_file_url(out / "failed.txt"))
+    text = (out / "failed.txt").read_text(encoding="utf-8")
+    assert "Files: 2\n  1. a.fit\n  2. d.fit\nMode: remove the surface time (close the gaps)\nSerial chosen: none\n" in text
+    assert "Error: a.fit and d.fit are 3.2 hours apart" in text and "Traceback:\n  Traceback (most recent call last):" in text
+    assert "MergeError: a.fit and d.fit are 3.2 hours apart" in text and os.path.expanduser("~") not in text
+    assert "dive_sync.test: about to merge a and d" in text
+    assert not (out / "ad.fit").exists() and c.mergeError.startswith("a.fit and d.fit")
+    # the dialog's rows win over the failed request while the dialog is open
+    c.saveDebugReport(_file_url(out / "rows.txt"), [1, 2])
+    assert "  1. b.fit\n  2. c.fit\n" in (out / "rows.txt").read_text(encoding="utf-8")
+    # a write failure
+    c.saveDebugReport(_file_url(out / "missing" / "x.txt"))
+    assert c.mergeError.startswith("Could not write x.txt: ")
+    # a successful merge forgets the failure
+    n = c.diveCount
+    c.merge([0, 1], _file_url(out / "ab.fit"), False, "")
+    assert wait_until(qapp, lambda: not c.busy and c.diveCount == n + 1)
+    assert c.mergeError == "" and c._last_failed is None and c.canReport is False
+    assert sorted(os.listdir(scratch_data_dir)) == before   # nothing of the report landed in the data folder
+    assert all((folder / name).read_bytes() == data for name, data in files.items())
+
+
+def test_logging_bridge_keeps_recent_lines(qapp):
+    """`logging_bridge.install` adds, once, a ring of the last 300 lines
+    logged under dive_sync (date, time, level, logger, message), read by
+    `recent_lines` for the debug report; a second install does not
+    double the lines."""
+    from desktop import logging_bridge
+    logging_bridge.install()
+    logging_bridge.install()
+    logger = logging.getLogger("dive_sync.ring")
+    for i in range(320):
+        logger.info("ring line %d", i)
+    logger.warning("ring warning")
+    lines = logging_bridge.recent_lines()
+    assert len(lines) == 300 == logging_bridge.RECENT_LINES
+    assert lines[-1].endswith(" WARNING dive_sync.ring: ring warning") and lines[-2].endswith(" INFO dive_sync.ring: ring line 319")
+    assert lines[0].endswith(" INFO dive_sync.ring: ring line 21") and sum(1 for l in lines if l.endswith("ring line 100")) == 1
+    assert datetime.strptime(lines[-1][:19], "%Y-%m-%d %H:%M:%S")
+    assert sum(1 for h in logging.getLogger("dive_sync").handlers if isinstance(h, logging_bridge.RecentLinesHandler)) == 1
+
+
+def test_dive_edit_page_debug_report_buttons(qapp, scratch_data_dir, fake_keyring, monkeypatch, tmp_path):
+    """The page's Generate debug report… (I21): next to the red reason in
+    the Merge dialog when the ticked rows cannot be merged (hidden with
+    the reason), with the tip saying what the file holds and leaves out;
+    under the list next to the error after a merge failed; the page's
+    saveDebugReport writes the report of the failed merge; no QML
+    warning."""
+    from PySide6.QtCore import QMetaObject, QObject, Q_ARG
+    from desktop import app as desktop_app
+    from desktop import logging_bridge
+    from src.core import dive_cache
+    from src.core.convert import formats
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    folder, files = _split_dive_folder(tmp_path)
+    warnings = []
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    c = controllers["convertController"]
+    c._apply_read(formats.read_files([str(folder / n) for n in ("a.fit", "b.fit", "c.fit", "d.fit")]), {})
+    engine = desktop_app.create_engine(controllers, "Dive edit", on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    root.show()
+    wait(qapp, 300)
+    page = root.findChild(QObject, "convertPage")
+    find = lambda name: page.findChild(QObject, name)
+    click = lambda name: (QMetaObject.invokeMethod(find(name), "click"), wait(qapp, 150))
+
+    def find_item(item, name):
+        for child in item.childItems():
+            if child.objectName() == name:
+                return child
+            found = find_item(child, name)
+            if found is not None:
+                return found
+        return None
+
+    def select(*rows):
+        c.clickRow(rows[0], False, False)
+        for r in rows[1:]:
+            c.clickRow(r, True, False)
+        wait(qapp, 150)
+    tip_text = "Saves a text file with technical details of these logs (no positions, names or notes) that you can send to the developer."
+    dialog, problem, error = find("mergeDialog"), find("mergeProblem"), find("mergeError")
+    list_button, list_tip = find("debugReportListButton"), find("debugReportListTip")
+    content = lambda: dialog.property("contentItem")
+    dialog_button = lambda: find_item(content(), "debugReportButton")
+    row_box = lambda i: find_item(content(), f"mergeRow-{i}")
+    assert list_button.property("text") == "Generate debug report…" and list_tip.property("text") == tip_text
+    assert list_button.parent() == error.parent() and error.property("visible") is False
+    # a and b merge: no reason, no button in the dialog
+    select(0, 1)
+    click("mergeButton")
+    assert dialog.property("opened") is True and problem.property("visible") is False
+    assert dialog_button().property("visible") is False
+    click("mergeCancelButton")
+    # a, c and d: d is three hours on - the reason with the button next to it; unticking d hides both
+    select(0, 2, 3)
+    click("mergeButton")
+    assert problem.property("visible") is True and dialog_button().property("visible") is True
+    assert dialog_button().property("text") == "Generate debug report…" and dialog_button().parent() == problem.parent()
+    assert dialog_button().findChild(QObject, "debugReportTip").property("text") == tip_text
+    assert c.canReport is True
+    QMetaObject.invokeMethod(row_box(2), "click")
+    wait(qapp, 100)
+    assert problem.property("visible") is False and dialog_button().property("visible") is False
+    QMetaObject.invokeMethod(row_box(2), "click")
+    wait(qapp, 100)
+    assert dialog_button().property("visible") is True
+    # the merge run anyway (a, c, d ticked) fails on the worker: the error under the list with the button next to it
+    dest = folder / "a (merged).fit"
+    QMetaObject.invokeMethod(page, "runMerge", Q_ARG("QVariant", _file_url(dest)))
+    assert wait_until(qapp, lambda: not c.busy and c.mergeError != "")
+    wait(qapp, 150)
+    assert error.property("visible") is True and list_button.property("visible") is True and list_button.property("enabled") is True
+    assert error.property("text") == "⚠ Merge: " + c.mergeError and c.mergeError.startswith("c.fit and d.fit are 3.0 hours apart")
+    assert not dest.exists()
+    click("mergeCancelButton")
+    # the page's save with the dialog closed: the failed merge's report
+    report = tmp_path / "report.txt"
+    QMetaObject.invokeMethod(page, "saveDebugReport", Q_ARG("QVariant", _file_url(report)))
+    wait(qapp, 100)
+    text = report.read_text(encoding="utf-8")
+    assert text.startswith("DiveSync debug report\n") and "  1. a.fit\n  2. c.fit\n  3. d.fit\n" in text
+    assert "Error: c.fit and d.fit are 3.0 hours apart" in text and "MergeError" in text and "Mode: add the surface time" in text
+    assert c.message.startswith(f"Wrote the debug report to {report}.")
+    # the dialog's rows (what askDebugReport sets before the save dialog opens): the report for those rows
+    find("debugReportDialog").setProperty("rows", [1, 2])
+    QMetaObject.invokeMethod(page, "saveDebugReport", Q_ARG("QVariant", _file_url(report)))
+    wait(qapp, 100)
+    text = report.read_text(encoding="utf-8")
+    assert "  1. b.fit\n  2. c.fit\n" in text and "Error:" not in text and "merge_problem: none (the logs merge)" in text
+    assert all((folder / name).read_bytes() == data for name, data in files.items())
     assert warnings == [], warnings
     root.close()
     engine.deleteLater()

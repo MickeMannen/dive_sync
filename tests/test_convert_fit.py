@@ -113,6 +113,43 @@ def minimal_dive(**kwargs):
                       _dive_gas(0, 32), _gas_switch(0, 0), _dive_summary()])
 
 
+def _device_info(serial, index=None, manufacturer=1, product=4223, local=7):
+    """A device_info: the creator with ``index`` 0, a tank pod with 1…, or
+    one without a device_index (a writer that numbers its devices otherwise)."""
+    fields = [(253, "uint32", T0)]
+    if index is not None:
+        fields.append((0, "uint8", index))
+    fields += [(2, "uint16", manufacturer), (3, "uint32z", serial), (4, "uint16", product)]
+    return _message(local, 23, fields)
+
+
+def _dive_with(*infos, serial=0):
+    return build_fit([_file_id(serial=serial), *infos, _session(), _activity(),
+                      _record(0, 0.5, 24), _record(60, 18.0, 22), _record(120, 1.0, 23),
+                      _dive_gas(0, 32), _gas_switch(0, 0), _dive_summary()])
+
+
+def test_serial_falls_back_to_the_creator_device_info():
+    """file_id's serial names the computer; when it is unset (0) or the
+    field is missing, the creator device_info's serial is taken: the one
+    with device_index 0, else the one whose manufacturer and product are
+    file_id's. A tank pod's serial never is, and a file_id serial wins
+    over a differing device_info one (plans/convert.md I20)."""
+    assert read_fit(_dive_with()).computer_serial is None
+    assert read_fit(_dive_with(_device_info(1001, index=1))).computer_serial is None                 # a pod only
+    assert read_fit(_dive_with(_device_info(1001, index=1), _device_info(42, index=0))).computer_serial == "42"
+    assert read_fit(_dive_with(_device_info(0, index=0), _device_info(43, index=0, local=8))).computer_serial == "43"  # the first with one
+    assert read_fit(_dive_with(_device_info(44))).computer_serial == "44"                            # no index: by maker and product
+    assert read_fit(_dive_with(_device_info(45, product=3000))).computer_serial is None               # another product: not the watch
+    assert read_fit(_dive_with(_device_info(45, product=3000), _device_info(46, local=8))).computer_serial == "46"
+    assert read_fit(_dive_with(_device_info(42, index=0), serial=777000111)).computer_serial == "777000111"
+    # the field left out of file_id altogether
+    no_field = build_fit([_message(0, FILE_ID, [(0, "enum", 4), (1, "uint16", 1), (2, "uint16", 4223), (4, "uint32", T0)]),
+                          _device_info(47, index=0), _session(), _activity(), _record(0, 0.5), _record(60, 18.0), _dive_summary()])
+    assert read_fit(no_field).computer_serial == "47"
+    assert read_fit(minimal_dive()).computer_serial == "777000111"
+
+
 # --- the fixtures -------------------------------------------------------------
 
 @fixtures

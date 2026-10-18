@@ -22,8 +22,11 @@ import QtQuick.Dialogs
 // start order (convertController.mergeChain) - into one .fit, adding or
 // removing the surface time, through the Merge dialog and a Save dialog;
 // the dialog says in red why a selection cannot be merged (another
-// computer, more than 2 hours apart, not a .fit: mergeProblem). The merged
-// dive joins the list, the originals stay. A Garmin .fit whose
+// computer, more than 2 hours apart, not a .fit: mergeProblem), with
+// Generate debug report… (I21) next to the reason - and next to a failed
+// merge's error under the list - saving a text file for the developer
+// (no positions, names or notes in it). The merged dive joins the list,
+// the originals stay. A Garmin .fit whose
 // dive is in the app's Garmin cache (by activity id, or by start time when
 // the name holds none) gets its site, buddy, notes, weight, visibility and
 // tank volumes from there (I9, the checkbox, on by default). The list is a
@@ -159,7 +162,19 @@ ColumnLayout {
     // Merge (I17): the Save dialog's file goes to the controller with the
     // dialog's ticked chain and mode; the controller merges on its worker.
     function runMerge(url) {
-        convertController.merge(mergeDialog.tickedRows(), url, mergeDialog.closeGaps)
+        convertController.merge(mergeDialog.tickedRows(), url, mergeDialog.closeGaps, mergeDialog.serialChoice())
+    }
+    // Generate debug report… (I21): a save dialog for the report of the
+    // dialog's ticked rows (rows) or of the last failed merge (null).
+    readonly property string debugReportTip: "Saves a text file with technical details of these logs (no positions, names or notes) that you can send to the developer."
+    function askDebugReport(rows) {
+        debugReportDialog.rows = rows
+        debugReportDialog.currentFile = convertController.debugReportUrl()
+        debugReportDialog.open()
+    }
+    function saveDebugReport(url) {
+        if (!debugReportDialog.rows) convertController.saveDebugReport(url)
+        else convertController.saveDebugReport(url, debugReportDialog.rows)
     }
 
     Card {
@@ -382,14 +397,27 @@ ColumnLayout {
                     onClicked: mergeDialog.openFor()
                 }
             }
-            Text {
-                objectName: "mergeError"
+            // a failed merge: the reason in red with Generate debug report… (I21) next to it
+            RowLayout {
                 visible: convertController.mergeError !== ""
-                text: "⚠ Merge: " + convertController.mergeError
-                color: Theme.danger
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
+                spacing: 4
                 Layout.fillWidth: true
+                Text {
+                    objectName: "mergeError"
+                    visible: convertController.mergeError !== ""
+                    text: "⚠ Merge: " + convertController.mergeError
+                    color: Theme.danger
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+                SmallButton {
+                    objectName: "debugReportListButton"
+                    text: "Generate debug report…"
+                    enabled: convertController.canReport && !convertController.busy
+                    Tip { objectName: "debugReportListTip"; text: page.debugReportTip; visible: parent.hovered }
+                    onClicked: page.askDebugReport(null)
+                }
             }
         }
 
@@ -1018,8 +1046,21 @@ ColumnLayout {
         property bool anyEdited: false
         property int tickedCount: 0
         property string problem: ""     // why the ticked rows cannot be merged ("" when they can)
+        // the dive computer serial (I20): the choices when a ticked log has none, the note under them
+        property var serialChoices: []
+        property bool serialMissing: false
+        property string serialNote: ""
         function recheck() {
-            problem = convertController.mergeProblemOf(tickedRows())
+            var rows = tickedRows()
+            problem = convertController.mergeProblemOf(rows)
+            var serials = convertController.mergeSerialsOf(rows)
+            serialChoices = serials.choices
+            serialMissing = serials.missing.length > 0
+            serialNote = serials.note
+            serialBox.currentIndex = serialChoices.length > 0 ? 0 : -1
+        }
+        function serialChoice() {
+            return (problem === "" && serialMissing && serialChoices.length > 0) ? String(serialBox.currentText) : ""
         }
         function openFor() {
             mergeRows.clear()
@@ -1094,11 +1135,44 @@ ColumnLayout {
                     Cell { objectName: "mergeRowEdited-" + index; text: model.edited ? "● edited" : ""; color: Theme.accent; cellWidth: 60 }
                 }
             }
-            Text {
-                objectName: "mergeProblem"
+            RowLayout {
                 visible: mergeDialog.problem !== ""
-                text: "⚠ Cannot merge: " + mergeDialog.problem
-                color: Theme.danger
+                spacing: 4
+                Layout.fillWidth: true
+                Text {
+                    objectName: "mergeProblem"
+                    visible: mergeDialog.problem !== ""
+                    text: "⚠ Cannot merge: " + mergeDialog.problem
+                    color: Theme.danger
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+                SmallButton {
+                    objectName: "debugReportButton"
+                    text: "Generate debug report…"
+                    Tip { objectName: "debugReportTip"; text: page.debugReportTip; visible: parent.hovered }
+                    onClicked: page.askDebugReport(mergeDialog.tickedRows())
+                }
+            }
+            RowLayout {
+                objectName: "mergeSerialRow"
+                visible: mergeDialog.problem === "" && mergeDialog.serialMissing && mergeDialog.serialChoices.length > 0
+                spacing: 8
+                Layout.fillWidth: true
+                Text { text: "Dive computer serial for the merged file:"; color: Theme.text; font.pixelSize: 12 }
+                ComboBox {
+                    id: serialBox
+                    objectName: "mergeSerialChoice"
+                    model: mergeDialog.serialChoices
+                    Layout.preferredWidth: 180
+                }
+            }
+            Text {
+                objectName: "mergeSerialNote"
+                visible: mergeDialog.problem === "" && mergeDialog.serialNote !== ""
+                text: mergeDialog.serialNote
+                color: Theme.accent
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
@@ -1164,6 +1238,16 @@ ColumnLayout {
         fileMode: FileDialog.SaveFile
         currentFolder: convertController.dialogFolder
         onAccepted: page.runMerge(selectedFile.toString())
+    }
+    FileDialog {
+        id: debugReportDialog
+        objectName: "debugReportDialog"
+        property var rows: null
+        title: "Save the debug report as"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["Text files (*.txt)"]
+        currentFolder: convertController.dialogFolder
+        onAccepted: page.saveDebugReport(selectedFile.toString())
     }
 
     // The dialogs open in Documents the first time, then in the last folder

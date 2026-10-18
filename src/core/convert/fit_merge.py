@@ -27,6 +27,17 @@ time, O2 toxicity and end CNS / N2, ``tank_summary`` end pressures and
 volume used. The timer stop at the end of the first log and the timer
 start of the second are dropped so the join does not read as a pause.
 
+The dive computer serial is file_id's ``serial_number``, or - when that is
+missing or unset - the creator ``device_info``'s (the one with
+device_index 0, else the one whose manufacturer and product are file_id's;
+`fit_reader` reads it the same way). A log without one still merges: the
+caller (the Merge dialog) says which serial the merged file gets, from
+`serial_choices`, and it is written into the first log's file_id and
+creator device_info; without a choice the first serial any log carries is
+taken, and with none at all the merge goes ahead without one, with a
+warning. Two different serials are two computers and are refused
+(plans/convert.md I20).
+
 Two ways to deal with the surface interval between the logs:
 
 - keep the clock (``close_gap=False``): the later samples keep their real
@@ -101,7 +112,7 @@ STREAM_FROM_SECOND = frozenset({RECORD, EVENT, TANK_UPDATE, GPS_METADATA, HR, HR
 
 # Field numbers.
 MESSAGE_INDEX = 254
-F_FILE_TYPE, F_FILE_SERIAL = 0, 3                       # file_id.type, file_id.serial_number
+F_FILE_TYPE, F_FILE_MANUFACTURER, F_FILE_PRODUCT, F_FILE_SERIAL = 0, 1, 2, 3   # file_id.type, manufacturer, product, serial_number
 FILE_TYPE_ACTIVITY = 4
 F_SPORT, F_SUB_SPORT = 5, 6                             # session.sport, session.sub_sport
 SPORT_DIVING = 53
@@ -110,7 +121,10 @@ EVENT_TIMER, EVENT_GAS_SWITCHED = 0, 57
 EVENT_TYPE_START, EVENT_TYPE_STOP, EVENT_TYPE_MARKER, EVENT_TYPE_STOP_ALL = 0, 1, 3, 4
 EVENT_TYPE_STOPS = frozenset({EVENT_TYPE_STOP, EVENT_TYPE_STOP_ALL})
 F_GAS_HE, F_GAS_O2, F_GAS_MODE = 0, 1, 3                # dive_gas.helium_content, oxygen_content, mode
-F_SERIAL = 3                                            # device_info.serial_number
+F_DEVICE_INDEX, F_INFO_MANUFACTURER, F_SERIAL, F_INFO_PRODUCT = 0, 2, 3, 4   # device_info.device_index, manufacturer, serial_number, product
+DEVICE_INDEX_CREATOR = 0                                # the dive computer's own device_info
+BASE_UINT32Z = 0x8C                                     # file_id.serial_number's base type
+MAX_SERIAL = 0xFFFFFFFF
 F_SENSOR, F_END_PRESSURE, F_VOLUME_USED = 0, 2, 3       # tank_summary.sensor, end_pressure, volume_used
 F_DEPTH = 92                                            # record.depth
 F_START_TIME, F_ELAPSED, F_TIMER = 2, 7, 8              # session.start_time, total_elapsed_time, total_timer_time
@@ -143,11 +157,14 @@ class MergeResult:
     interval each, so the kept-clock span minus this is the closed span; 0
     when the clock is kept), the samples added to bridge the gaps
     (``filled_samples``, 0 when they were closed), the gases and tank
-    summaries the later logs brought that the first had not, and warnings
-    worth showing (a differing logging interval, a gas switch recorded at
-    a join)."""
+    summaries the later logs brought that the first had not, the dive
+    computer serial the merged file carries (``serial``, None when no log
+    had one) and warnings worth showing (a differing logging interval, a
+    gas switch recorded at a join, a serial written into the first log or
+    missing altogether)."""
     path: str
     files: int
+    serial: Optional[str] = None
     gap_seconds: int = 0
     closed_seconds: int = 0
     filled_samples: int = 0
@@ -337,6 +354,24 @@ def _fit_datetime(seconds: float) -> datetime:
     return (FIT_EPOCH + timedelta(seconds=seconds)).replace(tzinfo=None)
 
 
+def _creators(messages: Sequence[_Msg], file_id: Optional[_Msg]) -> List[_Msg]:
+    """The dive computer's own device_info messages (Garmin writes several
+    over a dive), as `fit_reader` picks them: those with device_index 0
+    (the 'creator'), else - for a writer that does not number its devices -
+    those without a device_index whose manufacturer and product are
+    file_id's; [] when the file has neither (a tank pod, device_index 1
+    and up, never is the computer)."""
+    infos = [m for m in messages if m.mesg_num == DEVICE_INFO]
+    creators = [m for m in infos if m.get(F_DEVICE_INDEX) == DEVICE_INDEX_CREATOR]
+    if creators or file_id is None:
+        return creators
+    maker, product = file_id.get(F_FILE_MANUFACTURER), file_id.get(F_FILE_PRODUCT)
+    if maker is None and product is None:
+        return []
+    return [m for m in infos if m.get(F_DEVICE_INDEX) is None
+            and m.get(F_INFO_MANUFACTURER) == maker and m.get(F_INFO_PRODUCT) == product]
+
+
 # ---------------------------------------------------------------------------
 # One log
 # ---------------------------------------------------------------------------
@@ -360,7 +395,11 @@ class _Log:
             raise MergeError(f"{name} is not a Garmin dive log")
         if not self.records:
             raise MergeError(f"{name} has no samples")
-        self.serial: Optional[int] = file_id.get(F_FILE_SERIAL) if file_id is not None else None
+        self.file_id = file_id
+        self.creators = _creators(self.messages, file_id)
+        # file_id's serial, else the first creator device_info's that has one (plans/convert.md I20)
+        self.serial: Optional[int] = (file_id.get(F_FILE_SERIAL) if file_id is not None else None) or next(
+            (serial for serial in (m.get(F_SERIAL) for m in self.creators) if serial), None)
         start = self.session.get(F_START_TIME)
         self.start: int = start if start is not None and start >= MIN_DATE_TIME else self.records[0].timestamp
         timer = self.session.get(F_TIMER)
@@ -384,13 +423,10 @@ def _chain_problem(entries: Sequence[_Entry]) -> Optional[str]:
     """Why ``entries`` (in the order given) cannot be merged, None when they can."""
     if len(entries) < 2:
         return "two or more dives are needed"
-    first = entries[0]
-    if first.serial is None:
-        return f"{first.name} has no dive computer serial"
+    # a log without a serial merges (the dialog asks which serial the merged file gets, I20); two serials do not
+    first = next((e for e in entries if e.serial), None)
     for a, b in zip(entries, entries[1:]):
-        if b.serial is None:
-            return f"{b.name} has no dive computer serial"
-        if b.serial != first.serial:
+        if b.serial and first is not None and b.serial != first.serial:
             return f"{b.name} and {first.name} come from different dive computers (serial {b.serial}, serial {first.serial})"
         if b.start < a.start:
             return f"{b.name} starts before {a.name}; merge the logs in start order"
@@ -412,15 +448,9 @@ def _entry_of_dive(dive: UnifiedDive, name: str) -> _Entry:
     return _Entry(name, dive.computer_serial or None, start, start + timedelta(seconds=dive.duration or 0))
 
 
-def merge_problem(items: Sequence[Union[UnifiedDive, PathLike]]) -> Optional[str]:
-    """Why ``items`` cannot be merged in the order given, None when they can:
-    two or more, the same dive computer serial, in start order, no overlap,
-    each starting within `MAX_GAP_SECONDS` of the previous one's end. An
-    item is a `UnifiedDive` as `fit_reader` read it (``computer_serial``,
-    ``date_time_utc``, ``duration``; no second read for the page) or a
-    path, which is read. The timing is the dives' (start and duration);
-    `merge_fits` joins at the samples, which can differ by the seconds the
-    timer ran on after the last sample."""
+def _entries(items: Sequence[Union[UnifiedDive, PathLike]]) -> Tuple[List[_Entry], Optional[str]]:
+    """``items`` as chain entries (a `UnifiedDive` by its number, "dive N",
+    a path by its file name, read), and the reason when one cannot be read."""
     entries: List[_Entry] = []
     for i, item in enumerate(items):
         if isinstance(item, UnifiedDive):
@@ -430,9 +460,45 @@ def merge_problem(items: Sequence[Union[UnifiedDive, PathLike]]) -> Optional[str
             try:
                 dive = read_fit(path)
             except Exception as e:
-                return f"{os.path.basename(path)} is not a Garmin dive log ({e})"
+                return entries, f"{os.path.basename(path)} is not a Garmin dive log ({e})"
             entries.append(_entry_of_dive(dive, os.path.basename(path)))
-    return _chain_problem(entries)
+    return entries, None
+
+
+def merge_problem(items: Sequence[Union[UnifiedDive, PathLike]]) -> Optional[str]:
+    """Why ``items`` cannot be merged in the order given, None when they can:
+    two or more, no two different dive computer serials (a log without one
+    is allowed: `missing_serials` names it and the merge takes the serial
+    it is given), in start order, no overlap, each starting within
+    `MAX_GAP_SECONDS` of the previous one's end. An item is a `UnifiedDive`
+    as `fit_reader` read it (``computer_serial``, ``date_time_utc``,
+    ``duration``; no second read for the page) or a path, which is read.
+    The timing is the dives' (start and duration); `merge_fits` joins at
+    the samples, which can differ by the seconds the timer ran on after
+    the last sample."""
+    entries, problem = _entries(items)
+    return problem if problem else _chain_problem(entries)
+
+
+def missing_serials(items: Sequence[Union[UnifiedDive, PathLike]]) -> List[str]:
+    """The names ("dive N" / the file name, as `merge_problem` names them)
+    of the items without a dive computer serial, in the order given; an
+    unreadable path is left out (`merge_problem` reports it)."""
+    entries, _problem = _entries(items)
+    return [e.name for e in entries if not e.serial]
+
+
+def serial_choices(items: Sequence[Union[UnifiedDive, PathLike]]) -> List[str]:
+    """The distinct dive computer serials among ``items``, in order of first
+    appearance: what the Merge dialog offers for the merged file when a
+    log has none (one entry for logs that merge, since two different
+    serials are refused)."""
+    entries, _problem = _entries(items)
+    seen: List[str] = []
+    for e in entries:
+        if e.serial and e.serial not in seen:
+            seen.append(e.serial)
+    return seen
 
 
 def can_merge(items: Sequence[Union[UnifiedDive, PathLike]]) -> bool:
@@ -647,26 +713,103 @@ def _load(path: str) -> _Log:
     return _Log(data, name)
 
 
-def merge_fits(paths: Sequence[PathLike], dest: PathLike, close_gap: bool) -> MergeResult:
+def _parse_serial(serial: Union[int, str]) -> int:
+    """``serial`` as the FIT's number (1 … 2^32-1), else `MergeError`."""
+    text = str(serial).strip()
+    if not text.isdigit() or not 0 < int(text) <= MAX_SERIAL:
+        raise MergeError(f"{text!r} is not a dive computer serial (a number from 1 to {MAX_SERIAL})")
+    return int(text)
+
+
+def _with_field(msg: _Msg, num: int, base: int, value: int) -> None:
+    """Append integer field ``num`` (``base`` type) to ``msg`` by giving it a
+    definition of its own with the field after the others, in the
+    message's own byte order (the one way to put a field into a message
+    that lacks it without re-encoding the file); the message's bytes
+    before the field stay as they were."""
+    spec = _INT_SPECS[base & 0x1F]
+    definition = msg.definition
+    fields = list(definition.fields) + [(num, spec[1], base)]
+    raw = bytes([0x40, 0, 1 if definition.endian == ">" else 0]) + struct.pack(definition.endian + "H", definition.mesg_num)
+    raw += bytes([len(fields)]) + b"".join(bytes([n, size, b]) for n, size, b in fields)
+    msg.definition = _Definition(definition.mesg_num, definition.endian, fields, 0, raw)
+    msg.body = bytearray(msg.body) + struct.pack(definition.endian + spec[0], value)
+
+
+def _stamp_serial(log: _Log, serial: int) -> Optional[str]:
+    """Write ``serial`` into ``log``'s file_id (``serial_number``) and its
+    creator device_info messages (`_creators`), in place in their bytes
+    (plans/convert.md I20). A file_id without the field gets it appended
+    (`_with_field`) unless its definition carries developer fields, which
+    the walker keeps opaque; a creator device_info without the field is
+    left alone (file_id is what names the computer). Returns why the serial
+    could not be written, None when it was."""
+    file_id = log.file_id
+    if file_id is None:
+        return f"{log.name} has no file_id message; the dive computer serial could not be written"
+    if not file_id.set(F_FILE_SERIAL, serial):
+        if file_id._locate(F_FILE_SERIAL) is not None:
+            return f"{log.name}'s file_id holds its serial in an unexpected type; the dive computer serial could not be written"
+        if file_id.definition.dev_size or file_id.compressed:
+            return f"{log.name}'s file_id has no serial field and carries developer data; the dive computer serial could not be written"
+        _with_field(file_id, F_FILE_SERIAL, BASE_UINT32Z, serial)
+    for creator in log.creators:
+        creator.set(F_SERIAL, serial)
+    log.serial = serial
+    return None
+
+
+def merge_fits(paths: Sequence[PathLike], dest: PathLike, close_gap: bool,
+               serial: Optional[Union[int, str]] = None) -> MergeResult:
     """Write the Garmin dive logs ``paths`` (two or more, in start order; a
     ``.fit`` or a Connect zip holding one) as one dive to ``dest``, keeping
     the clock and filling the gaps (``close_gap=False``) or moving each
     later log back onto the previous one (``close_gap=True``); see the
-    module docstring. Raises `MergeError` when a file is not a Garmin dive
-    log, the serials differ, the logs are out of order or overlap, or a
-    gap is longer than `MAX_GAP_SECONDS`. The inputs are never written."""
+    module docstring. ``serial`` is the dive computer serial the merged
+    file gets (the dialog's choice among `serial_choices`) when the first
+    log has none: it is written into the first log's file_id and creator
+    device_info (`_stamp_serial`; with a serial in the first log already
+    it must be that one). Without it the first log's serial stands, else
+    the first serial any log carries is taken and noted in the warnings,
+    and with none in any log the merge goes ahead without one, with a
+    warning. Raises `MergeError` when a file is not a Garmin dive log,
+    two logs carry different serials, the logs are out of order or
+    overlap, a gap is longer than `MAX_GAP_SECONDS`, or ``serial`` is no
+    serial. The inputs are never written."""
     paths = [os.fspath(p) for p in paths]
     dest = os.fspath(dest)
     if len(paths) < 2:
         raise MergeError("two or more logs are needed")
     if any(os.path.abspath(dest) == os.path.abspath(p) for p in paths):
         raise MergeError("the merged file cannot replace one of the logs; choose another name")
+    chosen = _parse_serial(serial) if serial is not None and str(serial).strip() != "" else None
     logs = [_load(p) for p in paths]
     problem = _chain_problem([_entry_of_log(log) for log in logs])
     if problem:
         raise MergeError(problem)
     result = MergeResult(path=dest, files=len(paths))
-    acc, shift = logs[0], 0
+    first = logs[0]
+    if first.serial:
+        if chosen is not None and chosen != first.serial:
+            raise MergeError(f"{first.name} carries serial {first.serial}; the merged file cannot be given serial {chosen}")
+        result.serial = str(first.serial)
+    else:
+        carried = next((log for log in logs if log.serial), None)
+        if chosen is None and carried is None:
+            result.warnings.append("No log carries a dive computer serial; Garmin Connect may not accept the merged file")
+        else:
+            if chosen is None:
+                chosen = carried.serial
+                note = f"{first.name} has no dive computer serial; the merged file takes serial {chosen} from {carried.name}"
+            else:
+                note = f"{first.name} has no dive computer serial; the merged file carries serial {chosen}"
+            failure = _stamp_serial(first, chosen)
+            if failure:
+                result.warnings.append(failure)
+            else:
+                result.serial = str(chosen)
+                result.warnings.append(note)
+    acc, shift = first, 0
     for nxt in logs[1:]:
         data, join = _join(acc, nxt, close_gap, shift)
         shift += join.delta

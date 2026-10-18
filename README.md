@@ -10,7 +10,8 @@ Dive Sync is a dive log synchronization engine that matches and syncs your dive 
 I started this project when i got back to diving and had to import all dives from logbooks to Garmin and to Divelogs.
 I managed to make the import but the stability of the code wasn't good enough for release. Because of lack of time I didnt continue but with Gemini I saw the opportunity to finalize the project.
 
-There are most likely a lot of bugs so please use it carefully, I will use the docker container myself and fix issues as I see them.
+There are most likely cases that i have not thought about so be careful. 
+I am using the container solution myself and also the app (macos) to clean up dives at Garmin.
 
 It features two-way syncing (one direction per run), detailed telemetry parsing (depth/temperature graphs and gas mixture sensors), and multi-account support.
 
