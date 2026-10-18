@@ -4,7 +4,7 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
-## Unreleased
+## 0.4.5 - 2026-10-19
 
 - Dive edit page: merging a split dive no longer stops at "dive 9 has no dive
   computer serial". The serial is now also read from the file's device
