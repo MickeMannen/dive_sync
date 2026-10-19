@@ -184,3 +184,50 @@ def test_units_flag_rejects_unknown_values(tmp_path):
     assert res.returncode == 2 and "--units" in res.stderr and "invalid choice" in res.stderr
     res = _run(tmp_path, "--help")
     assert res.returncode == 0 and "--units {metric,imperial}" in res.stdout and "imperial (ft, psi" in res.stdout
+
+
+def _write_ssi_credentials(tmp_path, emails):
+    """A credentials.json in the scratch DATA_DIR with MySSI accounts only
+    (plans/myssi-sync.md K5). Nothing here talks to MySSI: building the
+    adapter needs no network, and --show-mapping reads no dives."""
+    (tmp_path / "credentials.json").write_text(json.dumps({"ssi": [{"email": e, "password": "pw"} for e in emails]}))
+
+
+def test_myssi_is_a_side_and_the_account_is_picked_by_spec_or_flag(tmp_path):
+    _write_ssi_credentials(tmp_path, ["one@example.com", "two@example.com"])
+    # two accounts and no pick: the run stops and names the flag
+    res = _run(tmp_path, "--source", "garmin", "--target", "ssi", "--show-mapping")
+    assert res.returncode == 1
+    assert "Multiple MySSI accounts configured. Please specify --ssi-account" in res.stdout
+    # --ssi-account picks one; the board is the Garmin -> MySSI default (K1: no dive-number rule)
+    res = _run(tmp_path, "--source", "garmin", "--target", "ssi", "--ssi-account", "two@example.com", "--show-mapping")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "Mapping board for garmin -> ssi" in res.stdout and "ssi.notes" in res.stdout
+    assert "Match keys: none (start time only)" in res.stdout
+    # the spec's argument is the same pick, either side
+    res = _run(tmp_path, "--source", "ssi:one@example.com", "--target", "garmin", "--show-mapping")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "Mapping board for ssi -> garmin" in res.stdout
+    # an unknown account is an error, not a silent fallback
+    res = _run(tmp_path, "--source", "garmin", "--target", "ssi", "--ssi-account", "nobody@example.com", "--show-mapping")
+    assert res.returncode == 1 and "No MySSI account configured matching username: nobody@example.com" in res.stdout
+
+
+def test_myssi_account_flag_reaches_a_saved_pair(tmp_path):
+    _write_ssi_credentials(tmp_path, ["one@example.com", "two@example.com"])
+    (tmp_path / "settings.json").write_text(json.dumps({"settings_version": 2, "sync_pairs": [
+        {"id": "garmin_divelogs", "source": "garmin", "target": "divelogs"},
+        {"id": "g2s", "source": "garmin", "target": "ssi", "directionality": "to_ssi"}]}))
+    res = _run(tmp_path, "--pair", "g2s", "--show-mapping")
+    assert res.returncode == 1 and "--ssi-account" in res.stdout
+    res = _run(tmp_path, "--pair", "g2s", "--ssi-account", "one@example.com", "--show-mapping")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "Mapping board for garmin -> ssi (pair g2s, directionality: to_ssi" in res.stdout
+
+
+def test_help_names_myssi_and_the_account_flag(tmp_path):
+    res = _run(tmp_path, "--help")
+    assert res.returncode == 0
+    text = " ".join(res.stdout.split())
+    assert "--ssi-account EMAIL" in text and "ssi[:<email>] (MySSI, beta)" in text
+    assert "new dives only" in text and "MySSI" in text

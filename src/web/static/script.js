@@ -2,7 +2,8 @@ const $ = (id) => document.getElementById(id);
 
 let currentSettings = null;
 let fieldsInfo = null;           // GET /api/fields -> {pairs: [...]}
-let credentialsAccounts = { garmin: [], divelogs: [] };  // usernames, for account-selector dropdowns
+let credentialsAccounts = { garmin: [], divelogs: [], ssi: [] };  // usernames (MySSI: emails), for account-selector dropdowns
+let ssiNote = "";   // the MySSI beta note (from /api/credentials/status), shown when a side is MySSI
 
 // ---------------------------------------------------------------- pages / sidebar nav
 
@@ -107,7 +108,7 @@ function renderJobResults(lastResults, lastRuns) {
 
 // ---------------------------------------------------------------- history
 
-const SERVICE_NAMES = { garmin: "Garmin", divelogs: "Divelogs", subsurface: "Subsurface", uddf: "UDDF", submersion: "Submersion", shearwater: "Shearwater" };
+const SERVICE_NAMES = { garmin: "Garmin", divelogs: "Divelogs", subsurface: "Subsurface", uddf: "UDDF", submersion: "Submersion", shearwater: "Shearwater", ssi: "MySSI" };
 
 function serviceName(id) {
   return SERVICE_NAMES[id] || id || "?";
@@ -343,8 +344,10 @@ async function triggerSync() {
   };
   const garminAccount = $("trigger-garmin-account").value;
   const divelogsAccount = $("trigger-divelogs-account").value;
+  const ssiAccount = $("trigger-ssi-account").value;
   if (garminAccount) payload.garmin_username = garminAccount;
   if (divelogsAccount) payload.divelogs_username = divelogsAccount;
+  if (ssiAccount) payload.ssi_account = ssiAccount;
   const res = await fetch("/api/sync/trigger", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -380,6 +383,7 @@ async function downloadDives() {
   const accounts = {};
   if ($("trigger-garmin-account").value) accounts.garmin = $("trigger-garmin-account").value;
   if ($("trigger-divelogs-account").value) accounts.divelogs = $("trigger-divelogs-account").value;
+  if ($("trigger-ssi-account").value) accounts.ssi = $("trigger-ssi-account").value;
   const res = await fetch("/api/dives/refresh", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -417,6 +421,7 @@ async function loadEndpoints() {
     source.innerHTML = optionList(syncEndpoints.map((e) => [e.spec, e.label]), source.value);
     fillTargets(prefix);
   }
+  updateTriggerNote();
 }
 
 function endpointOf(spec) {
@@ -439,6 +444,17 @@ function swapEndpoints(prefix) {
   const source = $(`${prefix}-source`).value, target = $(`${prefix}-target`).value;
   $(`${prefix}-source`).value = target;
   fillTargets(prefix, source);
+  if (prefix === "trigger") updateTriggerNote();
+}
+
+// The MySSI beta note under the Source/Target row when either side is
+// MySSI (as the desktop Sync page shows it): new dives only, a dive with
+// two or more tanks skipped, the unofficial route.
+function updateTriggerNote() {
+  const sides = [endpointOf($("trigger-source").value), endpointOf($("trigger-target").value)];
+  const show = !!ssiNote && sides.some((e) => e && e.id === "ssi");
+  $("trigger-note").textContent = show ? ssiNote : "";
+  $("trigger-note").hidden = !show;
 }
 
 function appendLogLine(line) {
@@ -463,6 +479,7 @@ function connectLogStream() {
 // ---------------------------------------------------------------- credentials
 
 function accountRowHtml(service, account) {
+  const nameLabel = service === "ssi" ? "Email" : "Username";
   const tokenDirField = service === "garmin"
     ? `<label>Token dir <input class="a-token-dir" type="text" placeholder="garmin/&lt;account&gt;/tokens" value="${escapeHtml(account.token_dir || "")}"></label>`
     : "";
@@ -472,7 +489,7 @@ function accountRowHtml(service, account) {
     ? `<span class="row-warning">⚠ no password stored</span>`
     : "";
   return `
-    <label>Username <input class="a-username" type="text" value="${escapeHtml(account.username || "")}"></label>
+    <label>${nameLabel} <input class="a-username" type="text" value="${escapeHtml(account.username || "")}"></label>
     <label>Password <input class="a-password" type="password" placeholder="${account.username ? "unchanged" : ""}"></label>
     ${tokenDirField}
     <button type="button" class="secondary remove-row">✕</button>
@@ -499,9 +516,10 @@ function readAccountRows(service) {
       const account = { username: row.querySelector(".a-username").value.trim(), password: row.querySelector(".a-password").value };
       const tokenDir = row.querySelector(".a-token-dir");
       if (tokenDir) account.token_dir = tokenDir.value.trim();   // blank: the account's own tokens folder
+      if (service === "ssi") return { email: account.username, password: account.password };   // a MySSI account is its email
       return account;
     })
-    .filter((account) => account.username);
+    .filter((account) => account.username || account.email);
 }
 
 function populateAccountSelect(id, usernames, includeBlank) {
@@ -517,17 +535,23 @@ async function loadCredentialsStatus() {
   setBadge("garmin-configured", data.garmin_configured);
   setBadge("divelogs-configured", data.divelogs_configured);
   setBadge("subsurface-configured", data.subsurface_configured);
+  setBadge("ssi-configured", data.ssi_configured);
   renderAccountRows("garmin", data.garmin_account_rows || []);
   renderAccountRows("divelogs", data.divelogs_account_rows || []);
-  credentialsAccounts = { garmin: data.garmin_accounts || [], divelogs: data.divelogs_accounts || [] };
+  // MySSI rows are emails; the row template reads .username
+  renderAccountRows("ssi", (data.ssi_account_rows || []).map((r) => ({ username: r.email, has_password: r.has_password })));
+  ssiNote = data.ssi_note || "";
+  $("ssi-note").textContent = [data.ssi_note, data.ssi_unofficial_note].filter(Boolean).join(" ");
+  credentialsAccounts = { garmin: data.garmin_accounts || [], divelogs: data.divelogs_accounts || [], ssi: data.ssi_accounts || [] };
   for (const prefix of ["trigger", "job"]) {
-    populateAccountSelect(`${prefix}-garmin-account`, credentialsAccounts.garmin, true);
-    populateAccountSelect(`${prefix}-divelogs-account`, credentialsAccounts.divelogs, true);
-    $(`${prefix}-garmin-account-label`).hidden = credentialsAccounts.garmin.length < 2;
-    $(`${prefix}-divelogs-account-label`).hidden = credentialsAccounts.divelogs.length < 2;
+    for (const service of ["garmin", "divelogs", "ssi"]) {
+      populateAccountSelect(`${prefix}-${service}-account`, credentialsAccounts[service], true);
+      $(`${prefix}-${service}-account-label`).hidden = credentialsAccounts[service].length < 2;
+    }
   }
-  $("trigger-accounts").hidden = credentialsAccounts.garmin.length < 2 && credentialsAccounts.divelogs.length < 2;
+  $("trigger-accounts").hidden = ["garmin", "divelogs", "ssi"].every((service) => credentialsAccounts[service].length < 2);
   if (data.subsurface_email) $("subsurface-email").value = data.subsurface_email;
+  updateTriggerNote();
 }
 
 function setBadge(id, on) {
@@ -540,6 +564,7 @@ function credentialsPayload() {
   const payload = {
     garmin_accounts: readAccountRows("garmin"),
     divelogs_accounts: readAccountRows("divelogs"),
+    ssi_accounts: readAccountRows("ssi"),    // the whole list: an emptied section removes every account
   };
   const email = $("subsurface-email").value.trim();
   const pw = $("subsurface-password").value;
@@ -571,6 +596,7 @@ async function testCredentials() {
   const accountResults = (label, rows) => (rows || []).forEach((r) => parts.push(`${label} (${r.username}): ${r.ok ? "OK" : "failed"}`));
   accountResults("Garmin", data.garmin);
   accountResults("Divelogs", data.divelogs);
+  (data.ssi || []).forEach((r) => parts.push(`MySSI (${r.email}): ${r.ok ? "OK" : "failed"}`));
   if (data.subsurface !== undefined) parts.push(`Subsurface Cloud: ${data.subsurface ? "OK" : "failed"}`);
   $("credentials-message").textContent = parts.join(" · ") || "Enter a username and password to test.";
 }
@@ -711,6 +737,7 @@ function jobOptions(job) {
   if (job.use_garmin_cache === false) bits.push("no Garmin cache");
   if (job.garmin_username) bits.push(job.garmin_username);
   if (job.divelogs_username) bits.push(job.divelogs_username);
+  if (job.ssi_account) bits.push(job.ssi_account);
   return bits.join(", ");
 }
 
@@ -776,6 +803,7 @@ function openJobEditor(index) {
   $("job-garmin-cache").checked = job ? job.use_garmin_cache !== false : true;
   $("job-garmin-account").value = job?.garmin_username || "";
   $("job-divelogs-account").value = job?.divelogs_username || "";
+  $("job-ssi-account").value = job?.ssi_account || "";
   $("job-editor-title").textContent = job ? "Change job" : "Add a job";
   $("job-add").textContent = job ? "Apply" : "Add job";
   showJobTimeFields();
@@ -817,6 +845,7 @@ function applyJobEditor() {
     enabled: old.enabled ?? true,
     garmin_username: $("job-garmin-account").value || null,
     divelogs_username: $("job-divelogs-account").value || null,
+    ssi_account: $("job-ssi-account").value || null,
   });
   if (editingJob >= 0) jobs[editingJob] = job; else jobs.push(job);
   editingJob = -1;
@@ -2081,7 +2110,8 @@ async function init() {
   $("trigger-sync").addEventListener("click", triggerSync);
   $("download-dives").addEventListener("click", downloadDives);
   $("status-stop").addEventListener("click", stopRunningJob);
-  $("trigger-source").addEventListener("change", () => fillTargets("trigger"));
+  $("trigger-source").addEventListener("change", () => { fillTargets("trigger"); updateTriggerNote(); });
+  $("trigger-target").addEventListener("change", updateTriggerNote);
   $("trigger-swap").addEventListener("click", () => swapEndpoints("trigger"));
   $("job-source").addEventListener("change", () => fillTargets("job"));
   $("job-frequency").addEventListener("change", showJobTimeFields);
@@ -2105,6 +2135,7 @@ async function init() {
   $("test-credentials").addEventListener("click", testCredentials);
   $("garmin-add-account").addEventListener("click", () => addAccountRow("garmin"));
   $("divelogs-add-account").addEventListener("click", () => addAccountRow("divelogs"));
+  $("ssi-add-account").addEventListener("click", () => addAccountRow("ssi"));
   $("add-pair").addEventListener("click", () => addPairRow());
   $("save-schedule").addEventListener("click", saveSchedule);
   $("notify-save").addEventListener("click", saveNotifyUrl);

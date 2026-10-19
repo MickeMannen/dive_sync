@@ -262,56 +262,119 @@ def test_begin_operation_without_a_garmin_account_skips_token_handling(fake_keyr
     assert called == []
 
 
-# --- MySSI login (plans/convert.md I7) -----------------------------------------
+# --- MySSI accounts (plans/myssi-sync.md K2) ---------------------------------------
 
-def test_ssi_credentials_round_trip_one_keychain_item(fake_keyring):
-    assert creds_store.load_ssi_credentials().configured is False
-    saved = creds_store.save_ssi_credentials(" diver@example.com ", "pw1")
-    assert saved.email == "diver@example.com" and saved.password == "pw1" and saved.token == ""
-    loaded = creds_store.load_ssi_credentials()
-    assert loaded.configured and (loaded.email, loaded.password) == ("diver@example.com", "pw1")
-    # one item, under the app identity, holding all three fields
-    assert list(fake_keyring.store) == [(creds_store.SERVICE_NAME, "ssi")]
-    # the SSI login is no sync credential: it never reaches credentials.json
-    assert creds_store.has_any_credentials() is False
-    assert not hasattr(creds_store.load_credentials_model(), "ssi")
+def test_ssi_accounts_round_trip_one_keychain_item(fake_keyring):
+    """Several MySSI accounts in one keychain item (``ssi_accounts``, the
+    consolidation of 2026-09-22), each with its password and token; a blank
+    password keeps the stored one, a kept account keeps its token, a
+    removed account goes with its token."""
+    from src.core.config import SsiCredentials
+    assert creds_store.load_credentials_model().get_ssi_accounts() == [] and not creds_store.has_any_credentials()
+    assert not hasattr(creds_store, "load_ssi_credentials") and not hasattr(creds_store, "ssi_token_hook")   # the Dive edit era's first-account shim went with K4
+    creds_store.save_ssi_accounts([SsiCredentials(email=" diver@example.com ", password="pw1", token="tok-1"),
+                                   SsiCredentials(email="other@example.com", password="pw2"),
+                                   SsiCredentials(email="diver@example.com", password="dup"),      # a repeat is dropped
+                                   SsiCredentials(email="", password="nobody")])
+    assert list(fake_keyring.store) == [(creds_store.SERVICE_NAME, "ssi_accounts")]
+    loaded = creds_store.load_credentials_model()
+    assert [(a.email, a.password, a.token) for a in loaded.get_ssi_accounts()] == [
+        ("diver@example.com", "pw1", "tok-1"), ("other@example.com", "pw2", "")]
+    assert loaded.configured_services() == ["ssi"] and creds_store.has_any_credentials()
+    first = loaded.get_ssi_accounts()[0]
+    assert first.configured and (first.email, first.token) == ("diver@example.com", "tok-1")
+    # a blank password keeps the stored one and the token; the given token wins over the stored one
+    creds_store.save_ssi_accounts([SsiCredentials(email="diver@example.com", password=""),
+                                   SsiCredentials(email="other@example.com", password="", token="tok-2")])
+    assert [(a.email, a.password, a.token) for a in creds_store.load_credentials_model().get_ssi_accounts()] == [
+        ("diver@example.com", "pw1", "tok-1"), ("other@example.com", "pw2", "tok-2")]
+    # a removed account takes its token with it; saving none clears the item
+    creds_store.save_ssi_accounts([SsiCredentials(email="other@example.com", password="")])
+    assert [(a.email, a.token) for a in creds_store.load_credentials_model().get_ssi_accounts()] == [("other@example.com", "tok-2")]
+    creds_store.save_ssi_accounts([SsiCredentials(email="diver@example.com", password="pw1")])
+    assert creds_store.load_credentials_model().get_ssi_accounts()[0].token == ""
+    creds_store.save_ssi_accounts([])
+    assert fake_keyring.store == {} and not creds_store.has_any_credentials()
+    # the whole-model save carries the list like the other services'
+    creds_store.save_credentials_model(CredentialsModel(ssi=[SsiCredentials(email="diver@example.com", password="pw1")]))
+    assert [a.email for a in creds_store.load_credentials_model().get_ssi_accounts()] == ["diver@example.com"]
 
 
-def test_ssi_token_kept_with_the_login_and_dropped_on_email_change(fake_keyring):
-    creds_store.save_ssi_token("orphan")                      # no login stored: nothing happens
+def test_single_ssi_login_migrates_once_into_the_account_list(fake_keyring):
+    """The Dive edit era's one ``ssi`` item ({"email", "password", "token"},
+    plans/convert.md I7) becomes the first account, token kept, and the
+    old item is removed; a second load reads the list only."""
+    creds_store._set_json("ssi", {"email": "diver@example.com", "password": "pw1", "token": "tok-old"})
+    accounts = creds_store.load_credentials_model().get_ssi_accounts()
+    assert [(a.email, a.password, a.token) for a in accounts] == [("diver@example.com", "pw1", "tok-old")]
+    assert list(fake_keyring.store) == [(creds_store.SERVICE_NAME, "ssi_accounts")]
+    assert creds_store._get_json("ssi_accounts") == [{"username": "diver@example.com", "password": "pw1", "token": "tok-old"}]
+    # idempotent: the list is the source now, even with a stale single item put back
+    creds_store._set_json("ssi", {"email": "stale@example.com", "password": "x", "token": ""})
+    assert [a.email for a in creds_store.load_credentials_model().get_ssi_accounts()] == ["diver@example.com"]
+    # a single item without an email is dropped, not migrated
+    fake_keyring.store.clear()
+    creds_store._set_json("ssi", {"email": "", "password": "pw", "token": "t"})
+    assert creds_store.load_credentials_model().get_ssi_accounts() == [] and fake_keyring.store == {}
+
+
+def test_ssi_token_is_stored_per_account(fake_keyring):
+    from src.core.config import SsiCredentials
+    creds_store.save_ssi_token("diver@example.com", "orphan")          # no such account: nothing happens
     assert fake_keyring.store == {}
-    creds_store.save_ssi_credentials("diver@example.com", "pw1")
-    creds_store.save_ssi_token("tok-1")
-    assert creds_store.load_ssi_credentials().token == "tok-1"
-    # a blank password keeps the stored one and the token
-    kept = creds_store.save_ssi_credentials("diver@example.com", "")
-    assert kept.password == "pw1" and kept.token == "tok-1"
-    # a new password keeps the token (SSI's token is not tied to it that we know), a new email drops it
-    assert creds_store.save_ssi_credentials("diver@example.com", "pw2").token == "tok-1"
-    changed = creds_store.save_ssi_credentials("other@example.com", "")
-    assert changed.email == "other@example.com" and changed.password == "" and changed.token == ""
-    creds_store.save_ssi_token("")
-    assert creds_store.load_ssi_credentials().token == ""
+    creds_store.save_ssi_accounts([SsiCredentials(email="diver@example.com", password="pw1"),
+                                   SsiCredentials(email="other@example.com", password="pw2")])
+    creds_store.save_ssi_token("other@example.com", "tok-o")
+    creds_store.save_ssi_token("diver@example.com", "tok-d")
+    tokens = {a.email: a.token for a in creds_store.load_credentials_model().get_ssi_accounts()}
+    assert tokens == {"diver@example.com": "tok-d", "other@example.com": "tok-o"}
+    creds_store.save_ssi_token("other@example.com", "")                 # a blank token forgets the stored one
+    assert {a.email: a.token for a in creds_store.load_credentials_model().get_ssi_accounts()}["other@example.com"] == ""
+    assert list(fake_keyring.store) == [(creds_store.SERVICE_NAME, "ssi_accounts")]
 
 
-def test_ssi_credentials_cleared(fake_keyring):
-    creds_store.save_ssi_credentials("diver@example.com", "pw1")
-    creds_store.save_ssi_credentials("", "whatever")
-    assert fake_keyring.store == {} and creds_store.load_ssi_credentials().configured is False
-    creds_store.save_ssi_credentials("diver@example.com", "pw1")
-    creds_store.clear_ssi_credentials()
-    assert fake_keyring.store == {}
-    creds_store.clear_ssi_credentials()                       # idempotent
-
-
-def test_ssi_client_token_hook_stores_the_token(fake_keyring):
+def test_ssi_client_token_lands_in_the_keychain_through_save_ssi_token(fake_keyring):
+    """An `SsiClient` built straight from a keychain account keeps the
+    token it is handed with that account through ``save_ssi_token`` as its
+    ``on_token`` (the sync goes through credentials.json and
+    sync_ssi_tokens_from_file instead)."""
+    from src.core.config import SsiCredentials
     from src.core.services.ssi import HttpResponse, SsiClient
 
-    creds_store.save_ssi_credentials("diver@example.com", "pw1")
-    def transport(method, url, params, data, timeout):
+    creds_store.save_ssi_accounts([SsiCredentials(email="diver@example.com", password="pw1")])
+    def transport(method, url, params, data, timeout, headers):
         return HttpResponse(200, b'{"authenticated": true, "token": "tok-9", "mid": "1"}')
-    stored = creds_store.load_ssi_credentials()
+    stored = creds_store.load_credentials_model().get_ssi_accounts()[0]
     client = SsiClient(stored.email, stored.password, stored.token or None, transport=transport,
-                       on_token=creds_store.save_ssi_token, sleep=lambda s: None)
+                       on_token=lambda token: creds_store.save_ssi_token(stored.email, token), sleep=lambda s: None)
     assert client.authenticate() == "tok-9"
-    assert creds_store.load_ssi_credentials().token == "tok-9"
+    assert creds_store.load_credentials_model().get_ssi_accounts()[0].token == "tok-9"
+
+
+def test_end_operation_brings_a_myssi_token_from_the_credentials_file_into_the_keychain(fake_keyring, tmp_path, monkeypatch):
+    """A sync builds its MySSI adapter from the materialised credentials.json
+    (pairs.build_adapter) and the token MySSI hands out is written there;
+    end_operation reads it back into the account's keychain entry before
+    the file is cleared, like the Garmin token. Accounts not in the
+    keychain, and a blank token, change nothing."""
+    import src.core.config as config
+    from src.core.config import ConfigManager, SsiCredentials
+    creds_file = tmp_path / "credentials.json"
+    monkeypatch.setattr(config, "CREDENTIALS_FILE", str(creds_file))
+    creds_store.save_ssi_accounts([SsiCredentials(email="diver@example.com", password="pw1", token="tok-old"),
+                                   SsiCredentials(email="other@example.com", password="pw2")])
+    creds_store.begin_operation()
+    assert creds_file.exists()
+    materialised = ConfigManager.load_credentials(str(creds_file))
+    assert [(a.email, a.token) for a in materialised.get_ssi_accounts()] == [("diver@example.com", "tok-old"), ("other@example.com", "")]
+    # what pairs.build_adapter's hook does during the run
+    assert ConfigManager.store_ssi_token("diver@example.com", "tok-new", str(creds_file)) is True
+    assert ConfigManager.store_ssi_token("other@example.com", "", str(creds_file)) is False        # unchanged: not written
+    assert ConfigManager.store_ssi_token("stranger@example.com", "tok-x", str(creds_file)) is False
+    creds_store.end_operation()
+    assert not creds_file.exists()
+    tokens = {a.email: a.token for a in creds_store.load_credentials_model().get_ssi_accounts()}
+    assert tokens == {"diver@example.com": "tok-new", "other@example.com": ""}
+    # no file (nothing materialised, or already cleared): a no-op
+    creds_store.sync_ssi_tokens_from_file()
+    assert ConfigManager.store_ssi_token("diver@example.com", "tok-x", str(creds_file)) is False

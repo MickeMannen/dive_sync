@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar, List, Optional
+from typing import Any, ClassVar, List, Optional
 from datetime import datetime
 from src.core.models import UnifiedDive
 from src.core.fields import FieldSpec
@@ -25,11 +25,39 @@ class BaseDiveAdapter(ABC):
     # leaves the dives the service is missing alone, says so once per run,
     # and still syncs the metadata of the dives it does have.
     accepts_new_dives: ClassVar[bool] = True
+    # False while the service can take new dives but not changes to the
+    # dives it already has (MySSI until its update call is tested live,
+    # plans/myssi-sync.md). The engine then says once per matched dive that
+    # the changes were not sent, writes nothing there and queues no conflict
+    # for it (a resolution would be an update it cannot take).
+    accepts_updates: ClassVar[bool] = True
+    # False when a mirror run must never delete on this service (MySSI: a
+    # delete is permanent and the dive number may not come back). The engine
+    # logs each dive it would have deleted and leaves it.
+    accepts_mirror_deletes: ClassVar[bool] = True
 
     @classmethod
     def field_catalog(cls) -> List[FieldSpec]:
         """Fields this service can read and/or write. Default: none."""
         return []
+
+    def cannot_add_reason(self, dive: UnifiedDive) -> Optional[str]:
+        """Why ``add_dive`` would refuse this particular dive, as a short
+        reason ("it has 2 tanks; ... not supported yet"), or None when it can
+        be added. The engine asks before every upload so a refused dive is
+        counted as skipped (with the reason) instead of tried and dropped;
+        ``add_dive`` applies the same check for callers that go straight to
+        it. Default: every dive can be added."""
+        return None
+
+    @classmethod
+    def as_stored(cls, field_type: str, value: Any) -> Any:
+        """``value`` (of a catalogue ``field_type``) as this service would
+        store and read it back. The engine compares a sender's value in this
+        form, so what the service cannot hold (MySSI: a tank's name, a profile
+        off its own time grid) is not a difference on every run. Default: the
+        value unchanged."""
+        return value
 
     @classmethod
     def canonical_id(cls, external_id) -> str:

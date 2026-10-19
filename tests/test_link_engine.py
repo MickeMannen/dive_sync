@@ -1246,3 +1246,139 @@ def test_log_units_hint_converts_the_rule_log_lines_only(tmp_path, caplog):
     out = engine.test_mapping()
     row = next(r for r in out["rows"] if r["link"] == "depth")
     assert (row["source_value"], row["target_value"]) == (30.2, 30.5)
+
+
+# ---------------------------------------------------------------- add-only receivers (plans/myssi-sync.md K1)
+
+class AddOnlyDivelogs(FakeDivelogs):
+    """A receiver that takes new dives but no changes to its own and never
+    a mirror delete (BaseDiveAdapter.accepts_updates / accepts_mirror_deletes,
+    as MySSI sets them), and that refuses a dive with two or more tanks
+    (cannot_add_reason)."""
+    accepts_updates = False
+    accepts_mirror_deletes = False
+
+    def cannot_add_reason(self, dive):
+        tanks = len(dive.gas_mixtures or [])
+        return f"it has {tanks} tanks; not supported here" if tanks >= 2 else None
+
+
+def _add_only_engine(tmp_path, garmin_dives, divelogs_dives, **settings) -> SyncEngine:
+    path = _settings_file(tmp_path, **settings)
+    return SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                      source_adapter=FakeGarmin(garmin_dives), target_adapter=AddOnlyDivelogs(divelogs_dives))
+
+
+def test_a_tank_name_the_receiver_cannot_hold_is_no_difference(tmp_path):
+    """BaseDiveAdapter.as_stored (MySSI drops tank names): the sender's value
+    is compared in the form the receiver keeps, so a dive that came back
+    without its tank name is equal and no "changes not sent" line repeats on
+    every run; a real change (another end pressure) still counts. A receiver
+    that stores names is unchanged."""
+    class NoNames(AddOnlyDivelogs):
+        @classmethod
+        def as_stored(cls, field_type, value):
+            if field_type == "tanks" and value:
+                return [gm.model_copy(update={"tank_name": None}) for gm in value]
+            return value
+    links = [FieldLink(id="tanks", source=["garmin.tanks"], target="divelogs.tanks", direction="to_target",
+                       conflict="prefer_source")]
+    named = [GasMixture(oxygen=32.0, start_pressure=200.0, end_pressure=90.0, tank_volume=11.1, tank_name="Tank 1")]
+    bare = [GasMixture(oxygen=32.0, start_pressure=200.0, end_pressure=90.0, tank_volume=11.1)]
+    ids = {"garmin": "1", "divelogs": "2"}
+
+    def run(receiver_cls, receiver_tanks):
+        path = _settings_file(tmp_path, field_links=links,
+                              sync_filters=SyncFilters(only_new=False, sync_gases=True))
+        engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                            source_adapter=FakeGarmin([_dive(external_ids=dict(ids), gas_mixtures=named)]),
+                            target_adapter=receiver_cls([_dive(external_ids=dict(ids), gas_mixtures=receiver_tanks)]))
+        return engine.run_sync(dry_run=True)
+
+    assert run(NoNames, bare)["skipped"] == []
+    changed = [bare[0].model_copy(update={"end_pressure": 60.0})]
+    assert [s["reason"] for s in run(NoNames, changed)["skipped"]] == ["receiver_takes_no_updates"]
+    assert [s["reason"] for s in run(AddOnlyDivelogs, bare)["skipped"]] == ["receiver_takes_no_updates"]
+
+
+def test_receiver_without_updates_logs_once_per_dive_and_writes_nothing(tmp_path, caplog):
+    """accepts_updates False: the rules still run, but the receiver gets no
+    update_dive call - one line per matched dive says the changes were not
+    sent, the dive is counted as skipped - and a disagreement under a manual
+    rule queues no conflict (its resolution would be that update). The
+    sender is still written when it is the receiver of the run."""
+    import logging
+    from src.core.conflicts import ConflictStore
+    links = [FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="prefer_source"),
+             FieldLink(id="notes", source=["garmin.notes"], target="divelogs.notes", conflict="manual")]
+    g = [_dive(external_ids={"garmin": "1", "divelogs": "2"}, buddy="Anna", notes="A", dive_number=7),
+         _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "3", "divelogs": "4"}, buddy="Bob", notes="same")]
+    d = [_dive(external_ids={"garmin": "1", "divelogs": "2"}, buddy="Old", notes="B", dive_number=7),
+         _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "3", "divelogs": "4"}, buddy="Bob", notes="same")]
+    engine = _add_only_engine(tmp_path, g, d, field_links=links)
+    with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+        res = engine.run_sync(dry_run=False)
+    assert engine.target.updated == [] and res["updated_on_divelogs"] == [] and res["matched_count"] == 2
+    assert res["conflicts"] == [] and not os.path.exists(engine.conflicts_file)
+    assert res["skipped"] == [{"reason": "receiver_takes_no_updates", "id": "2", "time": "2026-06-22 12:00:00"}]
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines.count("  Divelogs.org: changes to dive 7 at 2026-06-22 12:00:00 not sent (updating a Divelogs.org dive is not supported yet)") == 1
+    assert not any("changes to dive" in l and "2026-07-01" in l for l in lines)      # the identical pair says nothing
+    assert any("conflict left for manual resolution" in l for l in lines)             # the rule ran and said so
+    # a dry run reports the same, and the other direction writes Garmin as usual
+    res = _add_only_engine(tmp_path, g, d, field_links=links).run_sync(dry_run=True)
+    assert [s["reason"] for s in res["skipped"]] == ["receiver_takes_no_updates"] and res["conflicts"] == []
+    g[0].buddy, d[0].buddy = "Anna", "Old"
+    engine = _add_only_engine(tmp_path, g, d, field_links=links, directionality="to_garmin")
+    res = engine.run_sync(dry_run=False)
+    assert res["skipped"] == [] and [eid for eid, _ in engine.source.updated] == ["1"]     # buddy forced on Garmin
+    assert len(res["conflicts"]) == 1 and len(ConflictStore(engine.conflicts_file).load()) == 1   # notes queued as usual
+
+
+def test_mirror_never_deletes_on_a_receiver_that_refuses(tmp_path, caplog):
+    """accepts_mirror_deletes False: a mirror run still creates the missing
+    dives and forces the fields it may write, but each receiver dive the
+    sender lacks is logged and counted, never deleted."""
+    import logging
+    g = [_dive(external_ids={"garmin": "1"})]
+    d = [_dive(date_time=datetime(2025, 1, 1, 9), external_ids={"divelogs": "11"}),
+         _dive(date_time=datetime(2025, 1, 2, 9), external_ids={"divelogs": "12"})]
+    engine = _add_only_engine(tmp_path, g, d, sync_filters=SyncFilters(only_new=True))
+    with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+        res = engine.run_sync(dry_run=False, mirror_override=True)
+    assert engine.target.deleted == [] and res["deleted_on_divelogs"] == []
+    assert len(engine.target.added) == 1 and len(res["uploaded_to_divelogs"]) == 1
+    assert res["skipped"] == [{"reason": "mirror_never_deletes_here", "id": "11", "time": "2025-01-01 09:00:00"},
+                              {"reason": "mirror_never_deletes_here", "id": "12", "time": "2025-01-02 09:00:00"}]
+    lines = [r.getMessage() for r in caplog.records]
+    assert "  Mirror: Divelogs.org dive at 2025-01-01 09:00:00 (ID 11) has no match on the other side; not deleted (a mirror never deletes on Divelogs.org)" in lines
+    assert not any("deleting it" in l for l in lines)
+    # without the flag the same run deletes (the existing behaviour is untouched)
+    engine = _engine(tmp_path, g, d, sync_filters=SyncFilters(only_new=True))
+    res = engine.run_sync(dry_run=False, mirror_override=True)
+    assert engine.target.deleted == ["11", "12"] and res["skipped"] == []
+
+
+def test_receiver_refusing_a_dive_counts_it_as_skipped_not_tried(tmp_path, caplog):
+    """cannot_add_reason: the engine asks before every upload, logs the
+    reason, counts the dive under skipped and never calls add_dive for it;
+    the dives it can take are sent as before. The same in a dry run."""
+    import logging
+    two = [GasMixture(oxygen=21.0, start_pressure=200.0, end_pressure=50.0),
+           GasMixture(oxygen=50.0, start_pressure=200.0, end_pressure=100.0)]
+    g = [_dive(external_ids={"garmin": "1"}, gas_mixtures=two),
+         _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "2"}, gas_mixtures=two[:1])]
+    engine = _add_only_engine(tmp_path, g, [])
+    with caplog.at_level(logging.WARNING, logger="dive_sync.sync_engine"):
+        res = engine.run_sync(dry_run=False)
+    assert [d.external_ids["garmin"] for d in engine.target.added] == ["2"]
+    assert [e["source_id"] for e in res["uploaded_to_divelogs"]] == ["2"]
+    assert res["skipped"] == [{"reason": "receiver_cannot_add_dive", "detail": "it has 2 tanks; not supported here",
+                               "time": "2026-06-22 12:00:00"}]
+    assert "  Divelogs.org: dive 2026-06-22 12:00 skipped: it has 2 tanks; not supported here" in caplog.text
+    res = _add_only_engine(tmp_path, g, []).run_sync(dry_run=True)
+    assert [s["reason"] for s in res["skipped"]] == ["receiver_cannot_add_dive"] and len(res["uploaded_to_divelogs"]) == 1
+    # a plain receiver takes everything: the default reason is None
+    engine = _engine(tmp_path, g, [])
+    assert engine.target.cannot_add_reason(g[0]) is None
+    assert len(engine.run_sync(dry_run=False)["uploaded_to_divelogs"]) == 2

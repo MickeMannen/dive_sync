@@ -37,23 +37,10 @@ def _split_policy(rule: Dict[str, Any]) -> str:
 
 
 def _adapter_class(service_id: str):
-    if service_id in ("subsurface", "subsurface-cloud"):
-        from src.core.services.subsurface import SubsurfaceAdapter
-        return SubsurfaceAdapter
-    if service_id == "uddf":
-        from src.core.services.uddf import UddfAdapter
-        return UddfAdapter
-    if service_id == "shearwater":
-        from src.core.services.shearwater import ShearwaterAdapter
-        return ShearwaterAdapter
-    if service_id == "submersion":
-        from src.core.services.submersion.adapter import SubmersionAdapter
-        return SubmersionAdapter
-    if service_id == "garmin":
-        from src.core.services.garmin import GarminAdapter
-        return GarminAdapter
-    from src.core.services.divelogs import DivelogsAdapter
-    return DivelogsAdapter
+    """The adapter class of a board side (pairs.adapter_class_of: every
+    registered service, MySSI included since plans/myssi-sync.md K3)."""
+    from src.core.pairs import adapter_class_of
+    return adapter_class_of(service_id)
 
 
 def pairs_info(settings: SettingsModel, configured: Optional[List[str]] = None) -> List[Dict[str, Any]]:

@@ -15,11 +15,12 @@ from typing import Dict, List
 from desktop import credentials, preferences
 
 
-ACCOUNT_SERVICES = ("garmin", "divelogs", "subsurface", "shearwater")
+ACCOUNT_SERVICES = ("garmin", "divelogs", "subsurface", "shearwater", "ssi")
 
 
 def names(service: str, model=None) -> List[str]:
-    """The configured accounts of ``service`` (usernames; Subsurface: emails)."""
+    """The configured accounts of ``service`` (usernames; Subsurface and
+    MySSI: emails)."""
     if service not in ACCOUNT_SERVICES:
         return []
     model = model or credentials.load_credentials_model()
@@ -27,7 +28,7 @@ def names(service: str, model=None) -> List[str]:
         # databases, one per account folder (rework.md Track H)
         return [a.name for a in model.get_shearwater_accounts() if a.name]
     accounts = {"garmin": model.get_garmin_accounts, "divelogs": model.get_divelogs_accounts,
-                "subsurface": model.get_subsurface_accounts}[service]()
+                "subsurface": model.get_subsurface_accounts, "ssi": model.get_ssi_accounts}[service]()
     return [credentials.account_name(a) for a in accounts if credentials.account_name(a)]
 
 
@@ -60,6 +61,7 @@ def engine_kwargs(selection: Dict[str, str] = None) -> dict:
             "divelogs_username": selection.get("divelogs") or None,
             "subsurface_username": selection.get("subsurface") or None,
             "shearwater_account": selection.get("shearwater") or None,
+            "ssi_account": selection.get("ssi") or None,
             "account_scoped_state": True}
 
 

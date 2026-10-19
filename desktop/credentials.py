@@ -5,7 +5,8 @@ keeps its existing plain credentials.json unchanged (it's headless, so
 there's no OS keychain to use).
 
 Two things get keychain-backed this way: the Garmin/Divelogs
-username+password (and Subsurface/Submersion's), and (see
+username+password (and Subsurface/Submersion's, and MySSI's with its API
+token, plans/myssi-sync.md K2), and (see
 materialize_garmin_token()/sync_garmin_token_from_file()) the Garmin session
 token cache - `garminconnect`/garth's token file grants live API access
 without the password, so it's just as sensitive. Everything else (Garmin
@@ -167,17 +168,34 @@ def _migrate_from_single_subsurface_account() -> List[dict]:
     return [{"username": old["email"], "password": old.get("password", "")}] if old.get("email") else []
 
 
+def _migrate_from_single_ssi_login() -> List[dict]:
+    """Before plans/myssi-sync.md K2 (2026-10-19) MySSI was the Dive edit
+    page's one login: a ``ssi`` item holding ``{"email", "password",
+    "token"}`` (plans/convert.md I7). It becomes the first MySSI account,
+    named after its email, token kept; the old item is removed."""
+    old = _get_json(LEGACY_SSI_KEY)
+    if not old:
+        return []
+    _set_json(LEGACY_SSI_KEY, None)
+    email = str(old.get("email", "")).strip()
+    if not email:
+        return []
+    return [{"username": email, "password": str(old.get("password", "")), "token": str(old.get("token", ""))}]
+
+
 def _load_raw_accounts(service: str) -> List[dict]:
-    """A list of ``{"username", "password"}`` dicts (Subsurface Cloud: the
-    email as username), from whichever generation of storage this keychain
-    happens to have - self-healing: a migration is immediately written back
-    in the new scheme and the old keys are cleared, so this only runs once
-    per keychain."""
+    """A list of ``{"username", "password"}`` dicts (Subsurface Cloud and
+    MySSI: the email as username; MySSI also ``"token"``), from whichever
+    generation of storage this keychain happens to have - self-healing: a
+    migration is immediately written back in the new scheme and the old
+    keys are cleared, so this only runs once per keychain."""
     accounts = _get_json(f"{service}_accounts")
     if accounts:
         return accounts
     if service == "subsurface":
         migrated = _migrate_from_single_subsurface_account()
+    elif service == "ssi":
+        migrated = _migrate_from_single_ssi_login()
     else:
         migrated = _migrate_from_pre_consolidation_scheme(service) or _migrate_from_legacy_single_account_scheme(service)
     if migrated:
@@ -196,6 +214,11 @@ def _load_accounts(service: str, cls):
             # one server for every account (rework.md E19)
             kwargs = {"email": kwargs["username"], "password": kwargs["password"],
                       "base_url": preferences.get_subsurface_base_url(cls().base_url)}
+        if service == "ssi":
+            # the API token lives with the account (plans/myssi-sync.md K2):
+            # short, and never more keychain items than one per service
+            kwargs = {"email": kwargs["username"], "password": kwargs["password"],
+                      "token": str(entry.get("token", "") or "")}
         accounts.append(cls(**kwargs))
     return accounts
 
@@ -216,11 +239,16 @@ def _save_accounts(service: str, accounts) -> None:
     previous = {a.get("username"): a for a in _load_raw_accounts(service)}
     saved = []
     for account in accounts:
-        name = account_name(account)
+        name = account_name(account).strip()
         if not name or any(a["username"] == name for a in saved):
             continue
         password = account.password or previous.get(name, {}).get("password", "")
-        saved.append({"username": name, "password": password})
+        row = {"username": name, "password": password}
+        if service == "ssi":
+            # a kept MySSI account keeps its token (the one given wins; a
+            # removed account's token goes with it)
+            row["token"] = getattr(account, "token", "") or previous.get(name, {}).get("token", "")
+        saved.append(row)
         if service == "garmin":
             preferences.set_garmin_token_dir(name, account.token_dir)
     kept_usernames = {a["username"] for a in saved}
@@ -232,7 +260,7 @@ def _save_accounts(service: str, accounts) -> None:
 
 def load_credentials_model():
     from src.core.config import (CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials,
-                                 SubmersionCredentials, ShearwaterCredentials)
+                                 SubmersionCredentials, ShearwaterCredentials, SsiCredentials)
 
     submersion_secret = _get_json("submersion_secret")
     submersion_config = preferences.get_submersion_config()
@@ -270,6 +298,8 @@ def load_credentials_model():
         shearwater=[ShearwaterCredentials(database=str(row.get("database", "")), account=str(row.get("account", "")))
                     for row in preferences.get_shearwater_config().get("databases", [])
                     if str(row.get("database", "")).strip()],
+        # MySSI accounts (plans/myssi-sync.md K2): email, password and token per account
+        ssi=_load_accounts("ssi", SsiCredentials),
     )
 
 
@@ -303,6 +333,7 @@ def save_credentials_model(model) -> None:
     _save_accounts("subsurface", model.get_subsurface_accounts())
     save_submersion_credentials(getattr(model, "submersion", None))
     save_shearwater_accounts(model.saved_shearwater_accounts() if hasattr(model, "saved_shearwater_accounts") else [])
+    _save_accounts("ssi", model.get_ssi_accounts() if hasattr(model, "get_ssi_accounts") else [])
     logger.info("Credentials saved to OS keychain.")
 
 
@@ -313,6 +344,7 @@ def has_any_credentials() -> bool:
         or model.get_divelogs_accounts()
         or model.get_subsurface_accounts()
         or model.submersion.configured
+        or model.get_ssi_accounts()
     )
 
 
@@ -320,9 +352,10 @@ def materialize_local_cache() -> None:
     """Write keychain-sourced credentials into src.core.config's file-based
     store so SyncEngine/dive_cache work unmodified. Call once at app
     startup, and again whenever credentials are saved."""
-    from src.core.config import ConfigManager
+    from src.core.config import CREDENTIALS_FILE, ConfigManager
 
-    ConfigManager.save_credentials(load_credentials_model())
+    # the path read at call time, not save_credentials' import-time default
+    ConfigManager.save_credentials(load_credentials_model(), CREDENTIALS_FILE)
 
 
 def clear_local_cache() -> None:
@@ -394,55 +427,65 @@ def clear_garmin_token_file(username: str, token_dir: str) -> None:
         logger.warning("Failed to remove materialized Garmin token file: %s", e)
 
 
-# --- MySSI (plans/convert.md I7): the Convert page's upload target ---------
+# --- MySSI (plans/myssi-sync.md K2): accounts like Divelogs' ---------------
 #
-# Not part of CredentialsModel: MySSI is no sync service (nothing in src.core
-# reads credentials.json for it), so its login is never materialised to disk.
-# One keychain item, "ssi", holding {"email", "password", "token"}: the
-# token is kept so a later upload reuses it instead of logging in again.
+# One keychain item, ``ssi_accounts``, holding every MySSI account as
+# ``{"username": <email>, "password", "token"}`` - the same scheme as the
+# other services' lists (one item per service, decisions.md 2026-09-22), the
+# API token kept with its account so a later run reuses it instead of
+# logging in again. The Dive edit era's single ``ssi`` item (plans/convert.md
+# I7) is migrated once by _load_raw_accounts. During a sync the accounts are
+# materialised to credentials.json like the others (begin_operation); a
+# token MySSI hands out meanwhile is written back there by the adapter
+# (pairs.build_adapter) and brought into the keychain by end_operation
+# (sync_ssi_tokens_from_file), the way the Garmin token is.
 
-SSI_KEY = "ssi"
-
-
-def load_ssi_credentials():
-    """The stored MySSI login (blank fields when none)."""
-    from src.core.services.ssi import SsiCredentials
-
-    raw = _get_json(SSI_KEY) or {}
-    return SsiCredentials(email=str(raw.get("email", "")), password=str(raw.get("password", "")),
-                          token=str(raw.get("token", "")))
+LEGACY_SSI_KEY = "ssi"
 
 
-def save_ssi_credentials(email: str, password: str):
-    """Store the MySSI login. A blank password keeps the one already stored
-    (same rule as the other services' account forms); a blank email clears
-    everything. Changing the email drops the stored token, which belonged to
-    the old login. Returns what is now stored."""
-    from src.core.services.ssi import SsiCredentials
+def save_ssi_accounts(accounts) -> None:
+    """``accounts`` are ``SsiCredentials`` (full replace, like the other
+    services' lists): a blank password keeps the stored one, a kept account
+    keeps its token, accounts not listed are dropped with their tokens."""
+    _save_accounts("ssi", accounts)
 
+
+def save_ssi_token(email: str, token: str) -> None:
+    """Keep the token `SsiClient` obtained for ``email`` with its account
+    (what sync_ssi_tokens_from_file does after a run; an adapter built
+    straight from the keychain can pass ``lambda t: save_ssi_token(email, t)``
+    as its ``on_token``); a blank token forgets the stored one. No-op for
+    an email that is no stored account."""
     email = (email or "").strip()
-    previous = load_ssi_credentials()
-    if not email:
-        _set_json(SSI_KEY, None)
-        return SsiCredentials()
-    password = password or (previous.password if previous.email == email else "")
-    token = previous.token if previous.email == email else ""
-    current = SsiCredentials(email=email, password=password, token=token)
-    _set_json(SSI_KEY, {"email": current.email, "password": current.password, "token": current.token})
-    return current
-
-
-def save_ssi_token(token: str) -> None:
-    """Keep the token `SsiClient` just obtained (its ``on_token`` hook); a
-    blank token forgets the stored one. No-op without a stored login."""
-    current = load_ssi_credentials()
-    if not current.email:
+    rows = _load_raw_accounts("ssi")
+    row = next((r for r in rows if r.get("username") == email), None)
+    if row is None:
         return
-    _set_json(SSI_KEY, {"email": current.email, "password": current.password, "token": token or ""})
+    row["token"] = token or ""
+    _set_json("ssi_accounts", rows)
 
 
-def clear_ssi_credentials() -> None:
-    _set_json(SSI_KEY, None)
+def sync_ssi_tokens_from_file() -> None:
+    """Read the MySSI tokens the sync wrote into the materialised
+    credentials.json (`pairs.build_adapter`'s hook) back into the keychain,
+    before the file is cleared - the MySSI counterpart of
+    sync_garmin_token_from_file. Only stored accounts are touched."""
+    from src.core.config import CREDENTIALS_FILE, ConfigManager
+
+    if not os.path.exists(CREDENTIALS_FILE):
+        return
+    rows = _load_raw_accounts("ssi")
+    if not rows:
+        return
+    by_email = {r.get("username"): r for r in rows}
+    changed = False
+    for account in ConfigManager.load_credentials(CREDENTIALS_FILE).get_ssi_accounts():
+        row = by_email.get(account.email.strip())
+        if row is not None and account.token and row.get("token", "") != account.token:
+            row["token"] = account.token
+            changed = True
+    if changed:
+        _set_json("ssi_accounts", rows)
 
 
 _operation_lock = threading.Lock()
@@ -480,4 +523,6 @@ def end_operation() -> None:
             for account in model.get_garmin_accounts():
                 sync_garmin_token_from_file(account.username, account.token_dir)
                 clear_garmin_token_file(account.username, account.token_dir)
+            # a MySSI token obtained during the operation (plans/myssi-sync.md K2)
+            sync_ssi_tokens_from_file()
             clear_local_cache()

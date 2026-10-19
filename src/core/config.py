@@ -146,6 +146,10 @@ class CronJobModel(BaseModel):
     use_garmin_cache: Optional[bool] = Field(None, description="None = the saved default (sync_filters.use_garmin_cache)")
     garmin_username: Optional[str] = Field(None, description="Which configured Garmin account to use; None picks the only one, or errors if several are configured")
     divelogs_username: Optional[str] = Field(None, description="Which configured Divelogs account to use; None picks the only one, or errors if several are configured")
+    # plans/myssi-sync.md K5: a scheduled job with MySSI as a side picks its
+    # account (the email) like the Sync page does; the scheduler forwards it
+    # to pairs.engine_for as ssi_account.
+    ssi_account: Optional[str] = Field(None, description="Which configured MySSI account (email) to use; None picks the only one, or errors if several are configured")
 
     @model_validator(mode="before")
     @classmethod
@@ -488,6 +492,22 @@ class ShearwaterCredentials(BaseModel):
         return self.resolved_path() is not None
 
 
+class SsiCredentials(BaseModel):
+    """One MySSI account (plans/myssi-sync.md): email, password and the
+    current API token, kept so a later run reuses the token instead of
+    logging in again. The desktop app keeps these in the OS keychain
+    (desktop/credentials.py); credentials.json holds them for the CLI and
+    the web dashboard, as a list (several accounts, one picked per run) or
+    the single form."""
+    email: str = ""
+    password: str = ""
+    token: str = ""
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.email.strip() and self.password)
+
+
 class CredentialsModel(BaseModel):
     garmin: Union[List[GarminCredentials], GarminCredentials] = Field(default_factory=GarminCredentials)
     divelogs: Union[List[DivelogsCredentials], DivelogsCredentials] = Field(default_factory=DivelogsCredentials)
@@ -498,6 +518,13 @@ class CredentialsModel(BaseModel):
     # A list (several Shearwater accounts, one picked per run, rework.md
     # Track H) or the single form the web UI writes.
     shearwater: Union[List[ShearwaterCredentials], ShearwaterCredentials] = Field(default_factory=list)
+    # MySSI accounts (plans/myssi-sync.md K1): a list, or the single form.
+    ssi: Union[List[SsiCredentials], SsiCredentials] = Field(default_factory=list)
+
+    def get_ssi_accounts(self) -> List[SsiCredentials]:
+        """The MySSI accounts with an email, in either shape."""
+        entries = self.ssi if isinstance(self.ssi, list) else [self.ssi]
+        return [a for a in entries if a.email.strip()]
 
     def saved_shearwater_accounts(self) -> List[ShearwaterCredentials]:
         """The entries with a path, whether or not the file exists."""
@@ -529,6 +556,8 @@ class CredentialsModel(BaseModel):
             out.append("submersion")
         if self.get_shearwater_accounts():
             out.append("shearwater")
+        if any(a.configured for a in self.get_ssi_accounts()):
+            out.append("ssi")
         return out
 
     def configured_specs(self) -> List[str]:
@@ -638,6 +667,27 @@ class ConfigManager:
     def save_credentials(credentials: CredentialsModel, path: str = CREDENTIALS_FILE) -> None:
         with open(path, "w") as f:
             json.dump(credentials.model_dump(), f, indent=2)
+
+    @staticmethod
+    def store_ssi_token(email: str, token: str, path: str = CREDENTIALS_FILE) -> bool:
+        """Keep the API token MySSI handed out for the ``ssi`` account
+        ``email`` (plans/myssi-sync.md K2: `SsiClient`'s ``on_token`` hook,
+        wired by pairs.build_adapter), so the next run reuses it instead of
+        logging in again. Only an existing account in an existing file is
+        touched (the desktop app materialises the file for one operation
+        and reads the token back into the keychain afterwards); True when
+        the file was written."""
+        if not os.path.exists(path):
+            return False
+        credentials = ConfigManager.load_credentials(path)
+        email = (email or "").strip()
+        entries = credentials.ssi if isinstance(credentials.ssi, list) else [credentials.ssi]
+        account = next((a for a in entries if a.email.strip() == email), None)
+        if account is None or account.token == (token or ""):
+            return False
+        account.token = token or ""
+        ConfigManager.save_credentials(credentials, path)
+        return True
 
 
 # ---------------------------------------------------------------------------

@@ -25,13 +25,14 @@ from src.core.config import (
     DivelogsCredentials,
     GarminCredentials,
     SUBMERSION_ENABLED,
+    SsiCredentials,
     SubmersionCredentials,
     SubsurfaceCredentials,
     normalize_endpoint_url,
     region_from_endpoint,
 )
 
-SERVICES = ("garmin", "divelogs", "subsurface") + (("submersion",) if SUBMERSION_ENABLED else ())
+SERVICES = ("garmin", "divelogs", "subsurface", "ssi") + (("submersion",) if SUBMERSION_ENABLED else ())
 
 
 def append_to_gitignore(entry: str):
@@ -156,10 +157,39 @@ def setup_submersion(current: CredentialsModel) -> Tuple[Optional[SubmersionCred
     return creds, ok
 
 
+def setup_ssi(current: CredentialsModel) -> Tuple[Optional[SsiCredentials], Optional[bool]]:
+    """MySSI (plans/myssi-sync.md K5): the email and password of the MySSI
+    app. Several accounts are a list in credentials.json; this tool edits
+    the first one, like the Garmin and Divelogs sections. The check is one
+    login; the token it yields is not kept (the first run stores its own)."""
+    from src.core.services.ssi import BETA_NOTE, UNOFFICIAL_NOTE
+    accounts = current.get_ssi_accounts()
+    existing = accounts[0] if accounts else SsiCredentials()
+    if len(accounts) > 1:
+        print(f"ℹ {len(accounts)} MySSI accounts are stored; this tool edits the first one ({existing.email}).")
+    print("\n--- MySSI (beta) ---")
+    print(BETA_NOTE)
+    print(UNOFFICIAL_NOTE)
+    email = _ask("Email", existing.email)
+    password = _ask("Password", existing.password, secret=True)
+    if not (email and password):
+        print("ℹ MySSI skipped.")
+        return None, None
+    # a changed email is another account: its stored token would not fit
+    token = existing.token if email == existing.email else ""
+    creds = SsiCredentials(email=email, password=password, token=token)
+    print("Authenticating with MySSI...")
+    from src.core.services.ssi import SsiAdapter
+    ok = SsiAdapter(email, password).login()
+    print("✓ MySSI authentication succeeded!" if ok else "✗ MySSI authentication failed.")
+    return creds, ok
+
+
 SECTIONS: Dict[str, Callable[[CredentialsModel], Tuple[Optional[object], Optional[bool]]]] = {
     "garmin": setup_garmin,
     "divelogs": setup_divelogs,
     "subsurface": setup_subsurface,
+    "ssi": setup_ssi,
     "submersion": setup_submersion,
 }
 
@@ -174,6 +204,10 @@ def _apply(current: CredentialsModel, service: str, creds) -> CredentialsModel:
     elif service == "divelogs":
         accounts = current.get_divelogs_accounts()
         update["divelogs"] = [creds] + accounts[1:] if isinstance(current.divelogs, list) else creds
+    elif service == "ssi":
+        # always the list shape: that is what the web dashboard and the
+        # desktop app write, and what a second account needs
+        update["ssi"] = [creds] + current.get_ssi_accounts()[1:]
     else:
         update[service] = creds
     return current.model_copy(update=update)

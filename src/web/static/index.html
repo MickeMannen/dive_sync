@@ -37,10 +37,13 @@
         <label>Target (written to) <select id="trigger-target"></select></label>
         <button type="button" class="secondary" id="trigger-swap" title="Swap source and target">&#8644;</button>
       </div>
+      <!-- the beta note when a side is MySSI (new dives only, two-tank dives skipped) -->
+      <p id="trigger-note" class="muted" hidden></p>
       <!-- the accounts to sync as, on a row of their own; shown only with a choice to make -->
       <div class="board-toolbar" id="trigger-accounts" hidden>
         <label id="trigger-garmin-account-label" hidden>Garmin account <select id="trigger-garmin-account"></select></label>
         <label id="trigger-divelogs-account-label" hidden>Divelogs account <select id="trigger-divelogs-account"></select></label>
+        <label id="trigger-ssi-account-label" hidden>MySSI account <select id="trigger-ssi-account"></select></label>
       </div>
       <div class="actions">
         <label class="inline-checkbox"><input type="checkbox" id="trigger-dry-run"> Dry run</label>
@@ -267,6 +270,12 @@
           <label>Email <input type="text" id="subsurface-email"></label>
           <label>Password <input type="password" id="subsurface-password" placeholder="leave blank to keep the saved one"></label>
         </fieldset>
+        <fieldset>
+          <legend>MySSI <span id="ssi-configured" class="badge"></span></legend>
+          <p id="ssi-note" class="muted"></p>
+          <div id="ssi-accounts-rows"></div>
+          <div class="actions"><button type="button" class="secondary" id="ssi-add-account">Add another account</button></div>
+        </fieldset>
         <div class="actions">
           <button type="button" id="test-credentials">Test</button>
           <button type="submit">Save credentials</button>
@@ -332,6 +341,7 @@
           <label>Target (written to) <select id="job-target"></select></label>
           <label id="job-garmin-account-label" hidden>Garmin account <select id="job-garmin-account"></select></label>
           <label id="job-divelogs-account-label" hidden>Divelogs account <select id="job-divelogs-account"></select></label>
+          <label id="job-ssi-account-label" hidden>MySSI account <select id="job-ssi-account"></select></label>
         </div>
         <div class="board-toolbar">
           <label>Runs

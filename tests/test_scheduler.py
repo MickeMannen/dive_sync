@@ -412,3 +412,28 @@ def test_run_sync_thread_gives_the_engine_the_units_for_its_log(monkeypatch):
     scheduler.run_sync_thread(dry_run=True)
     assert seen == ["metric", "imperial", "metric"]
     assert scheduler.last_sync_results["Manual"] == {"status": "ok"} and scheduler.is_sync_running is False
+
+
+def test_run_sync_thread_forwards_the_myssi_account_pick(monkeypatch):
+    """plans/myssi-sync.md K5: a job (or Sync now) with MySSI as a side
+    carries ``ssi_account``, the email of the account to run as, to
+    pairs.engine_for; CronJobModel keeps it with the job."""
+    import src.core.pairs as pairs
+    from src.core.config import CronJobModel
+
+    captured = {}
+
+    class FakeEngine:
+        run_overrides = {}
+
+        def run_sync(self, **kwargs):
+            return {"ok": True}
+
+    monkeypatch.setattr(pairs, "engine_for", lambda source, target, **kw: captured.update(kw) or FakeEngine())
+    job = CronJobModel(id="g2s", source="garmin", target="ssi", directionality="to_ssi", ssi_account="me@example.com")
+    assert CronJobModel(**job.model_dump()).ssi_account == "me@example.com"
+    scheduler.run_sync_thread(False, job.model_dump())
+    assert captured["ssi_account"] == "me@example.com"
+    captured.clear()
+    scheduler.run_sync_thread(False, {"source": "garmin", "target": "ssi", "directionality": "to_ssi"})
+    assert "ssi_account" not in captured

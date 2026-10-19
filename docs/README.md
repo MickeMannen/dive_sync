@@ -1,6 +1,6 @@
 # DiveSync documentation
 
-DiveSync keeps dive logs in sync between Garmin Connect, Divelogs.org, Subsurface and the Shearwater app, edits dives on each service and converts dive-computer files. It comes as a desktop app, a Docker image with a web dashboard and a command line, all on the same sync engine.
+DiveSync keeps dive logs in sync between Garmin Connect, Divelogs.org, Subsurface, the Shearwater app and MySSI (beta), edits dives on each service and converts dive-computer files. It comes as a desktop app, a Docker image with a web dashboard and a command line, all on the same sync engine.
 
 ## Start here
 
@@ -14,7 +14,7 @@ DiveSync keeps dive logs in sync between Garmin Connect, Divelogs.org, Subsurfac
 | Page | What it's for |
 |---|---|
 | [Sync](sync.md) | Pick a source and a target and sync now; download dives for the Dives pages. |
-| [Dives](dives.md) | Garmin, Divelogs and Subsurface dives in a table; edit, stage and save. |
+| [Dives](dives.md) | Garmin, Divelogs, Subsurface and MySSI dives in a table; edit, stage and save (MySSI: browse and delete until the update test). |
 | [Mapping](mapping.md) | The mapping board: fields, rules, policies, templates, splits and matching. |
 | [Conflicts](conflicts.md) | Queued conflicts with the two values side by side. |
 | [Dive edit](convert.md) | Dive-computer files in, every field of a dive editable, UDDF, Subsurface or Garmin `.fit` files out (a dive from a `.fit` patched into a copy, any other written anew); merge a split dive; no account involved. |
@@ -22,7 +22,7 @@ DiveSync keeps dive logs in sync between Garmin Connect, Divelogs.org, Subsurfac
 
 ## Reference
 
-- [Command line](cli.md) - every option of `sync.py` (including `--units`), other services (UDDF, Subsurface, the Shearwater app), mapping and conflicts from the CLI.
+- [Command line](cli.md) - every option of `sync.py` (including `--units`), other services (UDDF, Subsurface, the Shearwater app, MySSI), mapping and conflicts from the CLI.
 - [Configuration files](configuration.md) - `credentials.json`, `settings.json`, the sync profile, where your data is kept.
 - [Web dashboard](web-dashboard.md) - the Docker image's pages and its own Units choice.
 - [Advanced](advanced.md) - the Garmin dive cache, limitations.

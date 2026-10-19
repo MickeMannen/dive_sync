@@ -1,6 +1,6 @@
 # Dive Sync 🤿✨
 
-**Dive Sync** keeps dive logs in sync between **Garmin Connect**, **Divelogs.org** and **Subsurface Cloud** (UDDF files too). This image runs the sync on a schedule, with a web dashboard: Sync now, scheduled jobs, mapping board, conflicts, settings and a live log. Dive editing and Mirror (making a target an exact copy) live in the separate desktop app, not here; a sync from this image never deletes dives.
+**Dive Sync** keeps dive logs in sync between **Garmin Connect**, **Divelogs.org**, **Subsurface Cloud** (UDDF files too) and, in beta, **MySSI** (new dives only, through the MySSI app's unofficial connection). This image runs the sync on a schedule, with a web dashboard: Sync now, scheduled jobs, mapping board, conflicts, settings and a live log. Dive editing and Mirror (making a target an exact copy) live in the separate desktop app, not here; a sync from this image never deletes dives.
 
 # THIS IS STILL IN BETA - KEEP BACKUPS
 
@@ -54,7 +54,7 @@ docker compose logs -f                         # follow the log
 - **Matches** dives across services by remembered pairs, then by start time (time-zone aware where the service provides it).
 - **Syncs fields** according to a mapping board: which field feeds which, in which direction, and what happens on a conflict (fill blanks, one side wins, or ask). Defaults never overwrite a real value with another one.
 - **Uploads** new dives in either direction, including profiles and tanks where the target can take them (Garmin Connect accepts no gas data from outside).
-- **Services**: Garmin Connect, Divelogs.org, Subsurface Cloud (clone, commit, push), UDDF files. Submersion sync doesn't work yet and is disabled.
+- **Services**: Garmin Connect, Divelogs.org, Subsurface Cloud (clone, commit, push), UDDF files, MySSI (beta: adds new dives only, skips a dive with two or more tanks, never deletes there). Submersion sync doesn't work yet and is disabled.
 - **Scheduling**: jobs from any source to any target, hourly, daily, weekly or every N minutes; a job writes its target only, so add one each way for both directions. Dry-run mode and a manual "Sync now" from the page.
 - **Garmin cache**: *Use cached Garmin dives* re-reads only the dives Garmin's activity list shows as new or changed, saving three slow API calls per dive. That list doesn't include notes, buddies, weight or visibility, so an edit to only those is picked up by a run with the option off - e.g. a weekly job next to a frequent cached one.
 - **Portable profile**: export/import the whole sync configuration (never credentials) to move it between the desktop app and Docker.

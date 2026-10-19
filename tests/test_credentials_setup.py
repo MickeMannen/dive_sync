@@ -241,3 +241,39 @@ def test_setup_skips_configured_sections_and_keeps_failed_out(tmp_path, monkeypa
 def test_setup_main_rejects_unknown_service():
     with pytest.raises(SystemExit):
         setup_credentials.main(["--services", "garmin,nope"])
+
+
+def test_setup_ssi_edits_the_first_account_and_keeps_the_others(tmp_path, monkeypatch):
+    """plans/myssi-sync.md K5: ``--services ssi`` asks email and password,
+    checks the login once (faked here), writes the list shape, keeps a
+    second account and the first one's token when its email is unchanged."""
+    from src.core.services.ssi import SsiAdapter
+    assert "ssi" in setup_credentials.SERVICES
+    path = str(tmp_path / "credentials.json")
+    with open(path, "w") as f:
+        json.dump({"garmin": {"username": "g", "password": "p"},
+                   "ssi": [{"email": "one@example.com", "password": "old", "token": "tok-1"},
+                           {"email": "two@example.com", "password": "pw2"}]}, f)
+    logins = []
+    monkeypatch.setattr(SsiAdapter, "login", lambda self: logins.append(self.email) or True)
+    _drive(monkeypatch, [""], ["new"])            # keep the email, a new password
+    assert setup_credentials.run(["ssi"], path=path, assume_yes=True) == 0
+    saved = json.load(open(path))
+    assert saved["ssi"] == [{"email": "one@example.com", "password": "new", "token": "tok-1"},
+                            {"email": "two@example.com", "password": "pw2", "token": ""}]
+    assert saved["garmin"]["username"] == "g" and logins == ["one@example.com"]
+
+    # another email is another account: no stored token travels with it; a
+    # failed check is saved only on request
+    monkeypatch.setattr(SsiAdapter, "login", lambda self: False)
+    _drive(monkeypatch, ["y", "three@example.com", "n"], ["pw3"])     # change it? yes; save the failed check? no
+    assert setup_credentials.run(["ssi"], path=path, assume_yes=False) == 0
+    assert json.load(open(path))["ssi"][0]["email"] == "one@example.com"
+    _drive(monkeypatch, ["three@example.com"], ["pw3"])
+    assert setup_credentials.run(["ssi"], path=path, assume_yes=True) == 1
+    assert json.load(open(path))["ssi"][0] == {"email": "three@example.com", "password": "pw3", "token": ""}
+
+    # an empty answer skips the section, and a fresh file gets the list shape
+    _drive(monkeypatch, [""], [""])
+    assert setup_credentials.run(["ssi"], path=str(tmp_path / "none.json"), assume_yes=True) == 0
+    assert not os.path.exists(tmp_path / "none.json")

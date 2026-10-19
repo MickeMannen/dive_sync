@@ -71,3 +71,19 @@ def test_ssi_sites_file_lives_under_the_data_root(tmp_path):
     path = layout.ssi_sites_file(str(tmp_path))
     assert path == str(tmp_path / "ssi" / "APP_CACHE_SITES.zip")
     assert (tmp_path / "ssi").is_dir() and not os.path.exists(path)
+
+
+def test_ssi_accounts_cache_beside_the_sites_file(tmp_path):
+    """MySSI dives are cached per account (plans/myssi-sync.md K2:
+    <root>/ssi/<email>/data) in the folder that also holds the site
+    database file; the file is no account folder."""
+    base = str(tmp_path)
+    assert layout.dives_dir("ssi", "me@example.com", base) == os.path.join(base, "ssi", "me@example.com", "data")
+    os.makedirs(layout.dives_dir("ssi", "me@example.com", base))
+    os.makedirs(layout.dives_dir("ssi", "test@example.com", base))
+    with open(layout.ssi_sites_file(base), "wb") as f:
+        f.write(b"zip")
+    assert layout.all_dives_dirs("ssi", base) == [
+        ("me@example.com", os.path.join(base, "ssi", "me@example.com", "data")),
+        ("test@example.com", os.path.join(base, "ssi", "test@example.com", "data"))]
+    assert layout.account_of_path("ssi", os.path.join(base, "ssi", "me@example.com", "data", "1.json")) == "me@example.com"

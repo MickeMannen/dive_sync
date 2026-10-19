@@ -2589,14 +2589,13 @@ def test_convert_controller_saves_one_dive_or_one_file_per_dive(qapp, scratch_da
     assert c.message.startswith("Could not write into")
 
 
-@pytest.mark.parametrize("ssi_on", [False, True])
-def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir, fake_keyring, monkeypatch, ssi_on):
+def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir, fake_keyring, monkeypatch):
     """The Dive edit section ("Convert" until I14) sits between Conflicts and Settings (Q10); the page
     instantiates its list, detail pane and chart without a QML warning while
-    dives are shown and the selection changes. The SSI parts (the Send to SSI
-    button, its plan area, the MySSI card in Settings) follow the
-    `ssi.UPLOAD_ENABLED` switch: hidden while it is off (the shipped state
-    since 2026-10-02), shown when it is on."""
+    dives are shown and the selection changes. Nothing of MySSI is on it
+    (plans/myssi-sync.md K4: no Open MySSI, no Send to SSI, no plan area),
+    while the Settings page keeps its MySSI account card with the beta note
+    (`ssi.BETA_NOTE`) under the card's title."""
     from PySide6.QtCore import QMetaObject, QObject
     from desktop import app as desktop_app
     from desktop import logging_bridge
@@ -2604,7 +2603,6 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     from src.core import dive_cache
     from src.core.convert import formats
     from src.core.services import ssi
-    monkeypatch.setattr(ssi, "UPLOAD_ENABLED", ssi_on)
     monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
     monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
     warnings = []
@@ -2640,7 +2638,7 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     # Open Cached (I9c): off without a Garmin account, the tip says so; a cached .fit
     # of a configured account turns it on when the page is shown again
     # Open folder… (I13) sits between Open files… and Open Cached, on while the controller is idle
-    buttons = [b for b in page.findChildren(QObject) if b.objectName() in ("openFilesButton", "openFolderButton", "openCachedButton")]
+    buttons = [b for b in page.findChildren(QObject) if b.objectName() in ("openFilesButton", "openFolderButton", "openCachedButton", "openMySsiButton")]
     assert [b.objectName() for b in buttons] == ["openFilesButton", "openFolderButton", "openCachedButton"]
     open_folder = page.findChild(QObject, "openFolderButton")
     assert open_folder.property("text") == "Open folder…" and open_folder.property("enabled") is True
@@ -2670,16 +2668,17 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     wait(qapp, 150)
     assert cached.property("enabled") is True and c.cacheAvailable is True
     assert c.cacheTip.startswith("Opens the .fit files this app downloaded from Garmin Connect") and "me@example.org" in c.cacheTip
-    assert c.ssiEnabled is ssi_on
-    assert page.findChild(QObject, "sendToSsiButton").property("visible") is ssi_on
-    assert page.findChild(QObject, "ssiSection").property("visible") is False     # nothing planned yet, either way
+    # no MySSI control on the page, with or without a MySSI account (K4)
+    for name in ("openMySsiButton", "openMySsiTip", "sendToSsiButton", "sendToSsiTip", "ssiSection", "ssiBetaLine", "ssiSendButton"):
+        assert page.findChild(QObject, name) is None, name
+    settings = controllers["settingsController"]
+    settings.saveSsiAccounts([{"username": "diver@example.com", "password": "pw"}])
+    wait(qapp, 100)
+    assert page.findChild(QObject, "openMySsiButton") is None and page.findChild(QObject, "sendToSsiButton") is None
     c.clickRow(1, False, False)
     wait(qapp, 150)
     c.selectAll()
     wait(qapp, 150)
-    c._set_ssi_message("would show the plan")
-    wait(qapp, 100)
-    assert page.findChild(QObject, "ssiSection").property("visible") is ssi_on   # the SSI area only when on
     # the list's own buttons (I9b): Remove with a selection, Clear while dives are listed, Delete on the list
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
@@ -2712,14 +2711,56 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     wait(qapp, 150)
     c.clear()
     wait(qapp, 150)
-    # the Settings page has the MySSI card only when the switch is on
+    # the Settings page has the MySSI card (a sync service since K1/K2)
     root.setProperty("currentSection", sections.index("Settings"))
     wait(qapp, 200)
-    assert controllers["settingsController"].ssiEnabled is ssi_on
-    assert root.findChild(QObject, "ssiCard").property("visible") is ssi_on
+    assert root.findChild(QObject, "ssiCard").property("visible") is True
+    beta = root.findChild(QObject, "ssiBetaNote")                                   # muted, under the card's title
+    assert beta.property("text") == settings.ssiBetaNote == ssi.BETA_NOTE and beta.property("visible") is True
+    assert root.findChild(QObject, "ssiStatus").property("text") == settings.ssiStatus == "Saved: diver@example.com. Press Test to check the login."
     assert warnings == [], warnings
     engine.deleteLater()
     wait(qapp, 50)
+
+
+def test_dive_edit_page_has_no_myssi_controls(qapp, scratch_data_dir, fake_keyring):
+    """MySSI left the Dive edit page with plans/myssi-sync.md K4 (owner's
+    answer 7): the page's QML names no MySSI control, the controller has
+    none of the Open MySSI / Send to SSI slots and properties, there is no
+    ``myssi:`` pseudo-source (every listed dive comes from a file, so its
+    source is the file's name) and the module switches the buttons were
+    behind are gone from ssi.py; the sync's own pieces (the adapter, the
+    beta note) stay. No MySSI call is possible from here: the controller
+    never imports the client."""
+    import inspect
+    from desktop.app import QML_DIR
+    from desktop.controllers import convert
+    from desktop.controllers.convert import ConvertController
+    from src.core.convert.formats import ReadResult
+    from src.core.services import ssi
+    from tests.test_ssi import make_dive
+    qml = open(os.path.join(QML_DIR, "ConvertPage.qml"), encoding="utf-8").read()
+    assert "Open MySSI" not in qml and "Send to SSI" not in qml and "ssiSection" not in qml
+    assert "convertController.ssi" not in qml and "openMySsi" not in qml
+    c = ConvertController()
+    for name in ("openMySsi", "prepareSsi", "sendToSsi", "downloadSites", "searchSites", "setSite", "clearSite", "cancelSsi",
+                 "reloadSsiLogin", "ssiEnabled", "ssiReadEnabled", "ssiConfigured", "ssiPlan", "ssiPlanOpen", "ssiResults",
+                 "ssiMessage", "ssiBusy", "ssiOpenTip", "ssiSendTip", "ssiBetaNote", "ssiNote", "ssiLoginStatus",
+                 "ssiSitesStatus", "ssiSitesDownloaded", "ssiChanged", "ssiBusyChanged", "_make_client", "_ssi_allowed",
+                 "_ssi_read_allowed", "_ssi_login", "_ssi_client_kwargs"):
+        assert not hasattr(c, name), name
+    for name in ("myssi_source", "is_myssi_source", "ssi_error_text", "MYSSI_SOURCE_PREFIX"):
+        assert not hasattr(convert, name), name
+    source = inspect.getsource(convert)
+    assert "services.ssi" not in source and "services import ssi" not in source and "creds_store" not in source
+    assert convert.source_label("/x/a.fit") == "a.fit"
+    for name in ("UPLOAD_ENABLED", "READ_ENABLED", "STATUS_PLANNED", "plan_upload"):
+        assert not hasattr(ssi, name), name
+    assert ssi.SsiAdapter.accepts_updates is False and ssi.BETA_NOTE.startswith("MySSI is in beta")
+    # a dive carrying a MySSI id (read from a UDDF the sync wrote, say) is an ordinary file dive here
+    c._apply_read(ReadResult(dives=[make_dive(external_ids={"ssi": "77"})], files=[("/x/a.uddf", "uddf")]))
+    assert c.dives[0]["source"] == "a.uddf" and c._paths == ["/x/a.uddf"] and c.files == ["a.uddf"]
+    assert c.message == "1 dive from 1 file."
 
 
 def test_profile_chart_is_one_component_shared_by_both_pages(qapp):
@@ -3204,7 +3245,7 @@ def test_dive_edit_page_editor(qapp, scratch_data_dir, fake_keyring, monkeypatch
     engine = desktop_app.create_engine(controllers, "Dive edit", on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
     root = engine.rootObjects()[0]
     wait(qapp, 300)
-    assert root.property("sections").toVariant()[6] == "Dive edit"
+    assert root.property("sections").toVariant()[7] == "Dive edit"      # after MySSI Dives (K3)
     page = root.findChild(QObject, "convertPage")
     field = lambda name: page.findChild(QObject, name)
     commit = lambda name, text: (field(name).setProperty("text", text), QMetaObject.invokeMethod(field(name), "editingFinished"), wait(qapp, 100))
@@ -4398,194 +4439,371 @@ def test_editing_helpers_shared_by_both_editors(qapp):
     assert dives.js_number is editing.js_number and dives.si_number is editing.si_number and dives.display_number is editing.display_number
 
 
-def _ssi_fake_transport(fake, sites):
-    """`tests.test_ssi.FakeSsi` plus the public site-database zip."""
-    import io
-    import json
-    import zipfile
-    from src.core.services import ssi
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as zf:
-        zf.writestr("sites.json", json.dumps(sites))
-    zip_bytes = buffer.getvalue()
-
-    def transport(method, url, params, data, timeout):
-        if url == ssi.SITES_URL:
-            return ssi.HttpResponse(200, zip_bytes)
-        return fake(method, url, params, data, timeout)
-    return transport
-
-
-def test_convert_sends_to_ssi_through_a_fake_client(qapp, scratch_data_dir, fake_keyring, monkeypatch):
-    """Send to SSI: the plan first (duplicates skipped, numbers after SSI's
-    highest, the nearest site within 5 km preselected, none otherwise), the
-    site changed or cleared per dive, then the upload with every dive read
-    back; the site database lands under DATA_DIR/ssi and the token in the
-    keychain. Everything against tests/test_ssi.py's fake backend: the
-    network is blocked."""
-    import requests
+def _first_ssi_account():
+    """The first MySSI account in the keychain (blank fields when none):
+    what the tests look at after a save, a Test or a token hand-out."""
     from desktop import credentials as creds_store
-    from desktop.controllers.convert import ConvertController
-    from src.core import layout
-    from src.core.convert.formats import ReadResult
-    from src.core.services import ssi
-    from tests.test_ssi import EMAIL, PASSWORD, SITES, FakeSsi, logbook_dive, make_dive
-
-    def blocked(self, method, url, *a, **k):
-        raise AssertionError(f"network blocked: {method} {url}")
-    monkeypatch.setattr(requests.sessions.Session, "request", blocked)
-    monkeypatch.setattr(ssi, "UPLOAD_ENABLED", True)        # the flow is hidden behind the switch since 2026-10-02
-
-    fake = FakeSsi(dives=[logbook_dive(7, "2026-06-27", "10:00", ref="garmin:24449823352")], sites=[])
-    c = ConvertController()
-    assert c.ssiEnabled
-    c._ssi_client_kwargs = {"transport": _ssi_fake_transport(fake, SITES), "sleep": lambda s: None}
-    dives = [make_dive(),                                                              # already in MySSI (same computer ref)
-             make_dive(start="2026-06-28 09:00", activity="24449823399"),               # near House Reef (501)
-             make_dive(start="2026-06-29 09:00", activity="24449823400", lat=None, lng=None, location="Somewhere")]
-    c._apply_read(ReadResult(dives=dives, files=[("/x/a.fit", "fit"), ("/x/b.fit", "fit"), ("/x/c.fit", "fit")]))
-    c.selectAll()
-    # no login saved: the page says where to add it, nothing is called
-    assert not c.ssiConfigured and "Settings" in c.ssiLoginStatus
-    c.prepareSsi()
-    assert "Settings" in c.ssiMessage and fake.calls == [] and not c.ssiPlanOpen
-    creds_store.save_ssi_credentials(EMAIL, PASSWORD)
-    c.reloadSsiLogin()
-    assert c.ssiConfigured and c.ssiLoginStatus == f"MySSI login: {EMAIL}"
-    assert c.ssiNote == ssi.UNOFFICIAL_NOTE and not c.ssiSitesDownloaded
-
-    c.prepareSsi()
-    assert c.ssiBusy
-    assert wait_until(qapp, lambda: not c.ssiBusy)
-    assert c.ssiPlanOpen and fake.whats() == ["authenticate", "get_divelog"]
-    assert os.path.isfile(layout.ssi_sites_file()) and c.ssiSitesDownloaded and "3 sites" in c.ssiSitesStatus
-    plan = c.ssiPlan
-    assert [p["status"] for p in plan] == ["skipped", "planned", "planned"] and c.ssiPlannedCount == 2
-    assert "already in MySSI as dive 7" in plan[0]["reason"]
-    assert plan[1]["number"] == 8 and plan[1]["site_id"] == 501 and plan[1]["site_label"] == "House Reef (South, Testland)"
-    assert plan[2]["number"] == 9 and plan[2]["site_id"] == -1 and plan[2]["site_label"] == ""
-    assert any("site name" in line for line in plan[2]["dropped"])
-    assert c.ssiMessage.startswith("2 dives to send, 1 already in MySSI (skipped).")
-    assert creds_store.load_ssi_credentials().token == "tok-1"           # the on_token hook
-    # the site picker: search, pick, clear
-    assert [s["id"] for s in c.searchSites("far")] == [502] and c.searchSites("") == []
-    c.setSite(2, 502)
-    assert c.ssiPlan[2]["site_id"] == 502 and c.ssiPlan[2]["site_label"].startswith("Far Wall")
-    c.clearSite(2)
-    assert c.ssiPlan[2]["site_id"] == -1
-    c.setSite(1, -1)
-    c.setSite(1, 501)
-    c.setSite(99, 501)                                                    # off the plan: ignored
-
-    c.sendToSsi()
-    assert wait_until(qapp, lambda: not c.ssiBusy)
-    assert not c.ssiPlanOpen
-    results = c.ssiResults
-    assert [r["status"] for r in results] == ["skipped", "sent", "sent"]
-    assert results[1]["summary"].endswith("sent as dive 8") and results[2]["summary"].endswith("sent as dive 9")
-    assert c.ssiMessage.startswith("MySSI: sent 2, skipped 1, failed 0.")
-    assert [d["odin_user_log_nr"] for d in fake.saved] == [8, 9]
-    assert [d["odin_user_log_dive_sites_id"] for d in fake.saved] == [501, None]   # sending without a site is allowed
-    assert fake.logins == 1 and fake.whats().count("save_divelog") == 2            # the token was reused
-    # selecting again closes nothing stale: a new plan starts from the results
-    c.clickRow(1, False, False)
-    assert c.ssiResults and not c.ssiPlanOpen
-    c.cancelSsi()
-    assert c.ssiMessage == ""
-    # a site database is re-downloaded on request
-    c.downloadSites()
-    assert wait_until(qapp, lambda: not c.ssiBusy)
-    assert c.ssiMessage == "SSI site database downloaded: 3 sites."
-    # a login MySSI refuses is reported on the page, not raised
-    fake.password = "changed"
-    fake.expire()
-    c.prepareSsi()
-    assert wait_until(qapp, lambda: not c.ssiBusy)
-    assert c.ssiMessage.startswith("MySSI:") and "did not accept" in c.ssiMessage and not c.ssiPlanOpen
+    from src.core.config import SsiCredentials
+    accounts = creds_store.load_credentials_model().get_ssi_accounts()
+    return accounts[0] if accounts else SsiCredentials()
 
 
-def test_settings_controller_ssi_login(qapp, scratch_data_dir, fake_keyring, monkeypatch):
-    """The MySSI card: one login in the keychain, a blank password keeps the
-    stored one, Remove clears it, Test logs in off the GUI thread."""
-    from desktop import credentials as creds_store
+def test_settings_controller_ssi_accounts(qapp, scratch_data_dir, fake_keyring):
+    """The MySSI card (plans/myssi-sync.md K2): several accounts in the
+    keychain like Divelogs', a blank password keeps the stored one, Remove
+    is a save without the row, Test logs in off the GUI thread and keeps no
+    token. The card is a sync service's: nothing gates it (the Dive edit
+    era's switches went with K4)."""
+    from desktop import accounts, credentials as creds_store
     from desktop.controllers.settings import SettingsController
     from src.core.services import ssi
     from tests.test_ssi import EMAIL, PASSWORD, FakeSsi
-    monkeypatch.setattr(ssi, "UPLOAD_ENABLED", True)        # the card is hidden behind the switch since 2026-10-02
+    assert not hasattr(ssi, "UPLOAD_ENABLED") and not hasattr(ssi, "READ_ENABLED")
     s = SettingsController()
-    assert s.ssiEnabled
-    assert s.ssiEmail == "" and not s.ssiHasPassword and s.ssiStatus.startswith("No MySSI login saved yet.")
+    assert not hasattr(s, "ssiEnabled") and not hasattr(s, "saveSsi")           # the single-login slots are gone
+    assert s.ssiBetaNote == ssi.BETA_NOTE and s.ssiUnofficialNote == ssi.UNOFFICIAL_NOTE
+    assert s.ssiAccounts == [] and s.ssiStatus == "No account saved yet."
     s.testSsi("", "")
     assert s.ssiStatus == "Enter an email and password first."
-    s.saveSsi(f" {EMAIL} ", PASSWORD)
-    assert s.ssiEmail == EMAIL and s.ssiHasPassword and s.ssiStatus == f"Saved: {EMAIL}. Press Test to check the login."
-    assert s.message == "Saved to keychain." and creds_store.load_ssi_credentials().password == PASSWORD
-    s.saveSsi(EMAIL, "")                                       # blank keeps the stored password
-    assert creds_store.load_ssi_credentials().password == PASSWORD
+    s.saveSsiAccounts([{"username": f" {EMAIL} ", "password": PASSWORD}, {"username": "", "password": "x"}])
+    assert s.ssiAccounts == [{"username": EMAIL, "has_password": True}]
+    assert s.ssiStatus == f"Saved: {EMAIL}. Press Test to check the login."
+    assert s.message == "Saved to keychain." and _first_ssi_account().password == PASSWORD
+    assert accounts.names("ssi") == [EMAIL] and accounts.selected("sync", "ssi") == EMAIL
+    assert accounts.sync_selection()["ssi"] == EMAIL and accounts.engine_kwargs()["ssi_account"] == EMAIL
+    assert accounts.accounts_for_spec("ssi") == [EMAIL]
+    s.saveSsiAccounts([{"username": EMAIL, "password": ""}, {"username": "other@example.com", "password": ""}])   # blank keeps the stored password
+    assert _first_ssi_account().password == PASSWORD
+    assert s.ssiAccounts == [{"username": EMAIL, "has_password": True}, {"username": "other@example.com", "has_password": False}]
+    assert s.ssiStatus == "No password stored for other@example.com - enter it and save."
+    s.saveSsiAccounts([{"username": EMAIL, "password": ""}, {"username": "other@example.com", "password": "pw2"}])
+    assert s.ssiStatus == "2 accounts saved. Press Test to check a login."
     fake = FakeSsi()
     s._ssi_client_kwargs = {"transport": fake, "sleep": lambda s: None}
-    s.testSsi(EMAIL, "")
+    s.testSsi(EMAIL, "")                                       # the stored password of that account
     assert s.ssiStatus == "Testing…"
     assert wait_until(qapp, lambda: s.ssiStatus != "Testing…")
     assert s.ssiStatus == "Login OK." and fake.whats() == ["authenticate"]
-    assert creds_store.load_ssi_credentials().token == ""     # Test keeps no token; a send does
+    assert _first_ssi_account().token == ""     # Test keeps no token; a sync or a send does
     s.testSsi(EMAIL, "wrong")
     assert wait_until(qapp, lambda: s.ssiStatus != "Testing…")
     assert s.ssiStatus == "Login failed."
-    s.saveSsi("other@example.com", "")
-    assert s.ssiStatus == "No password stored for other@example.com - enter it and save."
-    s.clearSsi()
-    assert s.ssiEmail == "" and not creds_store.load_ssi_credentials().email
+    s.testSsi("other@example.com", "")                         # the other account's stored password is wrong for the fake
+    assert wait_until(qapp, lambda: s.ssiStatus != "Testing…")
+    assert s.ssiStatus == "Login failed." and fake.logins == 3
+    # Remove is a save without the row; a kept account keeps its token
+    creds_store.save_ssi_token(EMAIL, "tok-kept")
+    s.saveSsiAccounts([{"username": EMAIL, "password": ""}])
+    assert s.ssiAccounts == [{"username": EMAIL, "has_password": True}]
+    assert _first_ssi_account().token == "tok-kept"
+    s.saveSsiAccounts([])
+    assert s.ssiAccounts == [] and not _first_ssi_account().email and s.ssiStatus == "No account saved yet."
 
 
-def test_ssi_slots_refuse_while_the_switch_is_off(qapp, scratch_data_dir, fake_keyring, monkeypatch, caplog):
-    """`ssi.UPLOAD_ENABLED` is False in the tree (owner's decision 2026-10-02,
-    until the live test): every SSI slot of both controllers is a no-op with
-    one log line - no MySSI call, no plan, no keychain write - so nothing in
-    the UI can reach MySSI even if a stale page still called a slot. The
-    keychain login itself stays readable (the helpers keep their tests)."""
-    import logging
-    import requests
-    from desktop import credentials as creds_store
-    from desktop.controllers.convert import ConvertController
-    from desktop.controllers.settings import SettingsController
-    from src.core.convert.formats import ReadResult
+def test_settings_page_myssi_card_is_an_account_list(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """The card renders the stored accounts as rows (email, password, Test,
+    Remove) with Save / Add another account, the beta note under the title,
+    and follows a save; one row is offered when nothing is stored."""
+    from PySide6.QtCore import QObject
+    from desktop import app as desktop_app
+    from desktop import logging_bridge
+    from src.core import dive_cache
+    from src.core.config import SsiCredentials
     from src.core.services import ssi
-    from tests.test_ssi import EMAIL, PASSWORD, FakeSsi, make_dive
+    from tests.test_ssi import EMAIL, PASSWORD
+    import desktop.credentials as creds_store
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    creds_store.save_ssi_accounts([SsiCredentials(email=EMAIL, password=PASSWORD), SsiCredentials(email="other@example.com")])
+    warnings = []
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    engine = desktop_app.create_engine(controllers, "Settings",
+                                       on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    card = root.findChild(QObject, "ssiCard")
+    assert card.property("visible") is True and card.property("title") == "MySSI"
+    assert root.findChild(QObject, "ssiBetaNote").property("text") == ssi.BETA_NOTE
+    model = root.findChild(QObject, "ssiAccountsModel")
+    assert model is not None and model.property("count") == 2
+    assert _row(model, 0) == {"username": EMAIL, "hasPassword": True}
+    assert _row(model, 1) == {"username": "other@example.com", "hasPassword": False}
+    assert root.findChild(QObject, "ssiStatus").property("text") == "No password stored for other@example.com - enter it and save."
+    controllers["settingsController"].saveSsiAccounts([{"username": EMAIL, "password": ""}])
+    wait(qapp, 150)
+    assert model.property("count") == 1 and _row(model, 0) == {"username": EMAIL, "hasPassword": True}
+    assert root.findChild(QObject, "ssiStatus").property("text") == f"Saved: {EMAIL}. Press Test to check the login."
+    controllers["settingsController"].saveSsiAccounts([])
+    wait(qapp, 150)
+    assert model.property("count") == 1 and _row(model, 0) == {"username": "", "hasPassword": False}   # one blank row to type into
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)
+
+
+def _row(list_model, index):
+    """``{username, hasPassword}`` of a QML ListModel row, through its
+    ``get`` method (the model-data object is a QObject, not a dict)."""
+    from PySide6.QtCore import QMetaObject, Q_RETURN_ARG, Q_ARG
+    data = QMetaObject.invokeMethod(list_model, "get", Q_RETURN_ARG("QJSValue"), Q_ARG(int, index))
+    return {"username": data.property("username").toVariant(), "hasPassword": bool(data.property("hasPassword").toVariant())}
+
+
+# ---------------------------------------------------------------- Track K (plans/myssi-sync.md K3): MySSI pages
+
+def _fake_ssi_everywhere(monkeypatch, fake):
+    """Every `SsiAdapter` built anywhere (pairs.build_adapter included)
+    talks to ``fake`` and never sleeps; any real HTTP attempt fails."""
+    import requests
+    from src.core.services import ssi
 
     def blocked(self, method, url, *a, **k):
         raise AssertionError(f"network blocked: {method} {url}")
     monkeypatch.setattr(requests.sessions.Session, "request", blocked)
-    assert ssi.UPLOAD_ENABLED is False                      # the shipped state
+    real_init = ssi.SsiAdapter.__init__
+    monkeypatch.setattr(ssi.SsiAdapter, "__init__",
+                        lambda self, *a, **kw: real_init(self, *a, **dict(kw, transport=fake, sleep=lambda s: None)))
 
-    fake = FakeSsi()
-    creds_store.save_ssi_credentials(EMAIL, PASSWORD)      # a login left from before the switch
-    c = ConvertController()
-    c._ssi_client_kwargs = {"transport": fake, "sleep": lambda s: None}
-    c._apply_read(ReadResult(dives=[make_dive()], files=[("/x/a.fit", "fit")]))
-    c.selectAll()
-    assert not c.ssiEnabled and c.ssiConfigured            # configured, but switched off
-    with caplog.at_level(logging.INFO, logger="dive_sync.desktop"):
-        c.prepareSsi()
-        c.downloadSites()
-        c.sendToSsi()
-        assert c.searchSites("reef") == []
-        c.setSite(0, 501)
-        assert not c.ssiBusy and not c.ssiPlanOpen and c.ssiPlan == [] and c.ssiResults == []
-        assert c.ssiMessage == "" and fake.calls == [] and not c.ssiSitesDownloaded
-        s = SettingsController()
-        s._ssi_client_kwargs = {"transport": fake, "sleep": lambda s: None}
-        assert not s.ssiEnabled
-        s.saveSsi("other@example.com", "new")
-        assert creds_store.load_ssi_credentials().email == EMAIL           # nothing written
-        s.testSsi(EMAIL, PASSWORD)
-        assert s.ssiStatus != "Testing…" and fake.calls == []
-        s.clearSsi()
-        assert creds_store.load_ssi_credentials().email == EMAIL           # nothing cleared
-    refused = [r.getMessage() for r in caplog.records if "switched off" in r.getMessage()]
-    assert len(refused) == 8 and all("ssi.UPLOAD_ENABLED" in m for m in refused)
-    for action in ("prepareSsi", "downloadSites", "sendToSsi", "searchSites", "setSite", "saveSsi", "testSsi", "clearSsi"):
-        assert any(action in m for m in refused), action
+
+def test_myssi_dives_controller_is_read_only_until_the_update_test(qapp, scratch_data_dir, fake_keyring):
+    """A page whose adapter has ``accepts_updates`` False (MySSI until K7)
+    keeps its editor read-only: nothing is staged, Save says why, the beta
+    and delete notes are its own; the other pages are unchanged. The facts
+    come from the adapter class, so K7 flips one flag."""
+    from desktop.controllers.dives import DivesController, adapter_flag
+    from src.core import dive_cache
+    from src.core.services import ssi
+    assert adapter_flag("ssi", "accepts_updates") is False and adapter_flag("subsurface", "accepts_updates") is True
+    assert adapter_flag("nope", "accepts_updates") is True and adapter_flag("ssi", "no_such_flag", False) is False
+    c = DivesController("ssi")
+    assert c.serviceName == "MySSI" and not c.acceptsUpdates and not c.diveNumberEditable
+    assert c.editLockNote == "Editing MySSI dives comes after the update test."
+    assert c.betaNote == ssi.BETA_NOTE and "permanent" in c.deleteNote
+    assert c.locationLabel == "Dive site" and c.locationHint == "" and c.hasVisibility and not c.fitSupported
+    assert next(col["label"] for col in c.allColumns if col["key"] == "location") == "Dive site"
+    for service in ("garmin", "divelogs", "subsurface"):
+        other = DivesController(service)
+        assert other.acceptsUpdates and other.editLockNote == "" and other.betaNote == "" and other.deleteNote == ""
+    rows = [{"date": "2026-06-01", "time": "09:00:00", "date_time": "2026-06-01 09:00:00", "filename": "101.json",
+             "location": "Reef", "buddy": ""}]
+    c._model.set_rows(rows)
+    c.stage("101.json", {"date": "2026-06-01", "time": "09:00:00", "location": "Reef", "buddy": "Bo"})
+    assert c.pendingCount == 0 and c.pendingFiles == []                      # not staged
+    c.select(0)
+    c.saveDive("101.json")
+    assert c.status == c.editLockNote
+    c.deleteSelected()                                                        # a delete still stages
+    assert c.deletingFiles == ["101.json"] and c.pendingCount == 1
+    c.saveDive("101.json")
+    assert c.status.startswith("Marked for deletion")
+    assert dive_cache.list_dives("ssi", None) == []                          # an empty cache lists nothing
+
+
+def test_myssi_dives_page_lists_profiles_and_deletes_through_the_fake(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """The MySSI Dives page (right after Subsurface Dives): Refresh reads
+    the logbook through the page's account into ``ssi/<email>/data`` and
+    keeps the token in the keychain (the credentials file is gone after),
+    the list and the profile show, the editor is read-only with its note
+    and the beta note, and Delete + Save all removes a dive on MySSI and
+    from the cache. Settings' credentialsChanged reaches the page."""
+    from PySide6.QtCore import QObject
+    from desktop import app as desktop_app
+    from desktop import credentials as creds_store, logging_bridge
+    from src.core import config, dive_cache
+    from src.core.services import ssi
+    from tests.test_ssi import EMAIL, PASSWORD, FakeSsi, logbook_dive
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    creds_store.save_ssi_accounts([ssi.SsiCredentials(email=EMAIL, password=PASSWORD),
+                                   ssi.SsiCredentials(email="other@example.com", password="x")])
+    profile = json.dumps([{"t": i * 5000, "d": round(min(20.0, i * 2.0), 1), "te": 27.0} for i in range(12)])
+    fake = FakeSsi(dives=[logbook_dive(1, "2026-06-01", "09:00", depth=18.5, divetime=45, odin_user_log_comment="first"),
+                          logbook_dive(2, "2026-06-02", "10:30", depth=20.0, divetime=50, odin_user_log_diveSamples=profile)])
+    _fake_ssi_everywhere(monkeypatch, fake)
+
+    warnings = []
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    c = controllers["ssiDives"]
+    assert c.service == "ssi" and c.accounts == [EMAIL, "other@example.com"] and c.account == EMAIL
+    reloads = []
+    c.accountChanged.connect(lambda: reloads.append(1))
+    controllers["settingsController"].credentialsChanged.emit()
+    assert reloads == [1]                                                     # wired like the other Dives pages
+    engine = desktop_app.create_engine(controllers, "MySSI Dives",
+                                       on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    sections = root.property("sections").toVariant()
+    assert sections.index("MySSI Dives") == sections.index("Subsurface Dives") + 1 == sections.index("Mapping") - 1
+    assert root.property("currentSection") == sections.index("MySSI Dives")
+    page = root.findChild(QObject, "divesPage-MySSI")
+    assert page is not None and page.property("editable") is False
+    assert page.findChild(QObject, "divesBetaNote").property("text") == ssi.BETA_NOTE
+    assert page.findChild(QObject, "divesBetaNote").property("visible") is True
+    note = page.findChild(QObject, "editLockNote")
+    assert note.property("visible") is True and note.property("text") == "Editing MySSI dives comes after the update test."
+    assert page.findChild(QObject, "saveDiveButton").property("visible") is False
+    assert page.findChild(QObject, "addTankButton").property("visible") is False
+    for name in ("field-date", "field-max-depth", "field-location", "field-buddy", "field-notes"):
+        assert page.findChild(QObject, name).property("readOnly") is True, name
+    assert page.findChild(QObject, "divesAccount-MySSI").property("visible") is True          # two accounts
+    assert "permanent" in page.findChild(QObject, "deleteDialogText").property("text")
+    assert "permanent" in page.findChild(QObject, "saveAllDialogText").property("text")
+    # the other pages are not read-only
+    assert root.findChild(QObject, "divesPage-Subsurface").property("editable") is True
+
+    c.refresh()
+    assert c.busy and wait_until(qapp, lambda: not c.busy)
+    assert c.listStatus == "Refreshed." and c.diveCount == 2
+    assert fake.whats() == ["authenticate", "get_divelog"] and fake.saved == []
+    assert os.path.isdir(os.path.join(str(scratch_data_dir), "ssi", EMAIL, "data"))
+    assert _first_ssi_account().token == "tok-1"                # brought into the keychain
+    assert not os.path.exists(config.CREDENTIALS_FILE)                        # and the materialised file is gone
+    rows = sorted((c.model.row(i) for i in range(c.diveCount)), key=lambda r: r["id"])
+    assert [(r["id"], r["date"], r["dive_number"], r["max_depth"], r["notes"]) for r in rows] == [
+        ("101", "2026-06-01", 1, "18.50", "first"), ("102", "2026-06-02", 2, "20.00", "")]
+    c.select(c.rowOf("102.json"))
+    wait(qapp, 100)
+    assert len(c.selected["samples"]) == 12 and c.sampleDetails(1)["lines"] == ["0:05", "2.0 m", "27.0 °C"]
+    assert c.selected["location"] == "" and c.selected["duration"] == 50
+    assert page.findChild(QObject, "field-max-depth").property("text") == "20.00"
+    # the other account's page is empty: its own folder
+    c.setAccount("other@example.com")
+    assert c.diveCount == 0 and c.account == "other@example.com"
+    c.setAccount(EMAIL)
+    assert c.diveCount == 2
+
+    # delete: marked, confirmed by Save all, gone on MySSI (its stored token, no new login) and from the cache
+    asked = []
+    c.confirmDelete.connect(asked.append)
+    c.select(c.rowOf("101.json"))
+    c.requestDelete()
+    assert asked and "MySSI" in asked[0]
+    c.deleteSelected()
+    assert c.deletingFiles == ["101.json"] and c.pendingCount == 1
+    c.saveAll()
+    assert wait_until(qapp, lambda: not c.busy)
+    assert c.status == "Deleted." and c.diveCount == 1 and c.rowOf("101.json") == -1
+    assert fake.logins == 1 and [d["odin_user_log_id"] for d in fake.live()] == ["102"]
+    assert os.listdir(os.path.join(str(scratch_data_dir), "ssi", EMAIL, "data")) == ["102.json"]
+    assert not os.path.exists(config.CREDENTIALS_FILE)
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)
+
+
+def test_sync_page_offers_myssi_with_an_account_picker_and_the_beta_line(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """MySSI is a Sync page side like the others (plans/myssi-sync.md K3):
+    in Download dives, as Source and Target, with its own account picker,
+    the pick travelling to the run as ``ssi_account``; the beta note shows
+    under the pair whenever MySSI is one of its sides."""
+    from PySide6.QtCore import QObject
+    from desktop import accounts, app as desktop_app, logging_bridge
+    from desktop import credentials as creds_store
+    from desktop.controllers.sync import SyncController
+    from src.core import dive_cache, scheduler
+    from src.core.config import CredentialsModel, DivelogsCredentials, GarminCredentials, SsiCredentials
+    from src.core.services import ssi
+    from tests.test_ssi import EMAIL, PASSWORD
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    creds_store.save_credentials_model(CredentialsModel(
+        garmin=[GarminCredentials(username="g@x", password="pw")],
+        divelogs=[DivelogsCredentials(username="d", password="pw")],
+        ssi=[SsiCredentials(email=EMAIL, password=PASSWORD), SsiCredentials(email="other@example.com", password="x")]))
+    c = SyncController(logging_bridge.install())
+    assert [s["id"] for s in c.services] == ["garmin", "divelogs", "ssi"]
+    assert c.ssiAccounts == [EMAIL, "other@example.com"]
+    assert {"spec": "ssi", "id": "ssi", "label": "MySSI"} in c.endpoints
+    labels = {p["label"]: p for p in c.pairs}
+    assert labels["Garmin Connect ↔ MySSI"]["builtin"] and labels["Divelogs.org ↔ MySSI"]["id"] == "divelogs~ssi"
+    assert [e["spec"] for e in c.targetsFor("ssi")] == ["garmin", "divelogs"]
+    assert c.pairNote("garmin", "ssi") == ssi.BETA_NOTE and c.pairNote("ssi:x@y", "garmin") == ssi.BETA_NOTE
+    assert c.pairNote("garmin", "divelogs") == "" and c.pairNote("", "") == "" and c.pairNote("nope:", "ssi") == ssi.BETA_NOTE
+    assert [d["value"] for d in c.directionsFor("garmin~ssi")] == ["to_ssi", "to_garmin"]
+
+    c.setSelectedAccount("ssi", "other@example.com")
+    assert accounts.sync_selection()["ssi"] == "other@example.com"
+    seen = {}
+    monkeypatch.setattr(scheduler, "run_sync_thread", lambda dry_run, custom_settings=None: seen.update(custom=custom_settings))
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    c.runSyncBetween(True, "garmin", "ssi", True, True)
+    assert wait_until(qapp, lambda: not c.running)
+    assert (seen["custom"]["source"], seen["custom"]["target"], seen["custom"]["directionality"]) == ("garmin", "ssi", "to_ssi")
+    assert seen["custom"]["ssi_account"] == "other@example.com" and seen["custom"]["account_scoped"] is True
+    downloads = {}
+    monkeypatch.setattr(scheduler, "run_download_thread",
+                        lambda overwrite, base_dir=None, include_garmin=True, include_divelogs=True,
+                        services=None, refresh_fits=False, accounts=None:
+                        downloads.update(services=services, accounts=accounts))
+    monkeypatch.setattr(scheduler, "is_download_running", False)
+    c.download(True, ["ssi"])
+    assert wait_until(qapp, lambda: not c.running)
+    assert downloads["services"] == ["ssi"] and downloads["accounts"]["ssi"] == "other@example.com"
+
+    # the page: the picker (two accounts) and the note once MySSI is the target
+    warnings = []
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    engine = desktop_app.create_engine(controllers, "Sync",
+                                       on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    picker = root.findChild(QObject, "syncSsiAccount")
+    assert picker.property("visible") is True and picker.property("label") == "MySSI account"
+    assert picker.property("current") == "other@example.com"
+    note, target = root.findChild(QObject, "syncPairNote"), root.findChild(QObject, "targetBox")
+    assert target.property("currentValue") == "divelogs" and note.property("visible") is False
+    target.setProperty("currentIndex", 1)                                     # Garmin -> MySSI
+    wait(qapp, 100)
+    assert target.property("currentValue") == "ssi"
+    assert note.property("visible") is True and note.property("text") == ssi.BETA_NOTE
+    target.setProperty("currentIndex", 0)
+    wait(qapp, 100)
+    assert note.property("visible") is False
+    ticks = root.findChild(QObject, "downloadServices")
+    assert ticks.property("picked") == 3                                      # MySSI is in Download dives
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)
+
+
+def test_mapping_and_conflicts_know_a_garmin_myssi_pair(qapp, scratch_data_dir, fake_keyring):
+    """The Mapping page offers the Garmin -> MySSI board with K1's default
+    rules (no dive-number link: MySSI numbers its own dives) and saves it
+    as a pair; the Conflicts page keeps that pair's conflicts per account
+    combination under ``sync_state_garmin-<user>_ssi-<email>``."""
+    from desktop import credentials as creds_store
+    from desktop.controllers.conflicts import ConflictsController
+    from desktop.controllers.mapping import MappingController
+    from src.core import config
+    from src.core.config import ConfigManager, CredentialsModel, GarminCredentials, SsiCredentials
+    from src.core.pairs import account_state_file
+    from tests.test_ssi import EMAIL, PASSWORD
+    creds_store.save_credentials_model(CredentialsModel(
+        garmin=[GarminCredentials(username="g@x", password="pw")], ssi=[SsiCredentials(email=EMAIL, password=PASSWORD)]))
+    m = MappingController()
+    assert [e["id"] for e in m.endpoints] == ["garmin", "divelogs", "ssi"]
+    assert [e["id"] for e in m.targetsFor("ssi")] == ["garmin"]
+    assert m.selectView("garmin", "ssi") and m.pairId == "garmin_ssi"
+    pair = next(p for p in m._pairs if p["id"] == "garmin_ssi")
+    assert pair["target_name"] == "MySSI" and {f["key"] for f in pair["fields"]["ssi"]} >= {"ssi.notes", "ssi.tanks", "ssi.samples"}
+    panel = m.panels[0]
+    assert panel["receiver"] == "ssi" and panel["rules"]
+    assert not any("dive_number" in r["target"] for r in panel["rules"])
+    assert m.save() == ""
+    saved = next(p for p in ConfigManager.load_settings().sync_pairs if p.id == "garmin_ssi")
+    assert (saved.source, saved.target, saved.directionality) == ("garmin", "ssi", "to_ssi") and saved.rules
+
+    board = next(b for b in ConflictsController._boards() if b["id"] == "garmin_ssi")
+    assert board["saved"] is True
+    state_dir = os.path.dirname(config.SETTINGS_FILE)
+    assert os.path.basename(account_state_file(state_dir, "garmin", "g@x", "ssi", EMAIL)) == f"sync_state_garmin-g@x_ssi-{EMAIL}.json"
+    assert os.path.basename(ConflictsController._conflicts_file(board, "g@x", EMAIL)) == f"conflicts_garmin-g@x_ssi-{EMAIL}.json"
+    conflicts = ConflictsController()
+    conflicts.load()
+    assert conflicts.groups == [] and conflicts.message == "No conflicts waiting."
+
+
 
 
 # ---------------------------------------------------------------- I19: the profile hover

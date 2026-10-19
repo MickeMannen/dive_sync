@@ -11,6 +11,8 @@ A *service spec* is ``<service id>[:<argument>]``:
     shearwater:<file>      one such database named by its path
     subsurface-cloud       Subsurface Cloud (credentials.json ``subsurface``; clone under subsurface/<account>/cloud)
     submersion             Submersion sync store (credentials.json ``submersion``: S3 bucket or folder)
+    ssi[:account]          MySSI (credentials.json ``ssi``; several accounts pick one per run by email,
+                           as the spec's argument or --ssi-account; plans/myssi-sync.md K1)
 
 Relative file arguments resolve against ``DATA_DIR``. With ``mock_data_dir``
 the Garmin and Divelogs specs give the offline mock adapters, so a pair such
@@ -27,10 +29,12 @@ from src.core import config, layout
 from src.core.config import SERVICE_ID_ALIASES, ConfigManager, SettingsModel, SyncPairModel
 from src.core.fields import FieldLink, common_default_links, default_field_links, submersion_default_links, FieldSpec
 
-KNOWN_SERVICES = ("garmin", "divelogs", "uddf", "subsurface", "subsurface-cloud", "submersion", "shearwater")
+KNOWN_SERVICES = ("garmin", "divelogs", "uddf", "subsurface", "subsurface-cloud", "submersion", "shearwater", "ssi")
 FILE_SERVICES = ("uddf", "subsurface")
-# takes a path or not: without one the configured account's file is used
-OPTIONAL_ARG_SERVICES = ("shearwater",)
+# takes an argument or not: Shearwater a path (without one the configured
+# account's file is used), MySSI an account email (without one the single
+# configured account, or the --ssi-account pick)
+OPTIONAL_ARG_SERVICES = ("shearwater", "ssi")
 # spec name -> service id (the cloud adapter shares Subsurface's catalogue and ids)
 SERVICE_IDS = SERVICE_ID_ALIASES
 
@@ -55,8 +59,11 @@ def parse_service_spec(spec: str) -> Tuple[str, Optional[str]]:
     return service, arg
 
 
-def field_catalog_of(service_id: str) -> list:
-    """A service's field catalogue, by service id."""
+def adapter_class_of(service_id: str):
+    """A service's adapter class, by service id: what carries its catalogue,
+    display name and the engine flags (``accepts_updates`` and the like) a
+    page reads without building an adapter. Subsurface Cloud shares the
+    Subsurface adapter's catalogue and ids."""
     if service_id == "garmin":
         from src.core.services.garmin import GarminAdapter as adapter
     elif service_id == "divelogs":
@@ -69,9 +76,16 @@ def field_catalog_of(service_id: str) -> list:
         from src.core.services.submersion.adapter import SubmersionAdapter as adapter
     elif service_id == "shearwater":
         from src.core.services.shearwater import ShearwaterAdapter as adapter
+    elif service_id == "ssi":
+        from src.core.services.ssi import SsiAdapter as adapter
     else:
         raise ValueError(f"Unknown service {service_id!r}")
-    return adapter.field_catalog()
+    return adapter
+
+
+def field_catalog_of(service_id: str) -> list:
+    """A service's field catalogue, by service id."""
+    return adapter_class_of(service_id).field_catalog()
 
 
 def display_name_of(spec: str) -> str:
@@ -81,7 +95,8 @@ def display_name_of(spec: str) -> str:
         from src.core.services.subsurface_cloud import SubsurfaceCloudAdapter
         return SubsurfaceCloudAdapter.display_name
     return {"garmin": "Garmin Connect", "divelogs": "Divelogs.org", "subsurface": "Subsurface",
-            "uddf": "UDDF file", "submersion": "Submersion", "shearwater": "Shearwater app"}.get(service, service)
+            "uddf": "UDDF file", "submersion": "Submersion", "shearwater": "Shearwater app",
+            "ssi": "MySSI"}.get(service, service)
 
 
 def default_links_for(source_id: str, target_id: str) -> List[FieldLink]:
@@ -93,7 +108,9 @@ def default_links_for(source_id: str, target_id: str) -> List[FieldLink]:
     weight) is left out: the board could not be saved with it."""
     if (source_id, target_id) == ("garmin", "divelogs"):
         return default_field_links()
-    numbered = "divelogs" not in (source_id, target_id)
+    # MySSI numbers its own dives (an upload takes the next number after its
+    # highest), so like Divelogs' its number is neither a match key nor copied.
+    numbered = not {"divelogs", "ssi"} & {source_id, target_id}
     if "submersion" in (source_id, target_id):
         links = submersion_default_links(source_id, target_id, match_on_dive_number=numbered)
     else:
@@ -162,8 +179,26 @@ def build_adapter(spec: str, settings: SettingsModel, credentials_path: Optional
                   mock_data_dir: Optional[str] = None, garmin_username: Optional[str] = None,
                   divelogs_username: Optional[str] = None,
                   subsurface_username: Optional[str] = None,
-                  shearwater_account: Optional[str] = None) -> BaseDiveAdapter:
+                  shearwater_account: Optional[str] = None,
+                  ssi_account: Optional[str] = None) -> BaseDiveAdapter:
     service, arg = parse_service_spec(spec)
+    if service == "ssi":
+        from src.core.config import CREDENTIALS_FILE
+        from src.core.services.ssi import SsiAdapter
+        accounts = ConfigManager.load_credentials(credentials_path or CREDENTIALS_FILE).get_ssi_accounts()
+        if not accounts:
+            raise ValueError("MySSI is not configured; add a MySSI account in Settings (credentials.json 'ssi')")
+        account = _pick(accounts, arg or ssi_account, "MySSI", "--ssi-account", key=lambda a: a.email)
+        if not account.configured:
+            raise ValueError(f"No MySSI password stored for {account.email}.")
+        # MySSI's own 2 s spacing applies (it throttles by going silent),
+        # not the Garmin cooldown from settings. A token it hands out goes
+        # back into the credentials file for this account (K2), so the next
+        # run - and the desktop keychain, which reads the file back after
+        # the operation - reuses it.
+        path, email = credentials_path or CREDENTIALS_FILE, account.email
+        return SsiAdapter(email, account.password, account.token or None,
+                          on_token=lambda token: ConfigManager.store_ssi_token(email, token, path))
     if service == "uddf":
         from src.core.services.uddf import UddfAdapter
         return UddfAdapter(_resolve_path(arg))
@@ -234,10 +269,13 @@ def _pick(accounts, username: Optional[str], label: str, flag: str, key=lambda a
 
 # The spec a configured service is synced through (Subsurface: its cloud).
 CONFIGURED_SPECS = {"garmin": "garmin", "divelogs": "divelogs", "subsurface": "subsurface-cloud",
-                    "submersion": "submersion", "shearwater": "shearwater"}
+                    "submersion": "submersion", "shearwater": "shearwater", "ssi": "ssi"}
 
 
-CACHE_SERVICE_ORDER = ("garmin", "divelogs", "submersion", "subsurface")
+# The services with a local dive cache (a Dives page, "Download dives"), in
+# the order the pages show them. MySSI joined with its Dives page
+# (plans/myssi-sync.md K3): its whole logbook comes in one request.
+CACHE_SERVICE_ORDER = ("garmin", "divelogs", "submersion", "subsurface", "ssi")
 
 
 def cache_services(configured: List[str]) -> List[dict]:
@@ -339,8 +377,8 @@ def conflicts_file_for(board: dict, state_dir: str) -> str:
 
 def adapter_account(adapter) -> str:
     """The account an adapter logs in as ("" for a file, a store or a local
-    checkout): Garmin/Divelogs' username, Subsurface Cloud's email, the
-    Shearwater database's account folder."""
+    checkout): Garmin/Divelogs' username, Subsurface Cloud's and MySSI's
+    email, the Shearwater database's account folder."""
     return str(getattr(adapter, "email", None) or getattr(adapter, "username", None)
                or getattr(adapter, "account", None) or "")
 
@@ -384,7 +422,8 @@ def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] 
                credentials_path: Optional[str] = None, mock_data_dir: Optional[str] = None,
                garmin_username: Optional[str] = None, divelogs_username: Optional[str] = None,
                pair: Optional[SyncPairModel] = None, subsurface_username: Optional[str] = None,
-               account_scoped_state: bool = False, shearwater_account: Optional[str] = None):
+               account_scoped_state: bool = False, shearwater_account: Optional[str] = None,
+               ssi_account: Optional[str] = None):
     """A ``SyncEngine`` for two service specs. When the specs are exactly
     ``garmin`` and ``divelogs`` the classic constructor is used so account
     selection, state files and cache directories behave as before. With
@@ -410,9 +449,9 @@ def engine_for(source_spec: str, target_spec: str, settings_path: Optional[str] 
                             account_scoped_state=account_scoped_state)
     else:
         source = build_adapter(source_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username,
-                               subsurface_username, shearwater_account)
+                               subsurface_username, shearwater_account, ssi_account)
         target = build_adapter(target_spec, settings, credentials_path, mock_data_dir, garmin_username, divelogs_username,
-                               subsurface_username, shearwater_account)
+                               subsurface_username, shearwater_account, ssi_account)
         engine = SyncEngine(settings_path=settings_path, credentials_path=credentials_path,
                             source_adapter=source, target_adapter=target, account_scoped_state=account_scoped_state)
     if pair is not None:

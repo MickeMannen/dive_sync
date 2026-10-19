@@ -11,7 +11,7 @@
         garmin/<account>/tokens/        the account's Garmin login tokens
         subsurface/<account>/cloud/     the account's Subsurface Cloud checkout
         submersion/                     Submersion device identity and clock
-        ssi/APP_CACHE_SITES.zip         the SSI site database the Convert page downloads on request
+        ssi/APP_CACHE_SITES.zip         SSI's public site database, when downloaded (SsiClient.download_sites)
 
 Everything that belongs to one account sits in one folder, so removing an
 account's data is removing one folder. A side without accounts (a
@@ -107,10 +107,12 @@ def account_of_path(service: str, path: str) -> Optional[str]:
 
 
 def ssi_sites_file(base_dir: Optional[str] = None) -> str:
-    """``<data root>/ssi/APP_CACHE_SITES.zip``: the public SSI site database
-    the Convert page's MySSI upload picks sites from (plans/convert.md I8).
-    Downloaded only when the diver asks or first sends; the folder is
-    created here so the download can write straight into it."""
+    """``<data root>/ssi/APP_CACHE_SITES.zip``: where SSI's public site
+    database goes when it is downloaded (`SsiClient.download_sites`,
+    read by `SiteIndex.from_zip`; the Dive edit page fetched it for its
+    site picker until plans/myssi-sync.md K4, nothing in the app does
+    today). The folder is created here so a download can write straight
+    into it."""
     folder = os.path.join(data_root(base_dir), SSI_SUBDIR)
     os.makedirs(folder, exist_ok=True)
     return os.path.join(folder, SSI_SITES_FILE)

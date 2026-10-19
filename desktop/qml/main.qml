@@ -21,11 +21,12 @@ ApplicationWindow {
     minimumHeight: Math.min(750, screenHeight)
     color: Theme.bg
 
-    readonly property var sections: ["Sync", "Garmin Dives", "Divelogs Dives", "Subsurface Dives",
+    readonly property var sections: ["Sync", "Garmin Dives", "Divelogs Dives", "Subsurface Dives", "MySSI Dives",
                                      "Mapping", "Conflicts", "Dive edit", "Settings", "About"]
     property int currentSection: Math.max(0, sections.indexOf(initialSection))
 
     readonly property int unsavedDives: garminDives.pendingCount + divelogsDives.pendingCount + subsurfaceDives.pendingCount
+                                        + ssiDives.pendingCount
     // Set once the diver chose to discard: quitting closes the window again,
     // and that second close must not ask a second time.
     property bool discardConfirmed: false
@@ -169,6 +170,14 @@ ApplicationWindow {
                     ColumnLayout {
                         anchors { fill: parent; margins: 16 }
                         DivesPage { Layout.fillWidth: true; Layout.fillHeight: true; controller: subsurfaceDives }
+                    }
+                }
+                // MySSI Dives (plans/myssi-sync.md K3): the same page, its
+                // editor read-only until the update test (K7).
+                Item {
+                    ColumnLayout {
+                        anchors { fill: parent; margins: 16 }
+                        DivesPage { Layout.fillWidth: true; Layout.fillHeight: true; controller: ssiDives }
                     }
                 }
                 ScrollView {

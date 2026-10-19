@@ -571,6 +571,20 @@ class SyncEngine:
                     "still get their details synced.",
                     sender_name, len(dives), receiver_name, span, receiver_name)
 
+    @staticmethod
+    def _refused_upload(adapter: BaseDiveAdapter, name: str, dive: UnifiedDive, sync_results: Dict[str, Any]) -> bool:
+        """True (logged and counted under ``skipped`` with the reason) when
+        the receiver says it cannot add this dive (BaseDiveAdapter
+        cannot_add_reason; MySSI and a dive with two or more tanks), so it
+        is never tried. Dry runs count it the same way."""
+        reason_of = getattr(adapter, "cannot_add_reason", None)
+        reason = reason_of(dive) if callable(reason_of) else None
+        if not reason:
+            return False
+        logger.warning("  %s: dive %s skipped: %s", name, dive.date_time.strftime("%Y-%m-%d %H:%M"), reason)
+        sync_results["skipped"].append({"reason": "receiver_cannot_add_dive", "detail": reason, "time": str(dive.date_time)})
+        return True
+
     def _awaits_manual_import(self, receiver_id: str, dive: UnifiedDive) -> bool:
         """True when ``dive`` must not be created on ``receiver_id`` because
         the receiver gets its dive-computer data from the diver's own file
@@ -731,8 +745,12 @@ class SyncEngine:
             snd_as_rcv = convert_value(snd_val, snd_type, rcv_type, rule.separator)
         for w in warnings:
             logger.warning("  %s (dive at %s)", w, rcv_dive.date_time)
+        receiver = self.source if active.receiver == self.source_id else self.target
+        as_stored = getattr(receiver, "as_stored", None)
+        # what the receiver cannot hold (MySSI: a tank name, a profile off its grid) is no difference
+        snd_compared = as_stored(rcv_type, snd_as_rcv) if callable(as_stored) else snd_as_rcv
         raw = (snd_val, rcv_val)
-        if values_equal(rcv_type, snd_as_rcv, rcv_val):
+        if values_equal(rcv_type, snd_compared, rcv_val):
             return LinkOutcome("equal", *raw, warnings=warnings)
 
         snd_empty = is_empty(snd_type, snd_val)
@@ -1097,15 +1115,26 @@ class SyncEngine:
         logger.info("Match results: %d matched pairs, %d only in %s, %d only in %s",
                     len(matched_pairs), len(unique_source), self.source_name, len(unique_target), self.target_name)
 
-        # Mirror: the receiver keeps only dives the sender has.
+        # Mirror: the receiver keeps only dives the sender has - unless the
+        # receiver never takes a mirror delete (BaseDiveAdapter
+        # accepts_mirror_deletes; MySSI, where a delete is permanent): then
+        # each dive it would have deleted is logged, counted as skipped and left.
         receiver = self.receiver_id()
+        mirror_kept: List[Dict[str, Any]] = []
         if getattr(self, "mirror", False) and receiver in writable:
             extras = unique_target if receiver == tgt else unique_source
             adapter, name = (self.target, self.target_name) if receiver == tgt else (self.source, self.source_name)
+            takes_deletes = getattr(adapter, "accepts_mirror_deletes", True)
             kept = []
             for dive in extras:
                 rid = dive.external_ids.get(receiver)
                 if not rid:
+                    kept.append(dive)
+                    continue
+                if not takes_deletes:
+                    logger.info("  Mirror: %s dive at %s (ID %s) has no match on the other side; not deleted "
+                                "(a mirror never deletes on %s)", name, dive.date_time, rid, name)
+                    mirror_kept.append({"reason": "mirror_never_deletes_here", "id": str(rid), "time": str(dive.date_time)})
                     kept.append(dive)
                     continue
                 entry = {"id": str(rid), "time": str(dive.date_time), "reason": "mirror: not on the other side"}
@@ -1131,7 +1160,7 @@ class SyncEngine:
             f"updated_on_{tgt}": [],
             f"updated_on_{src}": [],
             **deleted_entries,
-            "skipped": []
+            "skipped": mirror_kept,
         }
 
         # Filter out gas mixtures if disabled in settings
@@ -1180,6 +1209,8 @@ class SyncEngine:
                     sync_results["skipped"].append(
                         {"reason": "awaits_manual_fit_import", "time": str(dive.date_time)})
                     continue
+                if self._refused_upload(self.target, self.target_name, dive, sync_results):
+                    continue
                 logger.info("Sync action: Upload %s dive at %s to %s", self.source_name, dive.date_time, self.target_name)
                 entry = {
                     "time": str(dive.date_time),
@@ -1220,6 +1251,8 @@ class SyncEngine:
                     sync_results["skipped"].append(
                         {"reason": "awaits_manual_fit_import", "time": str(dive.date_time)})
                     continue
+                if self._refused_upload(self.source, self.source_name, dive, sync_results):
+                    continue
                 logger.info("Sync action: Upload %s dive at %s to %s", self.target_name, dive.date_time, self.source_name)
                 entry = {
                     "time": str(dive.date_time),
@@ -1240,6 +1273,12 @@ class SyncEngine:
 
         # 3. Matched dives: cross-link IDs, then apply every active rule of the receiver
         work_done[0] = len(unique_source) + len(unique_target)     # uploads skipped by a gate still count as done
+        # A receiver that takes new dives but no changes to its own
+        # (BaseDiveAdapter.accepts_updates; MySSI until K7): the rules still
+        # run so the run says what differs, but nothing is written there and
+        # no conflict is queued for it - a resolution would be that write.
+        takes_updates = {src: getattr(self.source, "accepts_updates", True),
+                         tgt: getattr(self.target, "accepts_updates", True)}
         for a_dive, b_dive in matched_pairs:
             advance(f"Comparing dive {a_dive.date_time}")
             a_id = a_dive.external_ids.get(src)
@@ -1248,6 +1287,7 @@ class SyncEngine:
 
             needs_update = {src: False, tgt: False}
             is_linking = {src: False, tgt: False}
+            unsent_conflicts = {src: 0, tgt: 0}
 
             # Cross-reference in memory; only a service that can persist the
             # other's id gets an update for it (the local link table covers the rest)
@@ -1268,6 +1308,9 @@ class SyncEngine:
                 for side in outcome.modified or ():
                     needs_update[side] = True
                 if outcome.conflict:
+                    if not takes_updates.get(entry.receiver, True):
+                        unsent_conflicts[entry.receiver] += 1
+                        continue
                     run_conflicts.append(outcome.conflict)
                     sync_results["conflicts"].append(outcome.conflict.model_dump(mode="json"))
 
@@ -1276,6 +1319,13 @@ class SyncEngine:
                 (tgt, self.target, b_dive, b_id, src, a_id, self.target_name, self.source_name),
             )
             for sid, adapter, dive, ext_id, other_sid, other_id, name, other_name in sides:
+                if sid in writable and not takes_updates[sid] and (needs_update[sid] or unsent_conflicts[sid]):
+                    which = dive.dive_number if dive.dive_number else ext_id
+                    logger.info("  %s: changes to dive %s at %s not sent (updating a %s dive is not supported yet)",
+                                name, which, dive.date_time, name)
+                    sync_results["skipped"].append({"reason": "receiver_takes_no_updates", "id": str(ext_id),
+                                                    "time": str(dive.date_time)})
+                    continue
                 if not (needs_update[sid] and sid in writable):
                     continue
                 if is_linking[sid]:

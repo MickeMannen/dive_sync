@@ -3,14 +3,15 @@
 Open dive-computer files (Garmin ``.fit``, Connect's "export original" zip,
 UDDF, Subsurface ``.ssrf``), show the dives they hold, and write the selected
 ones as UDDF or Subsurface ``.ssrf`` - one Save-as dialog for one dive, a
-folder dialog and one file per dive for several (decision Q8) - or send them
-to the diver's MySSI logbook (I7's `src.core.services.ssi`, unofficial).
+folder dialog and one file per dive for several (decision Q8).
 
 No account of the sync is involved and nothing is written into the data
-folder but the SSI site database the diver asks for (`layout.ssi_sites_file`).
-Files are read on a `jobs.Worker`; the MySSI calls run on one too. The file
-dialogs open in Documents the first time and then in the last folder used
-(`preferences.get_convert_folder`, decision Q11).
+folder. Files are read on a `jobs.Worker`. MySSI left this page with
+plans/myssi-sync.md K4 (2026-10-19): it is a sync service with its own
+Dives page now, so there is no Open MySSI, no Send to SSI and no
+``myssi:`` pseudo-source here any more - every dive in the list comes
+from a file. The file dialogs open in Documents the first time and then
+in the last folder used (`preferences.get_convert_folder`, decision Q11).
 
 A FIT whose dive is in one of the app's Garmin account caches - found by
 the activity id in the file's name, or by the start time when the name
@@ -43,8 +44,8 @@ re-checks when it is shown.
 
 The list and the detail pane show depths, temperatures, tank volumes and
 pressures, weight and visibility in the unit system chosen on the Settings
-page (plans/units.md J4, `_quantity`); the dives themselves, the writers
-and MySSI stay SI.
+page (plans/units.md J4, `_quantity`); the dives themselves and the
+writers stay SI.
 
 The page is "Dive edit" since I14: the detail card is an editor for every
 field the model holds. The form's values come from `form_values` (strings
@@ -108,7 +109,6 @@ from typing import Any, Dict, List, Optional, Sequence
 from PySide6.QtCore import Property, QObject, QStandardPaths, QUrl, Signal, Slot
 
 from desktop import accounts, logging_bridge
-from desktop import credentials as creds_store
 from desktop import preferences
 from desktop.jobs import Worker
 from src.core import layout
@@ -145,6 +145,11 @@ def documents_folder() -> str:
     Documents folder through QStandardPaths, the home folder without one."""
     folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
     return folder or os.path.expanduser("~")
+
+
+def source_label(path: str) -> str:
+    """What the page shows as a dive's source: its file's name."""
+    return os.path.basename(path)
 
 
 def preferred_garmin_account() -> str:
@@ -193,7 +198,7 @@ def _minutes(seconds: Optional[int]) -> str:
 # Units (rework.md Track J, plans/units.md J4). The dives the page holds are
 # SI `UnifiedDive`s (metres, bar, °C, litres; weight and visibility in the
 # dive's own unit, `weight_unit` / `visibility_unit`), and so is everything
-# the writers and MySSI get. Only the rows and the detail pane convert, here,
+# the writers get. Only the rows and the detail pane convert, here,
 # through src/core/units.py: in metric every value is shown exactly as before
 # (`_num`'s trimmed decimals), in imperial converted and rounded per the
 # display rule. The profile samples stay SI; ProfileChart.qml labels its axis.
@@ -509,8 +514,6 @@ class ConvertController(QObject):
     marksChanged = Signal()        # revertCount: follows the selection and the edits (I15)
     fitTargetChanged = Signal()    # fitSaveTip / fitDrops: follows the selection, the dives and the edits (I14b)
     mergeChanged = Signal()        # mergeChain / mergeProblem / mergeError: follow the selection, the dives and the edits (I17, I17b)
-    ssiChanged = Signal()          # login, plan, results, sites, message
-    ssiBusyChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None, units=None):
         """``units`` is the app's ``UnitsController`` (plans/units.md J4):
@@ -548,19 +551,6 @@ class ConvertController(QObject):
         self._save_warnings: List[str] = []
         self._busy = False
         self._worker = None
-        # MySSI
-        self._ssi_login = creds_store.load_ssi_credentials()
-        self._ssi_busy = False
-        self._ssi_message = ""
-        self._ssi_plan: List[Any] = []          # ssi.UploadResult, from plan_upload
-        self._ssi_plan_dives: List[UnifiedDive] = []
-        self._ssi_sites: Dict[int, Optional[int]] = {}   # plan row -> chosen site id (None = no site)
-        self._ssi_results: List[Any] = []
-        self._site_index = None                 # ssi.SiteIndex: logbook sites + the downloaded database
-        self._zip_index = None                  # the downloaded database alone, read once
-        # Tests give the client a fake transport and a no-op sleep; the app
-        # uses the defaults (requests, the AGENTS.md cool-down).
-        self._ssi_client_kwargs: Dict[str, Any] = {}
 
     # -- units (plans/units.md J4) -------------------------------------------
 
@@ -894,7 +884,6 @@ class ConvertController(QObject):
         """The checkbox changed: derive the shown dives from the ones as read
         again, keeping the selection."""
         self._derive_dives()
-        self._close_ssi_plan()
         self.divesChanged.emit()
         self.selectionChanged.emit()
         if self._read_text:
@@ -939,7 +928,7 @@ class ConvertController(QObject):
             self._edited, self._originals = {}, {}
             self._set_edit_error("")
             self._set_merge_error("")
-        known_files = set(self._files)
+        known_files = set(self._files) | {p for p in self._paths if p}
         known_keys = {self._dive_key(d) for d in self._dives_as_read}
         first_new = len(self._dives_as_read)
         added = skipped = 0
@@ -950,7 +939,7 @@ class ConvertController(QObject):
                 continue
             known_keys.add(key)
             self._dives_as_read.append(dive)
-            self._sources.append(os.path.basename(path))
+            self._sources.append(source_label(path))
             self._paths.append(path)
             if path and path not in self._files:
                 self._files.append(path)
@@ -961,17 +950,17 @@ class ConvertController(QObject):
         if added or not append:
             self._selection = [first_new] if self._dives else []
             self._current = self._anchor = first_new if self._dives else -1
-        self._close_ssi_plan()
         self.divesChanged.emit()
         self.selectionChanged.emit()
         self.editChanged.emit()
         n, m, total = len(result.dives), len(result.files), len(self._dives)
+        where = f"{m} file{'s' if m != 1 else ''}"
         if append and total > added:
-            text = f"{added} dive{'s' if added != 1 else ''} from {m} file{'s' if m != 1 else ''} added; {total} in the list."
+            text = f"{added} dive{'s' if added != 1 else ''} from {where} added; {total} in the list."
             if skipped:
                 text += f" {skipped} already loaded."
         else:
-            text = f"{n} dive{'s' if n != 1 else ''} from {m} file{'s' if m != 1 else ''}."
+            text = f"{n} dive{'s' if n != 1 else ''} from {where}."
         if result.warnings:
             text += f" {len(result.warnings)} warning{'s' if len(result.warnings) != 1 else ''}."
         self._read_text = text
@@ -1008,7 +997,6 @@ class ConvertController(QObject):
             self._selection, self._current, self._anchor = [row], row, row
         else:
             self._selection, self._current, self._anchor = [], -1, -1
-        self._close_ssi_plan()
         self.divesChanged.emit()
         self.selectionChanged.emit()
         self.editChanged.emit()
@@ -1090,7 +1078,6 @@ class ConvertController(QObject):
                 self._edited[row] = self._originals[row] = baseline
                 self._dives[row] = baseline
         self._edit_error = ""
-        self._close_ssi_plan()
         self.divesChanged.emit()
         self.selectionChanged.emit()
         self.editChanged.emit()
@@ -1151,7 +1138,6 @@ class ConvertController(QObject):
         self._edited[row] = edited
         self._dives[row] = edited
         self._edit_error = ""
-        self._close_ssi_plan()
         self.divesChanged.emit()
         self.selectionChanged.emit()
         self.editChanged.emit()
@@ -1433,7 +1419,6 @@ class ConvertController(QObject):
             self._selection = [row]
             self._anchor = row
         self._current = row
-        self._close_ssi_plan()
         self.selectionChanged.emit()
 
     @Slot(int)
@@ -1445,7 +1430,6 @@ class ConvertController(QObject):
         self._selection = list(range(len(self._dives)))
         if self._current < 0 and self._dives:
             self._current = self._anchor = 0
-        self._close_ssi_plan()
         self.selectionChanged.emit()
 
     def _selected_dives(self) -> List[UnifiedDive]:
@@ -1555,281 +1539,3 @@ class ConvertController(QObject):
         self._remember_folder(folder)
         n = len(result.paths)
         self._set_message(f"Wrote {n} file{'s' if n != 1 else ''} to {folder}", result.warnings)
-
-    # -- MySSI -----------------------------------------------------------
-    #
-    # Hidden behind `ssi.UPLOAD_ENABLED` (off since 2026-10-02, until the
-    # owner's live test): the page shows nothing of it and every slot below
-    # that could reach MySSI refuses through `_ssi_allowed`.
-
-    @Property(bool, constant=True)
-    def ssiEnabled(self) -> bool:
-        """Whether Send to SSI is offered at all (`ssi.UPLOAD_ENABLED`)."""
-        from src.core.services import ssi
-        return bool(ssi.UPLOAD_ENABLED)
-
-    def _ssi_allowed(self, action: str) -> bool:
-        """False, with one log line, when the SSI upload is switched off."""
-        if self.ssiEnabled:
-            return True
-        logger.info("Send to SSI is switched off (ssi.UPLOAD_ENABLED): %s ignored", action)
-        return False
-
-    @Property(str, constant=True)
-    def ssiNote(self) -> str:
-        from src.core.services.ssi import UNOFFICIAL_NOTE
-        return UNOFFICIAL_NOTE
-
-    @Property(bool, notify=ssiChanged)
-    def ssiConfigured(self) -> bool:
-        return self._ssi_login.configured
-
-    @Property(str, notify=ssiChanged)
-    def ssiLoginStatus(self) -> str:
-        if self._ssi_login.configured:
-            return f"MySSI login: {self._ssi_login.email}"
-        if self._ssi_login.email:
-            return f"No password stored for {self._ssi_login.email}: enter it on the Settings page."
-        return "No MySSI login saved: add it on the Settings page (Settings → MySSI)."
-
-    @Slot()
-    def reloadSsiLogin(self) -> None:
-        """Settings saved another login: forget the plan made with the old one."""
-        self._ssi_login = creds_store.load_ssi_credentials()
-        self._close_ssi_plan(emit=False)
-        self._ssi_results = []
-        self.ssiChanged.emit()
-
-    @Property(bool, notify=ssiBusyChanged)
-    def ssiBusy(self) -> bool:
-        return self._ssi_busy
-
-    @Property(str, notify=ssiChanged)
-    def ssiMessage(self) -> str:
-        return self._ssi_message
-
-    @Property(bool, notify=ssiChanged)
-    def ssiPlanOpen(self) -> bool:
-        """A plan is shown and waits for Send (or Cancel)."""
-        return bool(self._ssi_plan)
-
-    @Property("QVariantList", notify=ssiChanged)
-    def ssiPlan(self):
-        """One entry per selected dive: {row, when, status, reason, number,
-        site_id, site_label, dropped, summary}; ``status`` is planned or
-        skipped (a duplicate)."""
-        out = []
-        for i, r in enumerate(self._ssi_plan):
-            site_id = self._ssi_sites.get(i)
-            site = self._site_index.get(site_id) if (self._site_index is not None and site_id is not None) else None
-            out.append({
-                "row": i,
-                "when": r.dive.date_time.strftime("%Y-%m-%d %H:%M"),
-                "status": r.status,
-                "reason": r.reason,
-                "number": r.number if r.number is not None else "",
-                "site_id": site_id if site_id is not None else -1,
-                "site_label": site.label if site else "",
-                "dropped": list(r.dropped),
-                "summary": r.summary,
-            })
-        return out
-
-    @Property(int, notify=ssiChanged)
-    def ssiPlannedCount(self) -> int:
-        from src.core.services.ssi import STATUS_PLANNED
-        return sum(1 for r in self._ssi_plan if r.status == STATUS_PLANNED)
-
-    @Property("QVariantList", notify=ssiChanged)
-    def ssiResults(self):
-        """After a send: [{summary, status, dropped}] per dive."""
-        return [{"summary": r.summary, "status": r.status, "dropped": list(r.dropped)} for r in self._ssi_results]
-
-    @Property(bool, notify=ssiChanged)
-    def ssiSitesDownloaded(self) -> bool:
-        return os.path.isfile(layout.ssi_sites_file())
-
-    @Property(str, notify=ssiChanged)
-    def ssiSitesStatus(self) -> str:
-        path = layout.ssi_sites_file()
-        if not os.path.isfile(path):
-            return "SSI site database not downloaded yet (tens of MB, once): it is fetched when you first send, or with the button."
-        when = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d")
-        count = f"{len(self._zip_index)} sites, " if self._zip_index is not None else ""
-        return f"SSI site database: {count}downloaded {when}."
-
-    def _set_ssi_busy(self, value: bool) -> None:
-        self._ssi_busy = value
-        self.ssiBusyChanged.emit()
-
-    def _set_ssi_message(self, text: str) -> None:
-        self._ssi_message = text
-        self.ssiChanged.emit()
-
-    def _close_ssi_plan(self, emit: bool = True) -> None:
-        if self._ssi_plan or self._ssi_plan_dives:
-            self._ssi_plan, self._ssi_plan_dives, self._ssi_sites = [], [], {}
-            if emit:
-                self.ssiChanged.emit()
-
-    def _make_client(self):
-        """An `SsiAdapter` from the keychain login, read afresh so the token
-        the last client stored there (``on_token``) is reused instead of
-        logging in again."""
-        from src.core.services.ssi import SsiAdapter
-        login = self._ssi_login = creds_store.load_ssi_credentials()
-        return SsiAdapter(login.email, login.password, login.token or None,
-                          on_token=creds_store.save_ssi_token, **self._ssi_client_kwargs)
-
-    def _load_site_index(self, client, logbook, download: bool):
-        """The sites to pick from: the diver's own logbook sites plus the
-        downloaded database, fetched first when ``download`` and missing."""
-        from src.core.services.ssi import SiteIndex
-        path = layout.ssi_sites_file()
-        if download and not os.path.isfile(path):
-            logger.info("Downloading the SSI site database to %s", path)
-            client.download_sites(path)
-            self._zip_index = None
-        if self._zip_index is None and os.path.isfile(path):
-            try:
-                self._zip_index = SiteIndex.from_zip(path)
-            except Exception as e:
-                logger.warning("Could not read the SSI site database %s: %s", path, e)
-                self._zip_index = SiteIndex()
-        index = SiteIndex.from_logbook(logbook) if logbook is not None else SiteIndex()
-        if self._zip_index is not None:
-            index.extend(self._zip_index)
-        return index
-
-    def _run_ssi(self, work, done, start_text: str) -> None:
-        if self._ssi_busy:
-            return
-        self._set_ssi_busy(True)
-        self._set_ssi_message(start_text)
-
-        def finished(result):
-            self._set_ssi_busy(False)
-            done(result)
-
-        def fail(text):
-            self._set_ssi_busy(False)
-            self._set_ssi_message(f"MySSI: {text}")
-
-        worker = Worker(work, parent=self)
-        worker.finished_ok.connect(finished)
-        worker.failed.connect(fail)
-        self._worker = worker
-        worker.start()
-
-    @Slot()
-    def prepareSsi(self) -> None:
-        """Step one of Send to SSI: read the logbook, find duplicates, number
-        the new dives and preselect the nearest SSI site within 5 km of each
-        (decision 2026-10-01); the site database is downloaded the first
-        time. Nothing is sent until `sendToSsi`."""
-        if not self._ssi_allowed("prepareSsi"):
-            return
-        from src.core.services.ssi import plan_upload
-        dives = self._selected_dives()
-        if not dives:
-            self._set_ssi_message("Select the dives to send first.")
-            return
-        if not self._ssi_login.configured:
-            self._set_ssi_message(self.ssiLoginStatus)
-            return
-
-        def work():
-            adapter = self._make_client()
-            logbook = adapter.client.get_divelog()
-            index = self._load_site_index(adapter.client, logbook, download=True)
-            return plan_upload(logbook, dives, index), index
-
-        def done(result):
-            plan, index = result
-            self._ssi_plan, self._ssi_plan_dives, self._site_index = plan, list(dives), index
-            self._ssi_sites = {i: (r.site.id if r.site else None) for i, r in enumerate(plan)}
-            self._ssi_results = []
-            planned = self.ssiPlannedCount
-            skipped = len(plan) - planned
-            text = f"{planned} dive{'s' if planned != 1 else ''} to send"
-            if skipped:
-                text += f", {skipped} already in MySSI (skipped)"
-            self._set_ssi_message(text + ". Check the sites, then press Send.")
-
-        self._run_ssi(work, done, "Reading your MySSI logbook…")
-
-    @Slot()
-    def downloadSites(self) -> None:
-        """Fetch (again) the public SSI site database the picker searches."""
-        if not self._ssi_allowed("downloadSites"):
-            return
-
-        def work():
-            path = layout.ssi_sites_file()
-            adapter = self._make_client()
-            adapter.client.download_sites(path)
-            self._zip_index = None
-            return self._load_site_index(adapter.client, None, download=False)
-
-        def done(index):
-            # a plan on screen keeps its logbook sites and gains the database
-            if self._site_index is not None:
-                self._site_index.extend(index)
-            self._set_ssi_message(f"SSI site database downloaded: {len(self._zip_index or [])} sites.")
-
-        self._run_ssi(work, done, "Downloading the SSI site database…")
-
-    @Slot(str, result="QVariantList")
-    def searchSites(self, text: str):
-        """Sites whose name, region or country contains ``text``: [{id, label}]."""
-        if not self._ssi_allowed("searchSites") or self._site_index is None:
-            return []
-        return [{"id": s.id, "label": s.label} for s in self._site_index.search(text)]
-
-    @Slot(int, int)
-    def setSite(self, row: int, site_id: int) -> None:
-        """Pick the SSI site of one planned dive; ``site_id`` < 0 clears it
-        (sending without a site is allowed)."""
-        if not self._ssi_allowed("setSite") or not 0 <= row < len(self._ssi_plan):
-            return
-        self._ssi_sites[row] = site_id if site_id >= 0 else None
-        self.ssiChanged.emit()
-
-    @Slot(int)
-    def clearSite(self, row: int) -> None:
-        self.setSite(row, -1)
-
-    @Slot()
-    def cancelSsi(self) -> None:
-        self._close_ssi_plan()
-        self._set_ssi_message("")
-
-    @Slot()
-    def sendToSsi(self) -> None:
-        """Send the planned dives with the sites chosen; each is read back
-        and checked (`ssi.upload_dives`). The plan closes and the results
-        take its place."""
-        if not self._ssi_allowed("sendToSsi"):
-            return
-        from src.core.services.ssi import upload_dives
-        if not self._ssi_plan:
-            self._set_ssi_message("Prepare the upload first.")
-            return
-        dives = list(self._ssi_plan_dives)
-        site_ids = dict(self._ssi_sites)
-        index = self._site_index
-
-        def work():
-            adapter = self._make_client()
-            return upload_dives(adapter.client, dives, site_ids=site_ids, site_index=index)
-
-        def done(results):
-            from src.core.services.ssi import STATUS_FAILED, STATUS_SENT, STATUS_SKIPPED
-            self._ssi_results = list(results)
-            self._close_ssi_plan(emit=False)
-            counts = {s: sum(1 for r in results if r.status == s) for s in (STATUS_SENT, STATUS_SKIPPED, STATUS_FAILED)}
-            self._set_ssi_message(f"MySSI: sent {counts[STATUS_SENT]}, skipped {counts[STATUS_SKIPPED]}, "
-                                  f"failed {counts[STATUS_FAILED]}. The MySSI app shows new dives after a pull-to-refresh.")
-
-        n = len(dives)
-        self._run_ssi(work, done, f"Sending {n} dive{'s' if n != 1 else ''} to MySSI…")

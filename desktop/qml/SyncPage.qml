@@ -85,6 +85,17 @@ ColumnLayout {
                 }
             }
         }
+        // MySSI is in beta and a sync there is add-only (plans/myssi-sync.md):
+        // said right under the pair whenever it is a side.
+        Text {
+            objectName: "syncPairNote"
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.muted
+            font.pixelSize: 11
+            text: syncController.pairNote(sourceBox.currentValue || "", targetBox.currentValue || "")
+            visible: text !== ""
+        }
         // The account each service syncs and downloads with (rework.md E19),
         // on a row of its own; Submersion is one store, so it has nothing to
         // pick. A picker shows only with a choice to make, and the row only
@@ -93,6 +104,7 @@ ColumnLayout {
             spacing: 16
             visible: syncController.garminAccounts.length > 1 || syncController.divelogsAccounts.length > 1
                      || syncController.subsurfaceAccounts.length > 1 || syncController.shearwaterAccounts.length > 1
+                     || syncController.ssiAccounts.length > 1
             AccountPicker {
                 objectName: "syncGarminAccount"
                 label: "Garmin account"
@@ -120,6 +132,13 @@ ColumnLayout {
                 accounts: syncController.shearwaterAccounts
                 current: syncController.selectedAccounts.shearwater || ""
                 onPicked: (account) => syncController.setSelectedAccount("shearwater", account)
+            }
+            AccountPicker {
+                objectName: "syncSsiAccount"
+                label: "MySSI account"
+                accounts: syncController.ssiAccounts
+                current: syncController.selectedAccounts.ssi || ""
+                onPicked: (account) => syncController.setSelectedAccount("ssi", account)
             }
         }
         RowLayout {

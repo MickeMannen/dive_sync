@@ -73,7 +73,21 @@ SERVICE_DEFAULT_ON = {"garmin": ["fit", "activity_name", "device"]}
 # Columns a service never has a value for, left out of its table and dialog.
 SERVICE_HIDDEN_COLUMNS = {"subsurface": {"visibility"}}      # Subsurface rates visibility 0-5, no distance
 # What a shared column means on a service, where it differs from the heading.
-SERVICE_COLUMN_LABELS = {"subsurface": {"location": "Dive site"}, "divelogs": {"location": "Location, dive site"}}
+SERVICE_COLUMN_LABELS = {"subsurface": {"location": "Dive site"}, "divelogs": {"location": "Location, dive site"},
+                         "ssi": {"location": "Dive site"}}      # MySSI: a site from SSI's own database
+SERVICE_NAMES = {"garmin": "Garmin Connect", "divelogs": "Divelogs.org", "submersion": "Submersion",
+                 "subsurface": "Subsurface", "ssi": "MySSI"}
+
+
+def adapter_flag(service: str, name: str, default: bool = True) -> bool:
+    """A page-level fact read from the service's adapter class
+    (``accepts_updates`` and the like, src/core/adapter.py) without building
+    an adapter; ``default`` for a service with no registered adapter."""
+    from src.core.pairs import adapter_class_of
+    try:
+        return bool(getattr(adapter_class_of(service), name, default))
+    except ValueError:
+        return default
 
 
 def column_label(service: str, key: str, units: str = core_units.METRIC) -> str:
@@ -447,7 +461,8 @@ class DiveTableModel(QAbstractTableModel):
 
 
 class DivesController(QObject):
-    """One per service ("garmin" / "divelogs")."""
+    """One per service with a local dive cache (``garmin``, ``divelogs``,
+    ``subsurface``, ``ssi``; pairs.CACHE_SERVICE_ORDER), each its own page."""
 
     modelChanged = Signal()
     statusChanged = Signal()
@@ -574,8 +589,42 @@ class DivesController(QObject):
 
     @Property(str, constant=True)
     def serviceName(self) -> str:
-        return {"garmin": "Garmin Connect", "divelogs": "Divelogs.org",
-                "submersion": "Submersion", "subsurface": "Subsurface"}.get(self.service, self.service)
+        return SERVICE_NAMES.get(self.service, self.service)
+
+    # -- what the page may change (plans/myssi-sync.md K3) --------------------
+
+    @Property(bool, constant=True)
+    def acceptsUpdates(self) -> bool:
+        """Whether the service takes changes to a dive it already has
+        (the adapter's ``accepts_updates``). When it does not, the page's
+        editor is read-only and Save does nothing; listing, the profile and
+        a delete still work. MySSI says no until its update test (K6/K7);
+        the flag flips there and nothing on the page changes."""
+        return adapter_flag(self.service, "accepts_updates")
+
+    @Property(str, constant=True)
+    def editLockNote(self) -> str:
+        """Why the editor is read-only; blank when it is not."""
+        if self.acceptsUpdates:
+            return ""
+        return f"Editing {self.serviceName} dives comes after the update test."
+
+    @Property(str, constant=True)
+    def betaNote(self) -> str:
+        """`ssi.BETA_NOTE` on the MySSI page (the service is in beta);
+        blank elsewhere."""
+        if self.service == "ssi":
+            from src.core.services.ssi import BETA_NOTE
+            return BETA_NOTE
+        return ""
+
+    @Property(str, constant=True)
+    def deleteNote(self) -> str:
+        """What a delete on this service costs beyond the dive, for the
+        confirm dialogs; blank where there is nothing to add."""
+        if self.service == "ssi":
+            return "A MySSI delete is permanent, and the dive number may not come back."
+        return ""
 
     @Property(bool, constant=True)
     def tanksEditable(self) -> bool:
@@ -586,7 +635,7 @@ class DivesController(QObject):
     @Property(str, constant=True)
     def locationLabel(self) -> str:
         """What the single location field means for this service (Garmin has two)."""
-        return {"divelogs": "Location, dive site", "subsurface": "Dive site"}.get(self.service, "Location")
+        return SERVICE_COLUMN_LABELS.get(self.service, {}).get("location", "Location")
 
     @Property(str, constant=True)
     def locationHint(self) -> str:
@@ -611,8 +660,9 @@ class DivesController(QObject):
     def diveNumberEditable(self) -> bool:
         # Divelogs derives the dive number from where the dive falls in the
         # date/time order of the log, so it is not ours to set - editing it
-        # there would either be ignored or renumber the log.
-        return self.service != "divelogs"
+        # there would either be ignored or renumber the log. MySSI numbers
+        # its own dives too (after its highest, ssi.upload_dives).
+        return self.service not in ("divelogs", "ssi")
 
     @Property(bool, constant=True)
     def fitSupported(self) -> bool:
@@ -1205,6 +1255,8 @@ class DivesController(QObject):
         the table and the save."""
         if not filename or not self._row_for(filename) or filename in self._deleting:
             return
+        if not self.acceptsUpdates:
+            return      # a read-only page: the form never differs from the stored dive
         fields = dict(fields)
         self._typed[filename] = fields
         self._pending[filename] = self._si_fields(filename, fields)
@@ -1245,6 +1297,8 @@ class DivesController(QObject):
         if filename in self._deleting:
             self._set("_status", f"Marked for deletion: Save all changes deletes it from {self.serviceName}.",
                       self.statusChanged)
+        elif not self.acceptsUpdates:
+            self._set("_status", self.editLockNote, self.statusChanged)
         elif filename not in self._pending:
             self._set("_status", "Nothing to save for this dive.", self.statusChanged)
         elif self.saveStagesOnly:

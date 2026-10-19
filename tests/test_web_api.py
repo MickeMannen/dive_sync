@@ -955,3 +955,118 @@ def test_mapping_test_and_history_follow_the_units_setting(tmp_path, monkeypatch
     assert "source_text" not in (tmp_path / "sync" / "sync_history.jsonl").read_text()
     # the scheduler reads the same setting for its log lines
     assert scheduler.units_for_log is prefs.get_units and scheduler.units_for_log() == "imperial"
+
+
+# ---- MySSI on the dashboard (plans/myssi-sync.md K5) ------------------------
+
+def test_credentials_api_keeps_and_edits_myssi_accounts(tmp_path, monkeypatch):
+    """The MySSI section is an account list like Garmin's: rows by email, a
+    blank password keeps the stored one, a kept account keeps its token
+    (never shown), a row left out is removed with its token, and a save
+    without the section (an older page) leaves the accounts alone."""
+    import json
+    from src.core.config import ConfigManager
+    c = _web_client(tmp_path, monkeypatch, {"garmin": {"username": "g", "password": "p"},
+                                            "ssi": [{"email": "one@example.com", "password": "pw1", "token": "tok-1"}]})
+    status = c.get("/api/credentials/status").json()
+    assert status["ssi_configured"] and status["ssi_accounts"] == ["one@example.com"]
+    assert status["ssi_account_rows"] == [{"email": "one@example.com", "has_password": True}]
+    assert "in beta" in status["ssi_note"] and "SSI can change or close" in status["ssi_unofficial_note"]
+    assert "tok-1" not in str(status) and "pw1" not in str(status)
+
+    # add a second account; the first row's blank password keeps pw1 and the token
+    res = c.post("/api/credentials", json={"garmin_accounts": [{"username": "g", "password": ""}],
+                                           "ssi_accounts": [{"email": "one@example.com", "password": ""},
+                                                            {"email": " two@example.com ", "password": "pw2"}]})
+    assert res.status_code == 200
+    stored = {a.email: a for a in ConfigManager.load_credentials().get_ssi_accounts()}
+    assert stored["one@example.com"].password == "pw1" and stored["one@example.com"].token == "tok-1"
+    assert stored["two@example.com"].password == "pw2" and stored["two@example.com"].token == ""
+    assert ConfigManager.load_credentials().get_garmin_accounts()[0].password == "p"
+    assert c.get("/api/credentials/status").json()["ssi_accounts"] == ["one@example.com", "two@example.com"]
+
+    # a save without the section keeps them; an empty section removes them
+    assert c.post("/api/credentials", json={"garmin_accounts": [{"username": "g", "password": ""}]}).status_code == 200
+    assert c.get("/api/credentials/status").json()["ssi_accounts"] == ["one@example.com", "two@example.com"]
+    assert c.post("/api/credentials", json={"garmin_accounts": [{"username": "g", "password": ""}],
+                                            "ssi_accounts": [{"email": "two@example.com", "password": ""}]}).status_code == 200
+    assert [a.email for a in ConfigManager.load_credentials().get_ssi_accounts()] == ["two@example.com"]
+    assert c.post("/api/credentials", json={"garmin_accounts": [], "ssi_accounts": []}).status_code == 200
+    assert c.get("/api/credentials/status").json()["ssi_configured"] is False
+    assert json.load(open(tmp_path / "credentials.json"))["ssi"] == []
+
+    # Test: one login per row with both an email and a password, nothing kept
+    from src.core.services.ssi import SsiAdapter
+    built = []
+    monkeypatch.setattr(SsiAdapter, "login", lambda self: built.append(self.email) or self.email == "one@example.com")
+    res = c.post("/api/credentials/test", json={"ssi_accounts": [{"email": "one@example.com", "password": "pw"},
+                                                                 {"email": "two@example.com", "password": "pw"},
+                                                                 {"email": "three@example.com", "password": ""}]})
+    assert res.status_code == 200
+    assert res.json()["ssi"] == [{"email": "one@example.com", "ok": True}, {"email": "two@example.com", "ok": False}]
+    assert built == ["one@example.com", "two@example.com"] and res.json()["garmin"] is None
+    assert c.post("/api/credentials/test", json={"garmin_accounts": []}).json()["ssi"] is None
+
+
+def test_myssi_is_a_side_for_sync_now_and_scheduled_jobs(tmp_path, monkeypatch):
+    """With an account stored, MySSI is offered as an endpoint and in
+    Download dives; Sync now and a saved job carry the account pick
+    (``ssi_account``) to the scheduler, which forwards it to the engine."""
+    import time
+    from src.core import scheduler
+    from src.core.config import ConfigManager
+    c = _web_client(tmp_path, monkeypatch, {"garmin": {"username": "g", "password": "p"},
+                                            "ssi": [{"email": "one@example.com", "password": "pw"},
+                                                    {"email": "two@example.com", "password": "pw"}]})
+    ends = c.get("/api/sync/endpoints").json()["endpoints"]
+    assert {"spec": "ssi", "id": "ssi", "label": "MySSI"} in ends
+    assert any(s["id"] == "ssi" and s["label"] == "MySSI" for s in c.get("/api/dives/services").json()["services"])
+
+    seen = {}
+    real_run_sync_thread = scheduler.run_sync_thread
+    monkeypatch.setattr(scheduler, "run_sync_thread", lambda dry_run, custom=None: seen.update(custom=custom))
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    assert c.post("/api/sync/trigger", json={"source": "garmin", "target": "ssi", "ssi_account": "two@example.com"}).status_code == 200
+    time.sleep(0.2)
+    assert (seen["custom"]["source"], seen["custom"]["target"]) == ("garmin", "ssi")
+    assert seen["custom"]["ssi_account"] == "two@example.com" and seen["custom"]["directionality"] == "to_ssi"
+
+    settings = c.get("/api/settings").json()
+    settings["cron_jobs"] = [{"id": "garmin-to-ssi-daily", "source": "garmin", "target": "ssi", "directionality": "to_ssi",
+                              "frequency": "daily", "hour": 6, "minute": 0, "day_of_week": 1, "interval_minutes": 60,
+                              "only_new": True, "sync_gases": True, "enabled": True, "ssi_account": "one@example.com"}]
+    assert c.post("/api/settings", json=settings).status_code == 200
+    job = ConfigManager.load_settings().cron_jobs[0]
+    assert (job.source, job.target, job.ssi_account) == ("garmin", "ssi", "one@example.com")
+    assert c.get("/api/settings").json()["cron_jobs"][0]["ssi_account"] == "one@example.com"
+    seen.clear()
+    assert c.post("/api/jobs/garmin-to-ssi-daily/run").status_code == 200
+    time.sleep(0.2)
+    assert seen["custom"]["ssi_account"] == "one@example.com"
+
+    # the scheduler hands the pick to the engine builder
+    import src.core.pairs as pairs
+    captured = {}
+
+    class FakeEngine:
+        run_overrides = {}
+
+        def run_sync(self, **kwargs):
+            return {"ok": True}
+
+    monkeypatch.setattr(pairs, "engine_for", lambda source, target, **kw: captured.update(kw) or FakeEngine())
+    real_run_sync_thread(False, job.model_dump())
+    assert captured["ssi_account"] == "one@example.com"
+
+
+def test_dashboard_has_the_myssi_section_and_pickers():
+    """The page: a MySSI account list on Settings with the beta note, and a
+    MySSI account picker next to Sync now and in the job editor."""
+    client = TestClient(app)
+    html = client.get("/").text
+    for element in ("ssi-accounts-rows", "ssi-add-account", "ssi-configured", "ssi-note",
+                    "trigger-ssi-account", "job-ssi-account", "trigger-note"):
+        assert f'id="{element}"' in html, element
+    with open("src/web/static/script.js") as f:
+        js = f.read()
+    assert "ssi_accounts" in js and "ssi_account" in js and 'ssi: "MySSI"' in js

@@ -52,7 +52,7 @@ class SettingsController(QObject):
 
     def _stored_accounts(self, service: str):
         return {"garmin": self._model.get_garmin_accounts, "divelogs": self._model.get_divelogs_accounts,
-                "subsurface": self._model.get_subsurface_accounts}[service]()
+                "subsurface": self._model.get_subsurface_accounts, "ssi": self._model.get_ssi_accounts}[service]()
 
     def _stored_account(self, service: str, name: str):
         return next((a for a in self._stored_accounts(service) if creds_store.account_name(a) == name), None)
@@ -240,73 +240,58 @@ class SettingsController(QObject):
         creds_store.save_shearwater_accounts(accounts)
         self._saved()
 
-    # -- MySSI (plans/convert.md I7/I8): the Convert page's upload login ----
+    # -- MySSI (plans/myssi-sync.md K2): accounts like Divelogs' -----------
     #
-    # One login, not an account list: MySSI is no sync service, so it is kept
-    # apart from CredentialsModel (desktop/credentials.py's ssi functions) and
-    # never materialised to credentials.json. The whole card is hidden behind
-    # `ssi.UPLOAD_ENABLED` (off since 2026-10-02, until the owner's live
-    # test); the slots refuse through `_ssi_allowed` while it is off.
+    # Several MySSI accounts in the keychain (desktop/credentials.py,
+    # ``ssi_accounts``), each with its API token; a sync source and receiver
+    # since K1, in beta (`ssiBetaNote` under the card's title); the MySSI
+    # Dives page (K3) and the sync are the only users of these accounts
+    # since K4 took Open MySSI / Send to SSI off the Dive edit page.
 
-    @Property(bool, constant=True)
-    def ssiEnabled(self) -> bool:
-        """Whether the MySSI card is shown at all (`ssi.UPLOAD_ENABLED`)."""
-        from src.core.services import ssi
-        return bool(ssi.UPLOAD_ENABLED)
+    @Property(str, constant=True)
+    def ssiBetaNote(self) -> str:
+        """`ssi.BETA_NOTE`, shown muted under the MySSI card's title."""
+        from src.core.services.ssi import BETA_NOTE
+        return BETA_NOTE
 
-    def _ssi_allowed(self, action: str) -> bool:
-        """False, with one log line, when the SSI upload is switched off."""
-        if self.ssiEnabled:
-            return True
-        logger.info("Send to SSI is switched off (ssi.UPLOAD_ENABLED): %s ignored", action)
-        return False
+    @Property(str, constant=True)
+    def ssiUnofficialNote(self) -> str:
+        """`ssi.UNOFFICIAL_NOTE`: the route is the app's, not a public API."""
+        from src.core.services.ssi import UNOFFICIAL_NOTE
+        return UNOFFICIAL_NOTE
 
-    @Property(str, notify=credentialsChanged)
-    def ssiEmail(self) -> str:
-        return creds_store.load_ssi_credentials().email
-
-    @Property(bool, notify=credentialsChanged)
-    def ssiHasPassword(self) -> bool:
-        return bool(creds_store.load_ssi_credentials().password)
+    @Property("QVariantList", notify=credentialsChanged)
+    def ssiAccounts(self):
+        """Emails only, like subsurfaceAccounts (``username`` so the page's
+        account rows need no per-service case); never the password or token."""
+        return [{"username": a.email, "has_password": bool(a.password)}
+                for a in self._model.get_ssi_accounts()]
 
     @Property(str, notify=ssiStatusChanged)
     def ssiStatus(self) -> str:
-        if self._ssi_status:
-            return self._ssi_status
-        login = creds_store.load_ssi_credentials()
-        if not login.email:
-            return "No MySSI login saved yet. Used by the Convert page's Send to SSI only."
-        if not login.password:
-            return f"No password stored for {login.email} - enter it and save."
-        return f"Saved: {login.email}. Press Test to check the login."
+        return self._ssi_status or self._accounts_status("ssi")
 
-    @Slot(str, str)
-    def saveSsi(self, email: str, password: str) -> None:
-        """Store the MySSI login; a blank password keeps the stored one, a
-        blank email removes the login."""
-        if not self._ssi_allowed("saveSsi"):
-            return
-        creds_store.save_ssi_credentials(email, password)
-        self._saved()
-        self._set("_ssi_status", "", self.ssiStatusChanged)
-
-    @Slot()
-    def clearSsi(self) -> None:
-        if not self._ssi_allowed("clearSsi"):
-            return
-        creds_store.clear_ssi_credentials()
+    @Slot("QVariantList")
+    def saveSsiAccounts(self, rows) -> None:
+        """Full replace of the MySSI accounts; a blank password keeps the
+        stored one, a kept account keeps its token (credentials.py)."""
+        from src.core.config import SsiCredentials
+        accounts = [
+            SsiCredentials(email=str(r.get("username", "")).strip(), password=str(r.get("password", "")))
+            for r in rows if str(r.get("username", "")).strip()
+        ]
+        creds_store.save_ssi_accounts(accounts)
         self._saved()
         self._set("_ssi_status", "", self.ssiStatusChanged)
 
     @Slot(str, str)
     def testSsi(self, email: str, password: str) -> None:
         """Log in to MySSI (off the GUI thread); the token it gets is not kept
-        - only a save does that. The route is unofficial (ssi.UNOFFICIAL_NOTE)."""
-        if not self._ssi_allowed("testSsi"):
-            return
-        stored = creds_store.load_ssi_credentials()
-        email = (email or "").strip() or stored.email
-        password = password or (stored.password if stored.email == email else "")
+        - only a sync or a send does that. The route is unofficial
+        (ssi.UNOFFICIAL_NOTE)."""
+        email = (email or "").strip()
+        stored = self._stored_account("ssi", email)
+        password = password or (stored.password if stored else "")
         if not email or not password:
             self._set("_ssi_status", "Enter an email and password first.", self.ssiStatusChanged)
             return

@@ -161,7 +161,8 @@ def print_test_mapping(out, catalog=None, units="metric"):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dive Sync: Dive synchronization engine between Garmin Connect and Divelogs.org."
+        description="Dive Sync: Dive synchronization engine between Garmin Connect, Divelogs.org, Subsurface, "
+                    "the Shearwater app and MySSI (beta)."
     )
     
     parser.add_argument(
@@ -274,17 +275,28 @@ def main():
     )
 
     parser.add_argument(
+        "--ssi-account",
+        type=str,
+        metavar="EMAIL",
+        help="MySSI account (its email) to use when several are configured (credentials.json 'ssi'); the same "
+             "as naming it in the spec, ssi:<email>. Optional if only one is configured."
+    )
+
+    parser.add_argument(
         "--source",
         type=str,
         metavar="SPEC",
-        help="Service to sync from: garmin, divelogs, uddf:<file>, subsurface:<dir> (default: garmin)."
+        help="Service to sync from: garmin, divelogs, subsurface-cloud, ssi[:<email>] (MySSI, beta), "
+             "shearwater[:<file>], uddf:<file>, subsurface:<dir> (default: garmin)."
     )
 
     parser.add_argument(
         "--target",
         type=str,
         metavar="SPEC",
-        help="Service to sync to (default: divelogs). Relative file paths are under DATA_DIR."
+        help="Service to sync to, the same specs (default: divelogs). Relative file paths are under DATA_DIR. "
+             "MySSI as a target takes new dives only, never updates or (Mirror) deletes, and a dive with two or "
+             "more tanks is skipped."
     )
 
     parser.add_argument(
@@ -389,10 +401,12 @@ def main():
         if args.pair:
             pair = find_pair(ConfigManager.load_settings(), args.pair)
             engine = engine_for_pair(pair, mock_data_dir=args.mock_data_dir,
-                                     garmin_username=args.garmin, divelogs_username=args.divelogs)
+                                     garmin_username=args.garmin, divelogs_username=args.divelogs,
+                                     ssi_account=args.ssi_account)
         elif args.source or args.target:
             engine = engine_for(args.source or "garmin", args.target or "divelogs", mock_data_dir=args.mock_data_dir,
-                                garmin_username=args.garmin, divelogs_username=args.divelogs)
+                                garmin_username=args.garmin, divelogs_username=args.divelogs,
+                                ssi_account=args.ssi_account)
         else:
             engine = SyncEngine(
                 mock_data_dir=args.mock_data_dir,

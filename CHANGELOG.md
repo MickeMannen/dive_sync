@@ -4,6 +4,38 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
+## Unreleased
+
+- MySSI (beta): **MySSI is a sync service** like the others - a source and a
+  target on the desktop app's Sync page (with its own account picker and a
+  note under the pair saying what the beta means), on the command line
+  (`--source garmin --target ssi`, `ssi:<email>` or `--ssi-account` to pick an
+  account) and on the web dashboard (Sync now, scheduled jobs with a MySSI
+  account per job, Download dives). It gets a mapping board and a place on
+  the Conflicts page like every other pair. A sync towards MySSI **adds new
+  dives only** until updating a MySSI dive has been tested: a change to a
+  dive already there is logged per dive, not sent; a dive with two or more
+  tanks is skipped with a line saying why; and **Mirror never deletes on
+  MySSI** - it logs what it would have deleted (a MySSI delete is permanent
+  and the dive number may not come back). MySSI has no public API, so the
+  connection is the MySSI app's own, which SSI can change or close at any
+  time; the whole feature is beta and not fully tested.
+- Settings page: the **MySSI** card is an account list like Divelogs' -
+  any number of MySSI logins with Test, Save and Remove, kept in the OS
+  keychain, the beta note under the title. The one login saved by the
+  previous version was moved into the list. The CLI and the Docker image
+  take the same accounts in `credentials.json` (`"ssi"`, written by
+  `setup_credentials.py --services ssi`), and the web dashboard's Settings
+  page edits them.
+- A **MySSI Dives** page (after Subsurface Dives): your MySSI logbook in the
+  same table as the other Dives pages, with the depth profile, the main tank
+  and the dive site, an account picker, Refresh and Delete (the confirmation
+  says that a MySSI delete is permanent). Editing a MySSI dive comes after
+  the update test; until then the editor is read-only and Save says so.
+- Dive edit page: the **Open MySSI** and **Send to SSI…** buttons of the
+  previous version are gone - MySSI is synced from the Sync page and browsed
+  on its own Dives page instead.
+
 ## 0.4.5 - 2026-10-19
 
 - Dive edit page: merging a split dive no longer stops at "dive 9 has no dive

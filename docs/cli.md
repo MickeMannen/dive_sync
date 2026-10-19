@@ -29,6 +29,7 @@ python sync.py --backup --garmin-path my_garmin.json --divelogs-path my_divelogs
 * `--no-garmin-cache`: Fetch every Garmin dive from Garmin Connect. By default a sync reads a Garmin dive from the local refresh cache when Garmin's activity list shows it unchanged (and caches what it does fetch); that list does not reveal an edit to only notes, buddy, weight or visibility, which is what this flag is for.
 * `--direction`: Which side this run writes: `to_garmin`, `to_divelogs`, `to_<service>`, `to_target` or `to_source`. Without it the pair's saved direction is used. `bidirectional` is no longer accepted — run each direction separately. **Deletes follow the direction**: with *propagate deletes* on, a dive gone from the sending side is deleted on the receiving side; a dive gone from the receiving side is left alone by that run (the opposite run removes it from the sender). A sync started from the desktop app's Sync page never deletes unless *Mirror* is ticked.
 * `--overwrite`: With `--save-raw-data`, fetch every Garmin dive again instead of reusing the unchanged ones (other services are always downloaded in full).
+* `--ssi-account EMAIL`: Which MySSI account to run as when several are in `credentials.json` (the same as naming it in the spec, `ssi:<email>`; also applies to `--pair`). Optional with one account.
 * `--units metric|imperial`: How this run shows depths, temperatures, pressures, weights and visibility in `--list-conflicts`, `--test-mapping` and the log lines about a rule's two values: metric (m, bar, °C, L, kg; the default) or imperial (ft, psi, °F, cuft, lb, rounded like a dive computer). For this run only, nothing is stored; the data, the files and the services stay metric whichever you pick.
 
 ### Other services: UDDF files, Subsurface and the Shearwater app
@@ -57,6 +58,13 @@ Each pair has its own direction, grace window and mapping board (defaults are ge
 
 ```bash
 python sync.py --source garmin --target subsurface-cloud --full-sync
+```
+
+**MySSI** (beta) is a sync side like the others once an account is in `credentials.json` (`"ssi": [{"email": "...", "password": "..."}]`, written by `setup_credentials.py --services ssi`, which checks the login; the token MySSI hands out is kept in the file by the first run so the next one skips the login). The spec is `ssi`, or `ssi:<email>` to pick one of several accounts (`--ssi-account <email>` is the same pick). MySSI has no public API or file import: DiveSync uses the MySSI app's own connection, which SSI can change or close at any time, and the whole feature is not fully tested yet. A run towards MySSI **adds new dives only** (a change to a dive already there is logged per dive, not sent, until updating has been tested), **skips a dive with two or more tanks** with a line saying why, and **never deletes on MySSI**, not even with *propagate deletes*; the board has no dive-number rule (MySSI numbers its own dives), so dives are matched by the sync history, the dive-computer reference DiveSync sent and the start time. Garmin → MySSI is the exercised path.
+
+```bash
+python sync.py --source garmin --target ssi --dry-run                 # one account configured
+python sync.py --source garmin --target ssi:me@example.com --full-sync   # or --ssi-account me@example.com
 ```
 
 **Submersion** is disabled for now (see the note in the [README](../README.md)).

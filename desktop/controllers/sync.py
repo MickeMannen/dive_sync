@@ -160,6 +160,28 @@ class SyncController(QObject):
     def shearwaterAccounts(self):
         return accounts.names("shearwater")
 
+    @Property("QVariantList", notify=accountsChanged)
+    def ssiAccounts(self):
+        """The MySSI accounts (emails), plans/myssi-sync.md K3."""
+        return accounts.names("ssi")
+
+    @Slot(str, str, result=str)
+    def pairNote(self, source_spec: str, target_spec: str) -> str:
+        """What the page says under the Source/Target boxes for this pair:
+        `ssi.BETA_NOTE` when MySSI is a side (the service is in beta and a
+        sync there is add-only), blank otherwise."""
+        from src.core.pairs import service_id_of
+        sides = set()
+        for spec in (source_spec, target_spec):
+            try:
+                sides.add(service_id_of(spec))
+            except ValueError:
+                continue
+        if "ssi" in sides:
+            from src.core.services.ssi import BETA_NOTE
+            return BETA_NOTE
+        return ""
+
     @Property("QVariantMap", notify=accountsChanged)
     def selectedAccounts(self):
         """{service id: account} picked on this page (rework.md E19)."""
@@ -242,7 +264,8 @@ class SyncController(QObject):
         if divelogs_username:
             selection["divelogs"] = divelogs_username
         for service, key in (("garmin", "garmin_username"), ("divelogs", "divelogs_username"),
-                             ("subsurface", "subsurface_username"), ("shearwater", "shearwater_account")):
+                             ("subsurface", "subsurface_username"), ("shearwater", "shearwater_account"),
+                             ("ssi", "ssi_account")):
             if selection.get(service):
                 custom[key] = selection[service]
         custom["account_scoped"] = True

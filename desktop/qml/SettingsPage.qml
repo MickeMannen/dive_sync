@@ -248,36 +248,76 @@ ColumnLayout {
                 Button { text: "Add another database"; flat: true; onClicked: shearwaterModel.append({account: "", database: "", exists: false}) }
             }
         }
-        // Hidden while ssi.UPLOAD_ENABLED is off (2026-10-02, until the owner's live test)
+        // MySSI (plans/myssi-sync.md K2): a sync service in beta, several
+        // accounts like Divelogs'; the beta note sits under the title.
         Card {
             id: ssiCard
             objectName: "ssiCard"
-            visible: settingsController.ssiEnabled
             title: "MySSI"
+            Text {
+                objectName: "ssiBetaNote"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.muted
+                font.pixelSize: 11
+                text: settingsController.ssiBetaNote
+            }
             Text {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Theme.muted
                 font.pixelSize: 11
-                text: "The login of the Convert page's \"Send to SSI\" (your MySSI app login); nothing syncs with it. " + convertController.ssiNote
+                text: "Your MySSI app logins (one per account; the Sync page picks one per run). " + settingsController.ssiUnofficialNote
             }
-            RowLayout {
-                LabeledField { id: ssiEmail; fieldWidth: 220; label: "Email"; text: settingsController.ssiEmail }
-                LabeledField { id: ssiPass; fieldWidth: 220; label: "Password"; placeholder: settingsController.ssiHasPassword ? "saved - leave blank to keep it" : ""; secret: true }
-                Button { text: "Test"; onClicked: settingsController.testSsi(ssiEmail.text, ssiPass.text) }
-                Text {
-                    visible: settingsController.ssiEmail !== "" && !settingsController.ssiHasPassword
-                    text: "⚠ no password stored"
-                    color: Theme.danger
-                    font.pixelSize: 11
+            ListModel { id: ssiAccountsModel; objectName: "ssiAccountsModel" }
+            function reload() {
+                ssiAccountsModel.clear()
+                var accounts = settingsController.ssiAccounts
+                for (var i = 0; i < accounts.length; i++)
+                    ssiAccountsModel.append({username: accounts[i].username, password: "",
+                                             hasPassword: accounts[i].has_password})
+                if (accounts.length === 0) ssiAccountsModel.append({username: "", password: "", hasPassword: false})
+            }
+            Component.onCompleted: reload()
+            Connections { target: settingsController; function onCredentialsChanged() { ssiCard.reload() } }
+            Repeater {
+                model: ssiAccountsModel
+                delegate: RowLayout {
+                    required property int index
+                    required property string username
+                    required property string password
+                    required property bool hasPassword
+                    // See the Garmin rows above: commit on keystroke so Save
+                    // never reads a stale blank password out of the model.
+                    LabeledField { id: ssiEmail; fieldWidth: 220; label: "Email"; text: username; onTextChanged: ssiAccountsModel.setProperty(index, "username", text) }
+                    LabeledField { id: ssiPass; fieldWidth: 220; label: "Password"; placeholder: hasPassword ? "saved - leave blank to keep it" : ""; secret: true; text: password; onTextChanged: ssiAccountsModel.setProperty(index, "password", text) }
+                    // See the Garmin Test button above: read live text.
+                    Button { text: "Test"; onClicked: settingsController.testSsi(ssiEmail.text, ssiPass.text) }
+                    Button { text: "Remove"; flat: true; onClicked: ssiAccountsModel.remove(index) }
+                    Text {
+                        visible: username !== "" && !hasPassword
+                        text: "⚠ no password stored"
+                        color: Theme.danger
+                        font.pixelSize: 11
+                    }
                 }
             }
-            Connections { target: settingsController; function onCredentialsChanged() { ssiEmail.text = settingsController.ssiEmail; ssiPass.text = "" } }
             // See the Garmin card: this line is permanent, only its text changes.
             Text { objectName: "ssiStatus"; text: settingsController.ssiStatus; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             RowLayout {
-                Button { text: "Save"; onClicked: settingsController.saveSsi(ssiEmail.text, ssiPass.text) }
-                Button { text: "Remove"; flat: true; visible: settingsController.ssiEmail !== ""; onClicked: settingsController.clearSsi() }
+                Button {
+                    text: "Save"
+                    onClicked: {
+                        // See the Garmin save button above: get(i) is not a dict.
+                        var rows = []
+                        for (var i = 0; i < ssiAccountsModel.count; i++) {
+                            var row = ssiAccountsModel.get(i)
+                            rows.push({username: row.username, password: row.password})
+                        }
+                        settingsController.saveSsiAccounts(rows)
+                    }
+                }
+                Button { text: "Add another account"; flat: true; onClicked: ssiAccountsModel.append({username: "", password: "", hasPassword: false}) }
             }
         }
         Text { visible: text !== ""; text: settingsController.message; color: Theme.muted }

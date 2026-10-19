@@ -20,6 +20,7 @@ def test_parse_service_spec():
     assert parse_service_spec("garmin") == ("garmin", None)
     assert parse_service_spec(" UDDF:out.uddf ") == ("uddf", "out.uddf")
     assert parse_service_spec("subsurface:/abs/dir") == ("subsurface", "/abs/dir")
+    assert parse_service_spec("ssi") == ("ssi", None) and parse_service_spec("ssi:me@example.com") == ("ssi", "me@example.com")
     for bad in ("nope", "uddf", "garmin:x"):
         with pytest.raises(ValueError):
             parse_service_spec(bad)
@@ -177,7 +178,7 @@ def test_every_shipped_default_board_is_valid():
     from src.core.fields import build_catalog
     from src.core.pairs import field_catalog_of
     from src.core.templates import validate_links
-    for a, b in combinations(["garmin", "divelogs", "subsurface", "uddf", "submersion"], 2):
+    for a, b in combinations(["garmin", "divelogs", "subsurface", "uddf", "submersion", "ssi"], 2):
         catalog = build_catalog(field_catalog_of(a), field_catalog_of(b))
         assert validate_links(default_links_for(a, b), catalog) == [], (a, b)
 
@@ -211,7 +212,7 @@ def test_every_shipped_board_can_be_saved(submersion_enabled):
     from src.core.fields import links_to_rules, rules_to_links
     from src.core.pairs import default_links_for, field_catalog_of
     from src.core.templates import validate_links
-    services = ["garmin", "divelogs", "subsurface", "uddf", "shearwater", "submersion"]
+    services = ["garmin", "divelogs", "subsurface", "uddf", "shearwater", "submersion", "ssi"]
     for i, a in enumerate(services):
         for b in services[i + 1:]:
             catalog = {f.key: f for f in field_catalog_of(a) + field_catalog_of(b)}

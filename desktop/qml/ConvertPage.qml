@@ -7,8 +7,8 @@ import QtQuick.Dialogs
 // .fit files (or Connect's zip), UDDF or Subsurface files, see and edit the
 // dives they hold, and save the selected ones as UDDF or Subsurface .ssrf -
 // one dive through a Save-as dialog, several through a folder dialog with
-// one file per dive - or send them to MySSI with the login saved in Settings
-// (the SSI parts are hidden while ssi.UPLOAD_ENABLED is off, 2026-10-02).
+// one file per dive. (MySSI left this page with plans/myssi-sync.md K4: it
+// is a sync service with its own Dives page now.)
 // The detail card is the editor (I14): every field the model holds, in the
 // chosen units; a date, time or zone change moves the whole profile; the
 // edited dive is what Save as writes (Save as .fit patches a copy of the
@@ -229,9 +229,7 @@ ColumnLayout {
             wrapMode: Text.WordWrap
             color: Theme.muted
             font.pixelSize: 12
-            text: "Open the files of a dive computer, or a folder of them (Open adds to the list; Remove takes dives off it), pick a dive to edit it on the right (every field; a change of the date, time or time zone moves the whole profile), select the dives (Cmd/Ctrl-click adds one, Shift-click a range) and save them with their edits as UDDF or Subsurface files"
-                  + (convertController.ssiEnabled ? ", or send them to your MySSI logbook" : "")
-                  + ". Your accounts are not touched; the files you open are never changed, only the files you save are written."
+            text: "Open the files of a dive computer, or a folder of them (Open adds to the list; Remove takes dives off it), pick a dive to edit it on the right (every field; a change of the date, time or time zone moves the whole profile), select the dives (Cmd/Ctrl-click adds one, Shift-click a range) and save them with their edits as UDDF or Subsurface files. Your accounts are not touched; the files you open are never changed, only the files you save are written."
         }
         ProgressBar { Layout.fillWidth: true; indeterminate: true; visible: convertController.busy }
         Text { visible: text !== ""; text: convertController.message; color: Theme.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
@@ -798,15 +796,6 @@ ColumnLayout {
                     onClicked: page.startSave(modelData.id)
                 }
             }
-            // Hidden while ssi.UPLOAD_ENABLED is off (2026-10-02, until the owner's live test)
-            Button {
-                text: "Send to SSI…"
-                objectName: "sendToSsiButton"
-                visible: convertController.ssiEnabled
-                enabled: convertController.selectedCount > 0 && !convertController.busy && !convertController.ssiBusy && !convertController.ssiPlanOpen
-                Tip { text: "Uploads the selected dives to your MySSI logbook with the login saved in Settings. Unofficial: " + convertController.ssiNote; visible: parent.hovered }
-                onClicked: convertController.prepareSsi()
-            }
             Text {
                 visible: convertController.selectedCount > 0
                 text: convertController.selectedCount === 1 ? "1 dive selected" : convertController.selectedCount + " dives selected, one file per dive"
@@ -843,161 +832,6 @@ ColumnLayout {
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
-            }
-        }
-
-        // ---- MySSI: the plan (sites to check), then the results ----------
-        ColumnLayout {
-            id: ssiSection
-            objectName: "ssiSection"
-            Layout.fillWidth: true
-            spacing: 6
-            visible: convertController.ssiEnabled && (convertController.ssiBusy || convertController.ssiPlanOpen || convertController.ssiMessage !== "" || convertController.ssiResults.length > 0)
-            ProgressBar { Layout.fillWidth: true; indeterminate: true; visible: convertController.ssiBusy }
-            Text { visible: text !== ""; text: convertController.ssiMessage; color: Theme.text; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-            Text {
-                visible: convertController.ssiPlanOpen
-                text: "Unofficial: " + convertController.ssiNote
-                color: Theme.muted
-                font.pixelSize: 11
-                font.italic: true
-                wrapMode: Text.WordWrap
-                Layout.fillWidth: true
-            }
-            RowLayout {
-                visible: convertController.ssiPlanOpen
-                spacing: 8
-                Text { text: convertController.ssiLoginStatus; color: Theme.muted; font.pixelSize: 11 }
-                Text { text: "·"; color: Theme.muted; font.pixelSize: 11 }
-                Text { text: convertController.ssiSitesStatus; color: Theme.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                Button {
-                    text: convertController.ssiSitesDownloaded ? "Update site database" : "Download site database"
-                    flat: true
-                    enabled: !convertController.ssiBusy
-                    onClicked: convertController.downloadSites()
-                }
-            }
-            // The plan (one box per dive) and the results scroll in a bounded
-            // area, so a long batch never squeezes the dive list above away.
-            ScrollView {
-                id: ssiScroll
-                Layout.fillWidth: true
-                // what is left after the top card, the dive list's floor and
-                // this card's own lines, so Send stays on screen at any height
-                readonly property int roomLeft: page.height - topCard.height - 240 - 250
-                Layout.preferredHeight: Math.min(ssiContent.implicitHeight, Math.max(110, roomLeft))
-                visible: (convertController.ssiPlanOpen && convertController.ssiPlan.length > 0) || convertController.ssiResults.length > 0
-                contentWidth: availableWidth
-                clip: true
-                ColumnLayout {
-                    id: ssiContent
-                    width: ssiScroll.availableWidth
-                    spacing: 6
-                    Repeater {
-                        model: convertController.ssiPlanOpen ? convertController.ssiPlan : []
-                        delegate: Rectangle {
-                            id: planRow
-                            required property var modelData
-                            property var results: []
-                            readonly property bool planned: modelData.status === "planned"
-                            Layout.fillWidth: true
-                            implicitHeight: planColumn.implicitHeight + 16
-                            radius: 6
-                            color: "transparent"
-                            border.color: Theme.border
-                            ColumnLayout {
-                                id: planColumn
-                                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 8 }
-                                spacing: 4
-                                RowLayout {
-                                    spacing: 10
-                                    Text { text: planRow.modelData.when; color: Theme.text; font.bold: true; font.pixelSize: 12 }
-                                    Text {
-                                        text: planRow.planned ? "will be sent as dive " + planRow.modelData.number : "skipped: " + planRow.modelData.reason
-                                        color: planRow.planned ? Theme.ok : Theme.muted
-                                        font.pixelSize: 12
-                                        wrapMode: Text.WordWrap
-                                        Layout.fillWidth: true
-                                    }
-                                }
-                                RowLayout {
-                                    visible: planRow.planned
-                                    spacing: 8
-                                    Text { text: "SSI site:"; color: Theme.muted; font.pixelSize: 11 }
-                                    Text {
-                                        text: planRow.modelData.site_label !== "" ? planRow.modelData.site_label : "none (sent without a site)"
-                                        color: planRow.modelData.site_label !== "" ? Theme.text : Theme.muted
-                                        font.pixelSize: 12
-                                        elide: Text.ElideRight
-                                        Layout.maximumWidth: 320
-                                    }
-                                    TextField {
-                                        id: siteSearch
-                                        Layout.preferredWidth: 220
-                                        placeholderText: "search SSI sites…"
-                                        font.pixelSize: 12
-                                        onTextEdited: planRow.results = convertController.searchSites(text)
-                                    }
-                                    Button {
-                                        text: "No site"
-                                        flat: true
-                                        visible: planRow.modelData.site_label !== ""
-                                        onClicked: { convertController.clearSite(planRow.modelData.row); siteSearch.text = ""; planRow.results = [] }
-                                    }
-                                }
-                                Flow {
-                                    visible: planRow.planned && planRow.results.length > 0
-                                    Layout.fillWidth: true
-                                    spacing: 4
-                                    Repeater {
-                                        model: planRow.results
-                                        delegate: Button {
-                                            required property var modelData
-                                            text: modelData.label
-                                            flat: true
-                                            font.pixelSize: 11
-                                            onClicked: { convertController.setSite(planRow.modelData.row, modelData.id); siteSearch.text = ""; planRow.results = [] }
-                                        }
-                                    }
-                                }
-                                Repeater {
-                                    model: planRow.planned ? planRow.modelData.dropped : []
-                                    delegate: Text {
-                                        required property string modelData
-                                        text: "Not carried: " + modelData
-                                        color: Theme.muted
-                                        font.pixelSize: 11
-                                        wrapMode: Text.WordWrap
-                                        Layout.fillWidth: true
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Repeater {
-                        model: convertController.ssiResults
-                        delegate: Text {
-                            required property var modelData
-                            text: (modelData.status === "sent" ? "✓ " : modelData.status === "skipped" ? "– " : "✗ ") + modelData.summary
-                            color: modelData.status === "sent" ? Theme.ok : modelData.status === "failed" ? Theme.danger : Theme.muted
-                            font.pixelSize: 12
-                            wrapMode: Text.WordWrap
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-            }
-            RowLayout {
-                visible: convertController.ssiPlanOpen
-                spacing: 8
-                Button {
-                    objectName: "ssiSendButton"
-                    text: "Send " + convertController.ssiPlannedCount + (convertController.ssiPlannedCount === 1 ? " dive" : " dives") + " to MySSI"
-                    highlighted: true
-                    enabled: convertController.ssiPlannedCount > 0 && !convertController.ssiBusy
-                    onClicked: convertController.sendToSsi()
-                }
-                Button { text: "Cancel"; flat: true; enabled: !convertController.ssiBusy; onClicked: convertController.cancelSsi() }
             }
         }
     }

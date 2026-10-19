@@ -19,10 +19,13 @@ Written by `setup_credentials.py` (see [Getting started](getting-started.md#conf
     "email": "you@example.com",
     "password": "yourpassword",
     "base_url": "https://cloud.subsurface-divelog.org/"
-  }
+  },
+  "ssi": [
+    {"email": "you@example.com", "password": "yourpassword", "token": ""}
+  ]
 }
 ```
-The `subsurface` section is optional; an older file without it still loads. A Garmin account may also set `token_dir`, the folder for its login tokens; left out (the default), it is the account's own `garmin/<account>/tokens` folder.
+The `subsurface` and `ssi` sections are optional; an older file without them still loads. `ssi` (MySSI, beta) is a list of accounts - or one account in the same shape - each with the email and password of the MySSI app; `token` is the API token MySSI hands out, which the first run stores there so the next run skips the login (leave it empty). The desktop app keeps the same accounts, tokens included, in the OS keychain. A Garmin account may also set `token_dir`, the folder for its login tokens; left out (the default), it is the account's own `garmin/<account>/tokens` folder.
 
 ### Multiple Accounts Structure (`credentials.json`):
 You can configure a list of credentials. Each account gets its own folder (e.g. `garmin/user1@domain.com/`, see [Where your data is kept](configuration.md#where-your-data-is-kept)):
@@ -77,6 +80,7 @@ garmin/<account>/tokens/           Garmin login tokens
 divelogs/<account>/data/           cached Divelogs dives
 subsurface/<account>/data/         cached Subsurface dives
 subsurface/<account>/cloud/        the Subsurface Cloud checkout
+ssi/<account>/data/                cached MySSI dives (the account is its email)
 ```
 
 A side without accounts (a Submersion store, a local Subsurface folder) uses the account folder `default`. Version 0.3.0 changed this layout and the desktop app's folder: it starts fresh and leaves an earlier version's data where it was (see [`CHANGELOG.md`](../CHANGELOG.md)).

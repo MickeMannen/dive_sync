@@ -10,6 +10,10 @@ ColumnLayout {
     property int selectedRow: -1
     // Subsurface: a recorded dive's duration and depths come from its profile
     readonly property bool profileLocked: controller.profileLocksDepths && detailCard.sel.has_profile === true
+    // A service that takes no changes to its dives (MySSI until its update
+    // test, plans/myssi-sync.md K3): every field is read-only, there is no
+    // Save and no cell editing; the profile and Delete still work.
+    readonly property bool editable: controller.acceptsUpdates
     readonly property color fitOk: "#16a34a"
     // Coordinates at 6 decimals (~0.1 m) rather than Garmin's full float tail;
     // saving the rounded text leaves the stored coordinate as it was.
@@ -53,6 +57,7 @@ ColumnLayout {
     // and Save / Save all treat it like one typed there. null for a column
     // that has no editable field (derived values, the gas list, ids).
     function cellTarget(key) {
+        if (!page.editable) return null
         switch (key) {
         case "date": return { field: fDate, key: "date" }
         case "time": return { field: fTime, key: "time" }
@@ -228,9 +233,10 @@ ColumnLayout {
             },
             Button {
                 text: controller.pendingCount > 0 ? "Save all changes (" + controller.pendingCount + ")" : "Save all changes"
-                enabled: !controller.busy && (controller.pendingCount > 0 || !!detailCard.sel.filename)
+                enabled: !controller.busy && (controller.pendingCount > 0 || (page.editable && !!detailCard.sel.filename))
                 Tip {
-                    text: "Uploads every dive with unsaved changes to " + controller.serviceName + " in one go"
+                    text: page.editable ? "Uploads every dive with unsaved changes to " + controller.serviceName + " in one go"
+                                        : "Deletes the dives marked for deletion from " + controller.serviceName
                     visible: parent.hovered
                 }
                 onClicked: {
@@ -240,6 +246,16 @@ ColumnLayout {
                 }
             }
         ]
+        // MySSI is in beta (plans/myssi-sync.md): said under the title.
+        Text {
+            objectName: "divesBetaNote"
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.muted
+            font.pixelSize: 11
+            text: controller.betaNote
+            visible: text !== ""
+        }
         // A Garmin refresh is three API calls per dive with a cool-down between
         // each, so it runs for minutes: show how far it has got rather than an
         // anonymous spinner (rework.md E14). Indeterminate until the adapter
@@ -366,12 +382,14 @@ ColumnLayout {
                             readonly property bool saving: column === 0 && controller.savingFile !== ""
                                                            && controller.model.row(row).filename === controller.savingFile
                             readonly property bool fitCell: controller.model.columnKey(column) === "fit"
-                            text: saving ? "⏳ " + display : pending ? (deleting ? "🗑 " : "✎ ") + display : display
+                            // a delegate of a row being removed sees no value for a moment
+                            readonly property string shown: display === undefined || display === null ? "" : String(display)
+                            text: saving ? "⏳ " + shown : pending ? (deleting ? "🗑 " : "✎ ") + shown : shown
                             font.italic: pending
                             font.strikeout: deleting
                             opacity: deleting ? 0.6 : 1
                             // FIT column: see the legend under the table
-                            color: !fitCell ? Theme.text : display === "✓" ? page.fitOk : display === "✗" ? Theme.danger : Theme.muted
+                            color: !fitCell ? Theme.text : shown === "✓" ? page.fitOk : shown === "✗" ? Theme.danger : Theme.muted
                             font.bold: fitCell
                             horizontalAlignment: fitCell ? Text.AlignHCenter : Text.AlignLeft
                             font.pixelSize: 12
@@ -421,7 +439,7 @@ ColumnLayout {
         }
         RowLayout {
             spacing: 14
-            Text { text: "Double-click a cell to edit ·"; color: Theme.muted; font.pixelSize: 11 }
+            Text { visible: page.editable; text: "Double-click a cell to edit ·"; color: Theme.muted; font.pixelSize: 11 }
             Text { text: "Legend:"; color: Theme.muted; font.pixelSize: 11 }
             Text { text: "✎ unsaved changes"; color: Theme.accent; font.pixelSize: 11 }
             Text { text: "⏳ saving now"; color: Theme.muted; font.pixelSize: 11 }
@@ -502,6 +520,8 @@ ColumnLayout {
                     }
                     Button {
                         text: "Save"
+                        objectName: "saveDiveButton"
+                        visible: page.editable
                         enabled: !!detailCard.sel.filename && !controller.busy
                         Tip {
                             text: controller.saveStagesOnly
@@ -528,6 +548,15 @@ ColumnLayout {
                         onClicked: deleteDialog.open()
                     }
                 }
+                // Why nothing here can be typed into (plans/myssi-sync.md K3)
+                Text {
+                    objectName: "editLockNote"
+                    visible: !page.editable
+                    text: controller.editLockNote
+                    color: Theme.muted
+                    font.pixelSize: 11
+                    font.italic: true
+                }
                 Text {
                     visible: controller.fitSupported && !!detailCard.sel.filename
                     text: detailCard.sel.manual ? "FIT file: none (hand-logged dive)"
@@ -545,32 +574,32 @@ ColumnLayout {
                     columnSpacing: 16
                     rowSpacing: 8
                     enabled: !!detailCard.sel.filename
-                    LabeledField { id: fDate; label: "Date"; fieldWidth: 150; text: detailCard.sel.date || ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fTime; label: "Time"; fieldWidth: 150; text: detailCard.sel.time || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fDate; objectName: "field-date"; label: "Date"; fieldWidth: 150; readOnly: !page.editable; text: detailCard.sel.date || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fTime; label: "Time"; fieldWidth: 150; readOnly: !page.editable; text: detailCard.sel.time || ""; onEditingFinished: page.stageCurrent() }
                     LabeledField {
                         id: fDiveNumber
                         // Divelogs numbers its own dives by date/time order.
                         label: controller.diveNumberEditable ? "Dive #" : "Dive # (set by the service)"
                         fieldWidth: 150
-                        readOnly: !controller.diveNumberEditable
+                        readOnly: !controller.diveNumberEditable || !page.editable
                         text: detailCard.sel.dive_number || ""
                         onEditingFinished: page.stageCurrent()
                     }
-                    LabeledField { id: fDuration; label: page.profileLocked ? "Duration (from the dive profile)" : "Duration (min)"; readOnly: page.profileLocked; fieldWidth: 150; text: detailCard.sel.duration || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fDuration; label: page.profileLocked ? "Duration (from the dive profile)" : "Duration (min)"; readOnly: page.profileLocked || !page.editable; fieldWidth: 150; text: detailCard.sel.duration || ""; onEditingFinished: page.stageCurrent() }
 
-                    LabeledField { id: fMaxDepth; objectName: "field-max-depth"; label: page.profileLocked ? "Max depth (from the dive profile)" : "Max depth (" + units.labels.depth + ")"; readOnly: page.profileLocked; fieldWidth: 150; text: detailCard.sel.max_depth || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fMaxDepth; objectName: "field-max-depth"; label: page.profileLocked ? "Max depth (from the dive profile)" : "Max depth (" + units.labels.depth + ")"; readOnly: page.profileLocked || !page.editable; fieldWidth: 150; text: detailCard.sel.max_depth || ""; onEditingFinished: page.stageCurrent() }
                     LabeledField { label: "Avg depth (" + units.labels.depth + ")"; fieldWidth: 150; readOnly: true; text: detailCard.sel.avg_depth || "" }
-                    LabeledField { id: fWaterTemp; objectName: "field-water-temp"; label: "Water temp (" + units.labels.temperature + ")"; fieldWidth: 150; text: detailCard.sel.water_temp_value !== undefined && detailCard.sel.water_temp_value !== null ? String(detailCard.sel.water_temp_value) : ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fVisibility; visible: controller.hasVisibility; label: "Visibility (" + units.labels.depth + ")"; fieldWidth: 150; text: detailCard.sel.visibility || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fWaterTemp; objectName: "field-water-temp"; label: "Water temp (" + units.labels.temperature + ")"; fieldWidth: 150; readOnly: !page.editable; text: detailCard.sel.water_temp_value !== undefined && detailCard.sel.water_temp_value !== null ? String(detailCard.sel.water_temp_value) : ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fVisibility; visible: controller.hasVisibility; label: "Visibility (" + units.labels.depth + ")"; fieldWidth: 150; readOnly: !page.editable; text: detailCard.sel.visibility || ""; onEditingFinished: page.stageCurrent() }
 
-                    LabeledField { id: fLocation; Layout.columnSpan: 4; label: controller.locationLabel; placeholder: controller.locationHint; fieldWidth: 682; visible: !controller.splitSiteNames; text: detailCard.sel.location || ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fActivityName; Layout.columnSpan: 2; label: "Activity name"; fieldWidth: 316; visible: controller.splitSiteNames; text: detailCard.sel.activity_name || ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fLocationName; Layout.columnSpan: 2; label: "Location name"; fieldWidth: 316; visible: controller.splitSiteNames; text: detailCard.sel.location_name || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fLocation; objectName: "field-location"; Layout.columnSpan: 4; label: controller.locationLabel; placeholder: controller.locationHint; fieldWidth: 682; visible: !controller.splitSiteNames; readOnly: !page.editable; text: detailCard.sel.location || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fActivityName; Layout.columnSpan: 2; label: "Activity name"; fieldWidth: 316; visible: controller.splitSiteNames; readOnly: !page.editable; text: detailCard.sel.activity_name || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fLocationName; Layout.columnSpan: 2; label: "Location name"; fieldWidth: 316; visible: controller.splitSiteNames; readOnly: !page.editable; text: detailCard.sel.location_name || ""; onEditingFinished: page.stageCurrent() }
 
-                    LabeledField { id: fBuddy; objectName: "field-buddy"; label: "Buddy"; fieldWidth: 150; text: detailCard.sel.buddy || ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fWeight; objectName: "field-weight"; label: "Weight (" + units.labels.weight + ")"; fieldWidth: 150; text: detailCard.sel.weight || ""; onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fLat; label: "Latitude"; fieldWidth: 150; text: page.coordText(detailCard.sel.lat); onEditingFinished: page.stageCurrent() }
-                    LabeledField { id: fLng; label: "Longitude"; fieldWidth: 150; text: page.coordText(detailCard.sel.lng); onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fBuddy; objectName: "field-buddy"; label: "Buddy"; fieldWidth: 150; readOnly: !page.editable; text: detailCard.sel.buddy || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fWeight; objectName: "field-weight"; label: "Weight (" + units.labels.weight + ")"; fieldWidth: 150; readOnly: !page.editable; text: detailCard.sel.weight || ""; onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fLat; label: "Latitude"; fieldWidth: 150; readOnly: !page.editable; text: page.coordText(detailCard.sel.lat); onEditingFinished: page.stageCurrent() }
+                    LabeledField { id: fLng; label: "Longitude"; fieldWidth: 150; readOnly: !page.editable; text: page.coordText(detailCard.sel.lng); onEditingFinished: page.stageCurrent() }
 
                     // Set by the device that uploaded the dive, not by the diver
                     LabeledField { objectName: "field-device"; Layout.columnSpan: 2; label: "Dive computer"; fieldWidth: 316; readOnly: true; visible: controller.showsDevice; text: detailCard.sel.device || "" }
@@ -592,7 +621,9 @@ ColumnLayout {
                         border.color: fNotes.activeFocus ? Theme.accent : Theme.border
                         TextArea {
                             id: fNotes
+                            objectName: "field-notes"
                             anchors { fill: parent; margins: 4 }
+                            readOnly: !page.editable
                             text: detailCard.sel.notes || ""
                             wrapMode: TextEdit.Wrap
                             selectByMouse: true
@@ -641,15 +672,16 @@ ColumnLayout {
                                 required property string volume
                                 required property string start_pressure
                                 required property string end_pressure
-                                TextField { Layout.preferredWidth: 160; text: tank_name; placeholderText: "e.g. transmitter name"; onEditingFinished: { tankModel.setProperty(index, "tank_name", text); page.stageCurrent() } }
-                                TextField { Layout.preferredWidth: 70; text: oxygen; onEditingFinished: { tankModel.setProperty(index, "oxygen", text); page.stageCurrent() } }
-                                TextField { Layout.preferredWidth: 70; text: helium; onEditingFinished: { tankModel.setProperty(index, "helium", text); page.stageCurrent() } }
-                                TextField { Layout.preferredWidth: 80; text: volume; onEditingFinished: { tankModel.setProperty(index, "volume", text); page.stageCurrent() } }
-                                TextField { Layout.preferredWidth: 80; text: start_pressure; onEditingFinished: { tankModel.setProperty(index, "start_pressure", text); page.stageCurrent() } }
-                                TextField { Layout.preferredWidth: 80; text: end_pressure; onEditingFinished: { tankModel.setProperty(index, "end_pressure", text); page.stageCurrent() } }
+                                TextField { Layout.preferredWidth: 160; readOnly: !page.editable; text: tank_name; placeholderText: page.editable ? "e.g. transmitter name" : ""; onEditingFinished: { tankModel.setProperty(index, "tank_name", text); page.stageCurrent() } }
+                                TextField { Layout.preferredWidth: 70; readOnly: !page.editable; text: oxygen; onEditingFinished: { tankModel.setProperty(index, "oxygen", text); page.stageCurrent() } }
+                                TextField { Layout.preferredWidth: 70; readOnly: !page.editable; text: helium; onEditingFinished: { tankModel.setProperty(index, "helium", text); page.stageCurrent() } }
+                                TextField { Layout.preferredWidth: 80; readOnly: !page.editable; text: volume; onEditingFinished: { tankModel.setProperty(index, "volume", text); page.stageCurrent() } }
+                                TextField { Layout.preferredWidth: 80; readOnly: !page.editable; text: start_pressure; onEditingFinished: { tankModel.setProperty(index, "start_pressure", text); page.stageCurrent() } }
+                                TextField { Layout.preferredWidth: 80; readOnly: !page.editable; text: end_pressure; onEditingFinished: { tankModel.setProperty(index, "end_pressure", text); page.stageCurrent() } }
                                 Button {
                                     text: "✕"
                                     flat: true
+                                    visible: page.editable
                                     implicitWidth: 28
                                     Tip {
                                         text: "Remove this tank"
@@ -661,7 +693,9 @@ ColumnLayout {
                         }
                         Button {
                             text: "+ Add tank"
+                            objectName: "addTankButton"
                             flat: true
+                            visible: page.editable
                             onClicked: { tankModel.append({tank_name: "", oxygen: "21", helium: "0", volume: "", start_pressure: "", end_pressure: ""}); page.stageCurrent() }
                         }
                     }
@@ -686,7 +720,12 @@ ColumnLayout {
         modal: true
         standardButtons: Dialog.Yes | Dialog.No
         anchors.centerIn: Overlay.overlay
-        Text { text: "Mark this dive for deletion? It is deleted from the service when you press Save all changes; Undo keeps it."; color: Theme.text; wrapMode: Text.WordWrap; width: 360 }
+        Text {
+            objectName: "deleteDialogText"
+            text: "Mark this dive for deletion? It is deleted from the service when you press Save all changes; Undo keeps it."
+                  + (controller.deleteNote ? " " + controller.deleteNote : "")
+            color: Theme.text; wrapMode: Text.WordWrap; width: 360
+        }
         onAccepted: controller.deleteSelected()
     }
 
@@ -697,7 +736,12 @@ ColumnLayout {
         modal: true
         standardButtons: Dialog.Yes | Dialog.No
         anchors.centerIn: Overlay.overlay
-        Text { text: "This also deletes the dives marked 🗑 from the service, for good. Continue?"; color: Theme.text; wrapMode: Text.WordWrap; width: 360 }
+        Text {
+            objectName: "saveAllDialogText"
+            text: "This also deletes the dives marked 🗑 from the service, for good."
+                  + (controller.deleteNote ? " " + controller.deleteNote : "") + " Continue?"
+            color: Theme.text; wrapMode: Text.WordWrap; width: 360
+        }
         onAccepted: controller.saveAll()
     }
 

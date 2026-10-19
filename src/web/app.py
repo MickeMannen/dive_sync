@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, CredentialsModel, CronJobModel, SyncPairModel
+from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, SsiCredentials, CredentialsModel, CronJobModel, SyncPairModel
 from src.core.fields import FieldLink, SyncRule, build_catalog, links_to_rules
 from src.core.templates import preview as preview_link, validate_links
 from src.core.config import ProfileError, export_profile, import_profile
@@ -95,6 +95,8 @@ class CronJobSchema(BaseModel):
     use_garmin_cache: Optional[bool] = None
     garmin_username: Optional[str] = None
     divelogs_username: Optional[str] = None
+    # the MySSI account (email) of a job with MySSI as a side (plans/myssi-sync.md K5)
+    ssi_account: Optional[str] = None
 
 class SettingsSchema(BaseModel):
     # Direction of the garmin_divelogs pair (rework.md G1: kept as the form's
@@ -137,6 +139,7 @@ class SyncTriggerRequest(BaseModel):
     garmin_username: Optional[str] = None
     divelogs_username: Optional[str] = None
     shearwater_account: Optional[str] = None
+    ssi_account: Optional[str] = None
 
 class CredentialsSchema(BaseModel):
     # Repeatable rows (rework.md A8): the Garmin/Divelogs sections of the
@@ -152,6 +155,11 @@ class CredentialsSchema(BaseModel):
     # and has no section here: a stored entry survives every save.
     subsurface: Optional[SubsurfaceCredentials] = None
     submersion: Optional[SubmersionCredentials] = None
+    # MySSI accounts (plans/myssi-sync.md K5): a list like Garmin's and
+    # Divelogs', sent whole by the form (an empty list means "no accounts");
+    # omitted (None, an older page) leaves what is stored. A row's blank
+    # password keeps the stored password, and a kept account keeps its token.
+    ssi_accounts: Optional[List[SsiCredentials]] = None
 
 @app.get("/api/settings")
 def get_settings():
@@ -192,6 +200,7 @@ def save_settings(data: SettingsSchema):
                 use_garmin_cache=job.use_garmin_cache,
                 garmin_username=job.garmin_username,
                 divelogs_username=job.divelogs_username,
+                ssi_account=job.ssi_account,
             )
             for job in data.cron_jobs
         ]
@@ -353,6 +362,8 @@ def get_credentials_status():
     divelogs_accounts = creds.get_divelogs_accounts()
     garmin_users = [acc.username for acc in garmin_accounts if acc.username]
     divelogs_users = [acc.username for acc in divelogs_accounts if acc.username]
+    ssi_accounts = [a for a in creds.get_ssi_accounts() if a.email.strip()]
+    from src.core.services import ssi
     return {
         "garmin_configured": len(garmin_users) > 0,
         "divelogs_configured": len(divelogs_users) > 0,
@@ -372,6 +383,13 @@ def get_credentials_status():
                                   for a in divelogs_accounts if a.username],
         "subsurface_configured": creds.first_subsurface_account().configured,
         "subsurface_email": creds.first_subsurface_account().email,
+        # MySSI (plans/myssi-sync.md K5): the accounts by email, rows for the
+        # form (no passwords, no tokens) and the notes the pages show
+        "ssi_configured": any(a.configured for a in ssi_accounts),
+        "ssi_accounts": [a.email for a in ssi_accounts],
+        "ssi_account_rows": [{"email": a.email, "has_password": bool(a.password)} for a in ssi_accounts],
+        "ssi_note": ssi.BETA_NOTE,
+        "ssi_unofficial_note": ssi.UNOFFICIAL_NOTE,
         "submersion_configured": creds.submersion.configured,
         "submersion_store": {
             "store_type": creds.submersion.store_type,
@@ -401,16 +419,41 @@ def _merge_passwords(submitted: list, existing: list):
     return merged
 
 
+def _merge_ssi_accounts(submitted: list, existing: list):
+    """The MySSI rows (plans/myssi-sync.md K5), keyed by email: a row with a
+    blank password keeps the stored one, and an account that stays keeps
+    its API token (the form never sees it; it is what lets the next run
+    skip the login). An account left out of the rows is removed with its
+    token."""
+    existing_by_email = {a.email.strip(): a for a in existing if a.email.strip()}
+    merged = []
+    for account in submitted:
+        email = account.email.strip()
+        if not email:
+            continue
+        stored = existing_by_email.get(email)
+        update = {"email": email}
+        if stored is not None:
+            update["token"] = stored.token
+            if not account.password:
+                update["password"] = stored.password
+        merged.append(account.model_copy(update=update))
+    return merged
+
+
 @app.post("/api/credentials")
 def save_credentials(data: CredentialsSchema):
     try:
         # Only the sections the form sends are replaced; the stored
-        # Subsurface / Submersion entries survive a Garmin/Divelogs save.
+        # Subsurface / Submersion entries survive a Garmin/Divelogs save,
+        # and so do the MySSI accounts when the section is left out.
         current = ConfigManager.load_credentials()
         creds = current.model_copy(update={
             "garmin": _merge_passwords(data.garmin_accounts, current.get_garmin_accounts()),
             "divelogs": _merge_passwords(data.divelogs_accounts, current.get_divelogs_accounts()),
         })
+        if data.ssi_accounts is not None:
+            creds = creds.model_copy(update={"ssi": _merge_ssi_accounts(data.ssi_accounts, current.get_ssi_accounts())})
         if data.subsurface is not None:
             creds = creds.model_copy(update={"subsurface": data.subsurface})
         if data.submersion is not None:
@@ -427,7 +470,7 @@ def test_credentials(data: CredentialsSchema):
     """Per-account results (rework.md A8): only rows with both a username
     and a password can actually be tested - a row kept via the blank-password
     merge in save_credentials has no password here to test with."""
-    results = {"garmin": None, "divelogs": None}
+    results = {"garmin": None, "divelogs": None, "ssi": None}
 
     garmin_rows = [a for a in data.garmin_accounts if a.username and a.password]
     if garmin_rows:
@@ -465,6 +508,23 @@ def test_credentials(data: CredentialsSchema):
                 ok = False
             divelogs_results.append({"username": account.username, "ok": ok})
         results["divelogs"] = divelogs_results
+
+    ssi_rows = [a for a in (data.ssi_accounts or []) if a.email.strip() and a.password]
+    if ssi_rows:
+        # One login per row, nothing kept: the token MySSI hands out is
+        # dropped with the adapter (a stored account gets its own on the
+        # next run). MySSI throttles by going silent, so the rows run one
+        # after the other with the adapter's own spacing.
+        from src.core.services.ssi import SsiAdapter
+        ssi_results = []
+        for account in ssi_rows:
+            try:
+                ok = SsiAdapter(account.email, account.password).login()
+            except Exception as e:
+                logger.error("MySSI credential test failed for %s: %s", account.email, e)
+                ok = False
+            ssi_results.append({"email": account.email.strip(), "ok": ok})
+        results["ssi"] = ssi_results
 
     if data.subsurface is not None and data.subsurface.configured:
         from src.core.services.subsurface_cloud import check_cloud_login

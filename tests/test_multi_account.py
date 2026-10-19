@@ -102,6 +102,12 @@ def test_scheduler_passes_subsurface_account_and_scoped_state(monkeypatch):
                                      "subsurface_username": "test@s.org", "account_scoped": True})
     assert captured["subsurface_username"] == "test@s.org" and captured["garmin_username"] == "test@g"
     assert captured["account_scoped_state"] is True
+    assert "ssi_account" not in captured
+    # a MySSI account picked on the Sync page (plans/myssi-sync.md K2) reaches the engine the same way
+    captured.clear()
+    scheduler.run_sync_thread(True, {"source": "garmin", "target": "ssi", "garmin_username": "test@g",
+                                     "ssi_account": "test@ssi.org", "account_scoped": True})
+    assert captured["ssi_account"] == "test@ssi.org" and captured["account_scoped_state"] is True
 
 
 class _FakeCloud:

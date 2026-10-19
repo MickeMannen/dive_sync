@@ -608,6 +608,67 @@ def test_unified_download_uses_the_adapter(tmp_path, monkeypatch):
         dive_cache.download_service_dives("garmin", base_dir=str(tmp_path))
 
 
+def test_myssi_is_cached_as_unified_dives_per_account(tmp_path, monkeypatch):
+    """MySSI (plans/myssi-sync.md K3): a UnifiedDive-cached service like
+    Subsurface Cloud, one folder per account (``ssi/<email>/data``). The
+    adapter is built through pairs.build_adapter for the account named by
+    its email or its cache folder, against `FakeSsi` - never the network -
+    and a download, the listing, the profile and a delete all go through
+    it; the token MySSI hands out lands in the credentials file."""
+    import src.core.config as config
+    from src.core import pairs
+    from src.core.services import ssi
+    from tests.test_ssi import EMAIL, PASSWORD, FakeSsi, logbook_dive
+    assert dive_cache.is_unified_cache("ssi") and "ssi" in dive_cache.UNIFIED_CACHE_SERVICES
+    creds_file = str(tmp_path / "credentials.json")
+    config.ConfigManager.save_credentials(config.CredentialsModel(
+        ssi=[config.SsiCredentials(email=EMAIL, password=PASSWORD), config.SsiCredentials(email="other@example.com", password="x")]),
+        creds_file)
+    original_load = config.ConfigManager.load_credentials
+    monkeypatch.setattr(config.ConfigManager, "load_credentials", lambda path=creds_file: original_load(creds_file))
+    monkeypatch.setattr(config, "CREDENTIALS_FILE", creds_file)
+    monkeypatch.setattr(config.ConfigManager, "load_settings", staticmethod(lambda path=None: config.SettingsModel()))
+
+    # the account is resolved before the adapter is built, like Subsurface's
+    built = []
+    with pytest.MonkeyPatch.context() as stub:
+        stub.setattr(pairs, "build_adapter", lambda spec, settings, **kw: built.append((spec, kw)) or "adapter")
+        assert dive_cache._unified_adapter("ssi", EMAIL) == "adapter"
+        assert dive_cache._unified_adapter("ssi", dive_cache.account_dir_name(EMAIL)) == "adapter"
+        assert dive_cache._unified_adapter("ssi") == "adapter"
+    assert built == [("ssi", {"ssi_account": EMAIL}), ("ssi", {"ssi_account": EMAIL}), ("ssi", {"ssi_account": None})]
+
+    profile = json.dumps([{"t": i * 5000, "d": round(min(20.0, i * 2.0), 1), "te": 27.0} for i in range(12)])
+    fake = FakeSsi(dives=[logbook_dive(1, "2026-06-01", "09:00", depth=18.5, divetime=45, odin_user_log_comment="first"),
+                          logbook_dive(2, "2026-06-02", "10:30", depth=20.0, divetime=50, odin_user_log_diveSamples=profile)])
+    real_init = ssi.SsiAdapter.__init__
+    monkeypatch.setattr(ssi.SsiAdapter, "__init__",
+                        lambda self, *a, **kw: real_init(self, *a, **dict(kw, transport=fake, sleep=lambda s: None)))
+
+    assert dive_cache.download_service_dives("ssi", base_dir=str(tmp_path), username=EMAIL) == 2
+    assert fake.whats() == ["authenticate", "get_divelog"]
+    assert os.path.isdir(os.path.join(str(tmp_path), "ssi", EMAIL, "data"))
+    assert sorted(os.listdir(os.path.join(str(tmp_path), "ssi", EMAIL, "data"))) == ["101.json", "102.json"]
+    stored = config.ConfigManager.load_credentials(creds_file).get_ssi_accounts()
+    assert [(a.email, a.token) for a in stored] == [(EMAIL, "tok-1"), ("other@example.com", "")]   # the on_token hook
+    rows = dive_cache.list_dives("ssi", EMAIL, base_dir=str(tmp_path))
+    assert [(r["id"], r["date"], r["time"], r["dive_number"], r["max_depth"], r["duration"], r["notes"]) for r in rows] == [
+        ("102", "2026-06-02", "10:30:00", 2, "20.00", 50, ""), ("101", "2026-06-01", "09:00:00", 1, "18.50", 45, "first")]
+    assert dive_cache.list_dives("ssi", "other@example.com", base_dir=str(tmp_path)) == []      # its own folder
+    samples = dive_cache.get_samples("ssi", "102.json", EMAIL, base_dir=str(tmp_path))
+    assert len(samples) == 12 and samples[1] == {"depth": 2.0, "temp": 27.0, "time": 5}
+    assert dive_cache.dive_external_id("ssi", "101.json", EMAIL, base_dir=str(tmp_path))[1] == "101"
+
+    # a delete: online through the adapter (the stored token, no new login), then the file
+    assert dive_cache.push_remote_delete("ssi", "101", EMAIL) is True
+    assert fake.logins == 1 and [d["odin_user_log_id"] for d in fake.live()] == ["102"]
+    dive_cache.delete_dive_local("ssi", "101.json", EMAIL, base_dir=str(tmp_path))
+    assert [r["id"] for r in dive_cache.list_dives("ssi", EMAIL, base_dir=str(tmp_path))] == ["102"]
+    # a second download prunes nothing wrongly and lists what MySSI still has
+    assert dive_cache.download_service_dives("ssi", base_dir=str(tmp_path), username=EMAIL) == 1
+    assert os.listdir(os.path.join(str(tmp_path), "ssi", EMAIL, "data")) == ["102.json"]
+
+
 def test_unified_cache_never_touches_the_adapters_device_state(tmp_path):
     """SubmersionAdapter keeps device.json and hlc_<id>.json in
     DATA_DIR/submersion - the device identity the Submersion sync mesh knows

@@ -192,6 +192,8 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
         account_kwargs["subsurface_username"] = custom_settings["subsurface_username"]
     if (custom_settings or {}).get("shearwater_account"):
         account_kwargs["shearwater_account"] = custom_settings["shearwater_account"]
+    if (custom_settings or {}).get("ssi_account"):
+        account_kwargs["ssi_account"] = custom_settings["ssi_account"]
     if (custom_settings or {}).get("account_scoped"):
         account_kwargs["account_scoped_state"] = True
     started_at = datetime.now()

@@ -510,7 +510,10 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
 # log or a git checkout - so their cache holds the UnifiedDive itself. That
 # makes the readers below trivial (the field names are already the unified
 # ones) and the write path exact: the file IS what update_dive() takes.
-UNIFIED_CACHE_SERVICES = ("submersion", "subsurface")
+# MySSI (plans/myssi-sync.md K3) is one more: its adapter reads the whole
+# logbook as UnifiedDives in one request, cached per account under
+# ``ssi/<email>/data`` (layout.py).
+UNIFIED_CACHE_SERVICES = ("submersion", "subsurface", "ssi")
 
 
 def is_unified_cache(service: str) -> bool:
@@ -1183,15 +1186,20 @@ def _active_credentials(service: str, username: Optional[str]):
 
 def _unified_adapter(service: str, username: Optional[str] = None):
     """The configured adapter for a UnifiedDive-cached service: the one
-    Submersion store, or a Subsurface Cloud account - ``username`` is its
-    email or its cache folder name (account_dir_name)."""
+    Submersion store, a Subsurface Cloud account or a MySSI account -
+    ``username`` is its email or its cache folder name (account_dir_name).
+    A MySSI adapter is built through pairs.build_adapter like a sync's, so
+    the token it obtains goes back to the credentials file (K2)."""
     from src.core.config import ConfigManager
     from src.core.pairs import build_adapter
     spec = "subsurface-cloud" if service == "subsurface" else service
     email = None
-    if username and service == "subsurface":
-        accounts = ConfigManager.load_credentials().get_subsurface_accounts()
+    if username and service in ("subsurface", "ssi"):
+        creds = ConfigManager.load_credentials()
+        accounts = creds.get_subsurface_accounts() if service == "subsurface" else creds.get_ssi_accounts()
         email = next((a.email for a in accounts if username in (a.email, account_dir_name(a.email))), username)
+    if service == "ssi":
+        return build_adapter(spec, ConfigManager.load_settings(), ssi_account=email)
     return build_adapter(spec, ConfigManager.load_settings(), subsurface_username=email)
 
 

@@ -13,7 +13,7 @@ The pages, one per entry in the sidebar:
 | Page | What it's for |
 |---|---|
 | [Sync](sync.md) | Pick a source and a target and sync now; download dives for the Dives pages. |
-| [Dives](dives.md) | Garmin, Divelogs and Subsurface dives in a table; edit, stage and save. |
+| [Dives](dives.md) | Garmin, Divelogs, Subsurface and MySSI dives in a table; edit, stage and save (MySSI: browse and delete until the update test). |
 | [Mapping](mapping.md) | The mapping board: what the target takes from the source, field by field. |
 | [Conflicts](conflicts.md) | Queued conflicts with the two values side by side. |
 | [Dive edit](convert.md) | Dive-computer files in, every field of a dive editable, UDDF, Subsurface or (for Garmin) `.fit` files out; merge a split dive; no account involved. |

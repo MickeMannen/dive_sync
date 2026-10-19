@@ -43,6 +43,8 @@ def build_controllers(log_queue) -> Dict[str, object]:
         "garminDives": DivesController("garmin", log_queue, units=units),
         "divelogsDives": DivesController("divelogs", log_queue, units=units),
         "subsurfaceDives": DivesController("subsurface", log_queue, units=units),
+        # MySSI Dives (plans/myssi-sync.md K3): read-only editor until K7
+        "ssiDives": DivesController("ssi", log_queue, units=units),
         "settingsController": SettingsController(),
         "mappingController": MappingController(),
         "conflictsController": ConflictsController(units=units),
@@ -52,10 +54,8 @@ def build_controllers(log_queue) -> Dict[str, object]:
     }
     # An account added or removed in Settings shows up in every picker at once.
     settings = controllers["settingsController"]
-    for name in ("syncController", "garminDives", "divelogsDives", "subsurfaceDives"):
+    for name in ("syncController", "garminDives", "divelogsDives", "subsurfaceDives", "ssiDives"):
         settings.credentialsChanged.connect(controllers[name].reloadAccounts)
-    # the MySSI login saved in Settings is what the Dive edit page sends with
-    settings.credentialsChanged.connect(controllers["convertController"].reloadSsiLogin)
     return controllers
 
 
