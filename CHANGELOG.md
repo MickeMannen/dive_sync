@@ -4,185 +4,117 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md`/`features.md` for the full
 development history and decision log.
 
-## Unreleased
+## 0.5.0 - 2026-10-20
 
-- UDDF: files exported by the Shearwater app read right. The PO2 no longer
-  shows as 0.00 bar (the app writes bar where UDDF uses pascal), each
-  transmitter's pressure curve stays on its tank, and the app's unused tank
-  slots no longer appear as extra "Air 0 bar" tanks. When DiveSync writes
-  into such a file it is saved in standard UDDF units.
-- UDDF: a rebreather file that lists its gases but no tanks (APD's
-  DiveSight, some other logbooks) now gets a gas list, as Subsurface imports
-  it: the mixes as diluents, plus a bailout tank for a gas switched to on
-  open circuit, and the gas switches point at those tanks. An APD
-  Inspiration's three O2 cells are read too.
-- Shearwater app: a rebreather dive's tanks are right. The app stores 21 %
-  for every tank of a CCR dive; DiveSync now reads a transmitter named O2 as
-  the oxygen tank (100 %) and one named D1, D2 or DIL as a diluent with the
-  mix breathed on the loop. Open-circuit dives are unchanged.
-- Dive edit: a Garmin Descent CCR dive shows its setpoint. The watch's low
-  and high setpoint and its switches between them are read (a setpoint line
-  in the profile tooltip, setpoint changes among the events), carried into
-  UDDF and Subsurface files, and kept in a `.fit` written from the dive.
-- Divelogs: the air temperature is read and written. It shows as the
-  optional **Air temp** column on the Divelogs Dives page and is offered on
-  the mapping board, so a rule can copy it between Divelogs and Subsurface,
-  UDDF or the Shearwater app. No rule is drawn for it by default, so the
-  first sync after upgrading changes nothing.
-- Web dashboard: the alerts webhook can also report successful runs. Next
-  to the webhook URL, choose **Send** when a run fails (the default, as
-  before), when a run changes something or fails, or after every run; the
-  message names the job, the direction and how many dives were added,
-  updated, skipped and failed, and says when it was a dry run. Handy for
-  ntfy or a home-automation trigger. In `settings.json` it is `notify_on`.
-- Garmin (beta, off by default): new dives can reach Garmin Connect with
-  their profile, tanks and gases. Tick **New Garmin dives as .fit (beta)** on
-  the Sync page or in a web dashboard job (or pass `--garmin-fit-upload`):
-  a dive the run creates on Garmin is uploaded as a `.fit` file instead of a
-  summary-only manual activity, its name, notes, buddy, weight and location
-  are set right after, and the log names what a `.fit` cannot carry. A dry
-  run lists what would be uploaded; Connect's "duplicate activity" answer
-  counts as skipped. Creating dives on Garmin must still be on for the pair.
-  Try it on one dive first.
+- MySSI (beta): **MySSI is a sync service** like the others - a source and a
+  target on the desktop Sync page (with an account picker and a beta note),
+  on the command line (`--source garmin --target ssi`, `--ssi-account`) and
+  on the web dashboard (Sync now, scheduled jobs, Download dives). It has a
+  mapping board and a place on the Conflicts page.
+- MySSI (beta): a sync towards MySSI **adds new dives only** until updating
+  a MySSI dive has been tested: a change to a dive already there is logged,
+  not sent; a dive with two or more tanks is skipped with a reason; and **no
+  sync run deletes on MySSI** (not Mirror, not propagate deletes), because a
+  MySSI delete is permanent.
+- MySSI (beta): on the Settings page the **MySSI** card is an account list
+  like Divelogs' (any number of logins, kept in the OS keychain); the login
+  saved by the previous version is moved into it. The CLI and Docker take
+  the same accounts in `credentials.json` (`setup_credentials.py --services
+  ssi`).
+- MySSI (beta): a **MySSI Dives** page: your MySSI logbook with the depth
+  profile, main tank and dive site, an account picker, Refresh and Delete.
+  The editor is read-only until updates are tested.
+- MySSI (beta): the Dive edit page no longer has MySSI buttons: MySSI is
+  synced from the Sync page and browsed on its own Dives page.
+- MySSI (beta): MySSI has no public API; DiveSync uses the MySSI app's own
+  connection, which SSI can change or close at any time.
 - Sync: dives logged on clocks in different time zones are matched instead
   of uploaded twice. Start times are compared in UTC where both services
   know the offset (Garmin, `.fit`, UDDF times with an offset); otherwise a
-  pair whose local times are a whole number of quarter hours apart (up to
-  14 hours) is matched when the max depth and duration agree closely and no
-  other dive fits as well. The sync log names each dive matched this way.
-  Dives already linked by earlier runs are never moved, and two dives
-  starting equally close to one dive now go by depth and duration instead
-  of list order.
-- Subsurface (git and Cloud): a dive keeps every tank's pressure curve and
-  the other values its dive computer logged per sample. Reading a Subsurface
-  log now brings each cylinder's pressure (sidemount and stage tanks
-  included), NDL, time to surface, deco stop, CNS, PO2 or a rebreather's
-  setpoint and O2 cells, and heart rate - shown in the profile tooltip and
-  carried to UDDF and `.fit` - and a new dive uploaded to Subsurface is
-  written with all of them, each pressure on its own cylinder, instead of
-  the first tank's pressure only. A sync still compares profiles on depth,
-  temperature and time, so linked dives are not updated because of this.
-- Exit position for drift dives: where you surfaced is kept beside the
-  entry position. Garmin's end position is read (read-only), Subsurface
-  (git and Cloud) reads and writes it as the dive computer's `GPS2` extra
-  data, as Subsurface's own Garmin import does, and UDDF files keep it in
-  DiveSync's own block of the dive. It is on the mapping board of those
-  services with no shipped rule, so nothing changes on your next run until
-  you draw one. UDDF saved from the Dive edit page no longer lists the exit
-  position among what it leaves out.
-- Water type, air temperature and suit are fields of the dive. They are
-  read and written where a service holds them - Subsurface (git and Cloud:
-  the salinity, `airtemp` and `suit`), UDDF files (`airtemperature` and a
-  named suit under the owner's equipment), `.ssrf` files (`temperature air`
-  beside the water temperature), the Shearwater app's air temperature (its
-  water type is the computer's own setting, read only) and MySSI's water
-  type (the air temperature read only) - and appear on the mapping board
-  of those services, so a rule can sync them; none is in the shipped
-  boards, so nothing changes on your next run until you draw one. The Dive
-  edit page gets an **Air temp** and a **Suit** field, and the Subsurface,
-  UDDF, Shearwater and MySSI dives pages three optional columns for them.
-- SAC on every page: the dives pages and the Dive edit page show the dive
-  computer's own surface air consumption when the dive holds one (a Garmin
-  `.fit`, or a file that carries it) and otherwise the one computed from the
-  tanks' sizes and pressures, the average depth and the duration, in L/min
-  or cuft/min as the Units setting says. On the Dive edit page the SAC is a
-  field of its own (the computed value sits in its placeholder, so it is
-  never stored by mistake) with RMV and OTU read-only beside it, and an
-  edited SAC goes into the `.fit` written by **Save as .fit**.
-- Rebreather dives: the O2 cells are kept. Each cell's measured PO2 is now
-  a value of its own beside the computer's PO2 and the setpoint, so a
-  Subsurface `.ssrf` with `sensor1`..`sensor3` reads with its cells and is
-  written back with them, a UDDF file carries them as `measuredpo2` per
-  `o2sensor` (and reads other apps' files that do), and the profile tooltip
-  shows a `Cells 1.22 / 1.19 / 1.21 bar` line that holds each cell's last
-  reading. A Garmin `.fit` has no field for them, so **Save as .fit** names
-  "O2 cell readings" among what it leaves out. A dive read from the
-  Shearwater app's database now keeps its computer's three O2 cells too
-  (each cell's millivolts times the calibration stored in the log, bar per
-  cell; cells still at the factory calibration are left out, as Subsurface
-  does, and the computer's own PPO2 stays).
-- **Rebreather (CCR) support is untested.** None of the above - the cells,
-  the setpoint, a diluent tank, the Shearwater cell readings - has been
-  through a real CCR dive yet (no such dive was available). The Dive edit
-  page and the Subsurface, UDDF, Shearwater and MySSI dives pages show a
-  muted note on a dive that holds rebreather data saying so; compare the
-  values with your dive computer's own log before relying on them.
-- Shearwater app: a dive read from the app's database now keeps everything
-  its computer logged per sample - the pressure of every paired transmitter
-  (each under its own tank, so a sidemount dive with two transmitters shows
-  both), NDL, time to surface, deco stop, CNS, ppO2, the setpoint on a
-  rebreather dive and GF99 - plus its gas switches and the computer's
-  model, serial, gradient factors, dive mode and water setting. Before,
-  only the first transmitter's pressure survived. The data reaches a UDDF
-  file, a `.fit` saved from the Dive edit page and the profile tooltip of
-  the dives pages; a sync still compares profiles on depth, temperature and
-  time, so nothing is re-sent because of it.
-- Dive edit: a Garmin `.fit` keeps more of what the watch wrote. The
-  surface air consumption (SAC), RMV and oxygen toxicity units (OTU) of its
-  dive summary are now read, and a rebreather's diluent tank keeps that
-  role, so a dive that goes through the app and out again as a new `.fit`
-  (**Save as .fit** for a dive that did not come from one) still carries
+  pair whose times are a whole time-zone shift apart (up to 14 hours) is
+  matched when max depth and duration agree and no other dive fits as well.
+  The log names each dive matched this way; dives already linked never move.
+- Sync: an update or new dive the target refused is no longer reported as
+  done: it is listed as **failed** in the CLI summary, the web dashboard's
+  results and run history, and the desktop Sync page's status line, and the
+  log says why. A dive the target already has counts as skipped.
+- Sync: a run that fails part way no longer forgets the dives it already
+  created: each pair is remembered the moment its upload succeeds, so the
+  next run does not create them again.
+- Sync: Mirror (or propagate deletes) towards the Shearwater app no longer
+  logs a false "Failed to delete" warning per dive; the app's dives are
+  never deleted, and the run counts them as skipped.
+- Garmin (beta, off by default): new dives can reach Garmin Connect with
+  their profile, tanks and gases: tick **New Garmin dives as .fit (beta)**
+  on the Sync page or in a web dashboard job (or pass
+  `--garmin-fit-upload`). A dive the run creates on Garmin is uploaded as a
+  `.fit` instead of a summary-only manual activity, its name, notes, buddy,
+  weight and location are set right after, and the log names what a `.fit`
+  cannot carry. A dry run lists what would be uploaded. Creating dives on
+  Garmin must still be on for the pair. Try it on one dive first.
+- Dive fields: **Water type, air temperature and suit** are fields of the
+  dive: read and written for Subsurface (git, Cloud, `.ssrf`), UDDF, the
+  Shearwater app's air temperature, Divelogs' air temperature and MySSI's
+  water type (read only). Dive edit gets **Air temp** and **Suit** fields;
+  the dives pages get optional columns.
+- Dive fields: **Exit position** for drift dives, beside the entry position:
+  read from Garmin, read and written for Subsurface (`GPS2`, as Subsurface's
+  own Garmin import) and UDDF.
+- Dive fields: **SAC** on the dives pages and the Dive edit page: the dive
+  computer's own value, otherwise computed from the tanks, average depth and
+  duration, in L/min or cuft/min. On Dive edit it is a field (an edited SAC
+  goes into **Save as .fit**), with RMV and OTU beside it.
+- Dive fields: none of the new fields has a shipped rule, so the first sync
+  after upgrading changes nothing; draw a rule on the mapping board to sync
   them.
-- Dive edit: a dive logged in a half-hour or quarter-hour time zone (India,
-  Nepal, Newfoundland, Adelaide) keeps its zone. A Garmin `.fit` from such a
-  dive used to lose the zone (the local time was right, the zone blank);
-  now it reads as `+05:30`, is saved back the same way, and a zone typed on
-  the page is kept at the same precision.
-
-- Dive edit and dives pages: the depth-profile tooltip shows the last
-  reading of a value the dive computer did not log at that sample (a tank
-  pressure, the temperature, the NDL), so it no longer blinks in and out
-  along the profile; a long tooltip wraps into two columns.
-
-- Sync: a run that fails part way (a dropped connection, a service error on
-  a later dive) no longer forgets the dives it had already created on the
-  other side. Each pair is remembered the moment its upload succeeds, so
-  the next run carries on from there instead of creating those dives again
-  on Garmin or Divelogs, which keep no foreign id.
-- Sync: an update the target refused or could not do is no longer reported
-  as updated, and a new dive the target did not add no longer disappears
-  from the summary as if nothing happened. Such writes are listed as
-  **failed** - in the CLI's summary block, the web dashboard's job results
-  and run history (with the service, id and reason), and the desktop Sync
-  page's status line ("Sync complete. 1 dive failed — check the log.") -
-  and the log says why. A dive the target already has (Divelogs' "already
-  exists", MySSI's duplicate check) is counted as skipped, not failed.
-- Shearwater: a Mirror run (or a pair with propagate deletes on) towards the
-  Shearwater app no longer logs a false "Failed to delete" warning for every
-  dive the other side does not have; dives are never deleted from the app's
-  database, so the run now says what it would have deleted and counts it as
-  skipped, like MySSI.
-- MySSI (beta): **MySSI is a sync service** like the others - a source and a
-  target on the desktop app's Sync page (with its own account picker and a
-  note under the pair saying what the beta means), on the command line
-  (`--source garmin --target ssi`, `ssi:<email>` or `--ssi-account` to pick an
-  account) and on the web dashboard (Sync now, scheduled jobs with a MySSI
-  account per job, Download dives). It gets a mapping board and a place on
-  the Conflicts page like every other pair. A sync towards MySSI **adds new
-  dives only** until updating a MySSI dive has been tested: a change to a
-  dive already there is logged per dive, not sent; a dive with two or more
-  tanks is skipped with a line saying why; and **no sync run deletes on
-  MySSI** - not Mirror, not a pair with propagate deletes on - it logs what
-  it would have deleted and counts it as skipped (a MySSI delete is
-  permanent and the dive number may not come back); only the MySSI Dives
-  page deletes there. MySSI has no public API, so the
-  connection is the MySSI app's own, which SSI can change or close at any
-  time; the whole feature is beta and not fully tested.
-- Settings page: the **MySSI** card is an account list like Divelogs' -
-  any number of MySSI logins with Test, Save and Remove, kept in the OS
-  keychain, the beta note under the title. The one login saved by the
-  previous version was moved into the list. The CLI and the Docker image
-  take the same accounts in `credentials.json` (`"ssi"`, written by
-  `setup_credentials.py --services ssi`), and the web dashboard's Settings
-  page edits them.
-- A **MySSI Dives** page (after Subsurface Dives): your MySSI logbook in the
-  same table as the other Dives pages, with the depth profile, the main tank
-  and the dive site, an account picker, Refresh and Delete (the confirmation
-  says that a MySSI delete is permanent). Editing a MySSI dive comes after
-  the update test; until then the editor is read-only and Save says so.
-- Dive edit page: the **Open MySSI** and **Send to SSI…** buttons of the
-  previous version are gone - MySSI is synced from the Sync page and browsed
-  on its own Dives page instead.
+- Profiles: **Shearwater app:** a dive keeps everything its computer logged
+  per sample - every paired transmitter's pressure on its own tank (so both
+  tanks of a sidemount dive show), NDL, time to surface, deco stop, CNS,
+  ppO2, GF99 and the setpoint - plus its gas switches and the computer's
+  model, serial, gradient factors, dive mode and water setting. Before, only
+  the first transmitter's pressure survived.
+- Profiles: **Subsurface (git and Cloud):** every cylinder's pressure curve
+  and the other per-sample values (NDL, TTS, deco stop, CNS, PO2 or
+  setpoint, O2 cells, heart rate) are read, and written to a new dive
+  uploaded there.
+- Profiles: a sync still compares profiles on depth, temperature and time,
+  so linked dives are not re-sent because profiles now carry more.
+- Profiles: the depth-profile tooltip shows the last reading of a value a
+  sample did not log (a tank pressure, the temperature, the NDL), so it no
+  longer blinks in and out; a long tooltip wraps into two columns.
+- Dive edit: a Garmin `.fit` keeps more of what the watch wrote: SAC, RMV,
+  OTU and a rebreather's diluent tank role are read and written back.
+- Dive edit: half-hour and quarter-hour time zones (India, Nepal,
+  Newfoundland, Adelaide) are kept: a `.fit` from such a dive reads as
+  `+05:30` and is saved back the same way.
+- Dive edit: UDDF files exported by the Shearwater app read right: PO2 no
+  longer shows as 0.00 bar, each transmitter's pressure stays on its tank,
+  and unused tank slots no longer appear as extra tanks. When DiveSync
+  writes into such a file it is saved in standard UDDF units.
+- Dive edit: a UDDF that lists its gases but no tanks (APD's DiveSight and
+  others) now gets a gas list as Subsurface imports it, and an APD
+  Inspiration's O2 cells are read.
+- Rebreathers (untested): O2 cells are kept per sample beside the computer's
+  PO2 and the setpoint: read and written in Subsurface `.ssrf`
+  (`sensor1`..`sensor3`) and UDDF (`measuredpo2`), read from the Shearwater
+  app's database (cells still at the factory calibration are left out, as
+  Subsurface does), and shown in the profile tooltip as `Cells 1.22 / 1.19 /
+  1.21 bar`. A `.fit` cannot hold them, and **Save as .fit** says so.
+- Rebreathers (untested): a Shearwater CCR dive's tanks are right: a
+  transmitter named O2 is the oxygen tank (100 %), D1, D2 or DIL a diluent
+  with the loop's mix.
+- Rebreathers (untested): a Garmin Descent CCR dive shows its low/high
+  setpoints and the switches between them, carried into UDDF, Subsurface and
+  `.fit` files.
+- Rebreathers (untested): **None of this has been checked against a real CCR
+  dive yet.** The Dive edit page and the dives pages show a note on a dive
+  with rebreather data; compare the values with your dive computer's own log
+  before relying on them.
+- Web dashboard: the alerts webhook can also report successful runs: next to
+  the webhook URL choose **Send** when a run fails (the default, as before),
+  when a run changes something or fails, or after every run. The message
+  names the job, the direction and the counts, and says when it was a dry
+  run. In `settings.json` it is `notify_on`.
 
 ## 0.4.5 - 2026-10-19
 
