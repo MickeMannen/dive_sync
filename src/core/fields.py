@@ -411,6 +411,7 @@ def rules_to_links(rules: Optional[Rules], match_keys: Optional[MatchKeys],
 # matched-pair loop did (weight always travels with its unit, GPS as a pair).
 _TUPLE_UNIFIED: Dict[str, Tuple[str, ...]] = {
     "gps": ("lat", "lng"),
+    "exit_gps": ("exit_lat", "exit_lng"),       # where the diver surfaced (plans/gap-roadmap.md R8)
     "weight": ("weight", "weight_unit"),
     "visibility": ("visibility", "visibility_unit"),
 }

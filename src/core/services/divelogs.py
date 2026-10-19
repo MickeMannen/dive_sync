@@ -16,6 +16,20 @@ logger = logging.getLogger("dive_sync.divelogs")
 DIVESITE_MAX_LENGTH = 50
 
 
+def _air_temp_of(value: Any) -> Optional[float]:
+    """Divelogs' ``airtemp`` as a number in the account's unit, or None:
+    Divelogs answers 0 for a dive with no air temperature (every dive in a
+    real cache does), so 0 is read as none - unlike ``depthtemp`` a value
+    below zero is kept, air can be below freezing (plans/gap-roadmap.md R10b)."""
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number != 0.0 else None
+
+
 class DivelogsAdapter(BaseDiveAdapter):
     service_id = "divelogs"
     display_name = "Divelogs.org"
@@ -31,6 +45,8 @@ class DivelogsAdapter(BaseDiveAdapter):
             FieldSpec(key="divelogs.max_depth", label="Max depth", type="number", unified="max_depth", unit="m"),
             FieldSpec(key="divelogs.avg_depth", label="Average depth", type="number", unified="avg_depth", unit="m"),
             FieldSpec(key="divelogs.temp_min", label="Water temperature", type="number", unified="temp_min", unit="°C"),
+            # R10b: the dive's ``airtemp`` (0 = none, as Divelogs stores an unset one); no shipped rule
+            FieldSpec(key="divelogs.air_temp", label="Air temperature", type="number", unified="air_temp", unit="°C"),
             FieldSpec(key="divelogs.dive_number", label="Dive number", type="number", unified="dive_number", writable=False),  # assigned by Divelogs from date/time
             FieldSpec(key="divelogs.location", label="Location", type="text"),
             FieldSpec(key="divelogs.divesite", label="Dive site", type="text", max_length=DIVESITE_MAX_LENGTH),
@@ -151,6 +167,7 @@ class DivelogsAdapter(BaseDiveAdapter):
             raise
 
     def add_dive(self, dive: UnifiedDive) -> Optional[str]:
+        self.add_skipped_reason = None
         if not self.bearer_token and not self.login():
             logger.error("Cannot add dive: Not authenticated with Divelogs.org.")
             return None
@@ -172,6 +189,7 @@ class DivelogsAdapter(BaseDiveAdapter):
                 errors = res_json.get("errors", [])
                 if errors and "already exists" in str(errors[0]).lower():
                     logger.warning("Dive at %s already exists on Divelogs.org. Skipping creation.", dive.date_time)
+                    self.add_skipped_reason = "already on Divelogs.org"       # a skip, not a failure (B4)
                 else:
                     logger.error("Divelogs rejected payload: %s", errors)
             else:
@@ -244,6 +262,8 @@ class DivelogsAdapter(BaseDiveAdapter):
         temp_val = data.get("depthtemp")
         temp_min = float(temp_val) if temp_val not in [None, ""] and float(temp_val) > 0.0 else None
 
+        air_temp = _air_temp_of(data.get("airtemp"))
+
         if self.imperial_units:
             # Feet to Meters
             max_depth = max_depth / 3.28084
@@ -252,6 +272,8 @@ class DivelogsAdapter(BaseDiveAdapter):
             # Fahrenheit to Celsius
             if temp_min is not None:
                 temp_min = (temp_min - 32) * 5 / 9
+            if air_temp is not None:
+                air_temp = (air_temp - 32) * 5 / 9
 
         dive_id = str(data.get("id") or "")
         external_ids = {}
@@ -422,6 +444,7 @@ class DivelogsAdapter(BaseDiveAdapter):
             max_depth=max_depth,
             avg_depth=avg_depth,
             temp_min=temp_min,
+            air_temp=air_temp,
             external_ids=external_ids,
             gas_mixtures=gas_mixtures,
             location=location,
@@ -451,6 +474,7 @@ class DivelogsAdapter(BaseDiveAdapter):
         max_depth = dive.max_depth
         avg_depth = dive.avg_depth
         temp_val = dive.temp_min
+        air_val = dive.air_temp
 
         if self.imperial_units:
             # Meters to Feet
@@ -460,6 +484,8 @@ class DivelogsAdapter(BaseDiveAdapter):
             # Celsius to Fahrenheit
             if temp_val is not None:
                 temp_val = (temp_val * 9 / 5) + 32
+            if air_val is not None:
+                air_val = (air_val * 9 / 5) + 32
 
         # Native location/divesite win when the dive carries them for this
         # service (a Divelogs dive being updated, or a link that wrote them);
@@ -547,6 +573,9 @@ class DivelogsAdapter(BaseDiveAdapter):
             "maxdepth": max_depth,
             "meandepth": avg_depth,
             "depthtemp": temp_val or 0.0,
+            # R10b: sent like depthtemp, 0 when the dive has none (what Divelogs
+            # holds for an unset air temperature), so an update keeps what was read
+            "airtemp": round(air_val, 1) if air_val is not None else 0,
             "location": location,
             "divesite": divesite,
             "notes": dive.notes or "",

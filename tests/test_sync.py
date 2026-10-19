@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 import pytest
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample
@@ -260,6 +261,9 @@ def test_gps_and_profile_graph_mapping():
     dive_a = g_adapter._map_to_unified({}, details_a)
     assert dive_a.lat == 4.23
     assert dive_a.lng == 118.63
+    assert (dive_a.exit_lat, dive_a.exit_lng) == (4.24, 118.64)      # the exit position, read only (R8)
+    exit_spec = next(f for f in GarminAdapter.field_catalog() if f.key == "garmin.exit_gps")
+    assert exit_spec.unified == "exit_gps" and exit_spec.type == "gps" and not exit_spec.writable
     
     # Case B: has no startLatitude/startLongitude but has endLatitude/endLongitude
     details_b = {
@@ -274,6 +278,9 @@ def test_gps_and_profile_graph_mapping():
     dive_b = g_adapter._map_to_unified({}, details_b)
     assert dive_b.lat == 4.24
     assert dive_b.lng == 118.64
+    assert (dive_b.exit_lat, dive_b.exit_lng) == (4.24, 118.64)
+    assert g_adapter._map_to_unified({}, {"summaryDTO": {"startTimeLocal": "2026-06-22T12:00:00", "duration": 3000,
+                                                        "maxDepth": 15.0, "endLatitude": 4.24}}).exit_lat is None   # one coordinate is none
 
     # Case C: has None metricDescriptors and/or None activityDetailMetrics
     details_c = {
@@ -960,3 +967,254 @@ def test_garmin_maps_a_cached_payload_without_a_client():
     assert GarminAdapter("dummy", "dummy")._map_to_unified(payload["summary"], payload["details"], None, payload["tanksensor"]) == dive
     assert GarminAdapter.from_cached_payload({"summary": {"activityId": 1, "startTimeLocal": "2026-01-01 10:00:00"}, "details": "x", "tanksensor": []}).external_ids == {"garmin": "1"}
     assert GarminAdapter._parse_datetime("2026-01-01T10:00:00.0") == datetime(2026, 1, 1, 10)
+
+
+def test_divelogs_add_dive_tells_a_duplicate_skip_from_a_failure():
+    """check.md B4: a 400 "already exists" from Divelogs is a skip the
+    engine counts as such (``add_skipped_reason`` set); any other refusal
+    or error leaves it None, so the engine counts the add as failed."""
+    from src.core.services.divelogs import DivelogsAdapter
+
+    class Response:
+        def __init__(self, status, body):
+            self.status_code, self._body, self.text = status, body, str(body)
+
+        def json(self):
+            return self._body
+
+    answers = []
+
+    class Session:
+        headers = {}
+
+        def post(self, url, json=None, timeout=None):
+            return answers.pop(0)
+
+    d = DivelogsAdapter("dummy", "dummy")
+    d.bearer_token, d.session, d.cooldown_seconds = "t", Session(), 0
+    dive = UnifiedDive(date_time=datetime(2026, 6, 22, 12), duration=100, max_depth=10.0)
+    answers.append(Response(400, {"errors": ["A dive already exists at this time"]}))
+    assert d.add_dive(dive) is None and d.add_skipped_reason == "already on Divelogs.org"
+    answers.append(Response(400, {"errors": ["maxdepth must be a number"]}))
+    assert d.add_dive(dive) is None and d.add_skipped_reason is None       # cleared: a real refusal
+    answers.append(Response(500, {}))
+    assert d.add_dive(dive) is None and d.add_skipped_reason is None
+    answers.append(Response(201, {"id": 77}))
+    assert d.add_dive(dive) == "77" and d.add_skipped_reason is None
+
+
+# ---------------------------------------------------------------------------
+# New dives to Garmin as a .fit upload (plans/gap-roadmap.md R13, beta). The
+# transport is a fake client: nothing is ever uploaded from a test.
+# ---------------------------------------------------------------------------
+
+def _fit_dive(**kw):
+    base = dict(date_time=datetime(2026, 6, 22, 10, 0, 0), date_time_utc=datetime(2026, 6, 22, 8, 0, 0),
+                duration=120, max_depth=12.0, notes="Wreck dive", buddy="Ann", suit="7 mm",
+                external_ids={"divelogs": "77"},
+                gas_mixtures=[GasMixture(oxygen=32.0, helium=0.0, start_pressure=200.0, end_pressure=60.0, tank_volume=12.0)],
+                samples=[UnifiedSample(time=t, depth=min(12.0, t / 5.0), temp=18.0) for t in range(0, 121, 10)])
+    base.update(kw)
+    return UnifiedDive(**base)
+
+
+class _UploadClient:
+    """garminconnect.Garmin as far as the .fit upload uses it: records the
+    uploaded file's bytes and answers like Connect's upload service."""
+
+    def __init__(self, answer=None, error=None, recent=None, current=None):
+        self.answer = answer
+        self.error = error
+        self.recent = recent or []
+        self.current = current or {}
+        self.uploads = []
+        self.listed = 0
+        self.puts = []
+        self.posts = []
+        outer = self
+
+        class Inner:
+            def put(self, domain, url, json=None, api=False):
+                outer.puts.append((url, json))
+                return None
+
+            def post(self, domain, url, json=None, api=False):
+                outer.posts.append((url, json))
+                return {"activityId": 555}
+        self.client = Inner()
+
+    def upload_activity(self, path):
+        with open(path, "rb") as f:
+            self.uploads.append((os.path.basename(path), f.read()))
+        if self.error:
+            raise self.error
+        return self.answer
+
+    def get_activities(self, start, limit, activitytype=None):
+        self.listed += 1
+        return self.recent
+
+    def connectapi(self, url, params=None):
+        return self.current
+
+
+def _fit_garmin(client, monkeypatch, sleeps=None):
+    from src.core.services import garmin as garmin_module
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy", cooldown_seconds=0.25)
+    g.logged_in = True
+    g.client = client
+    g.fit_upload = True
+    monkeypatch.setattr(garmin_module.time, "sleep", lambda s: (sleeps if sleeps is not None else []).append(s))
+    return g
+
+
+def test_garmin_fit_upload_sends_the_dive_as_a_fit_and_sets_what_the_file_cannot(monkeypatch):
+    """With fit_upload on, a dive with a profile goes to Connect's upload
+    service as a .fit written by the FIT writer (the profile and the tank
+    arrive), the new activity id comes from the answer, and the fields the
+    file cannot hold but the activity can (notes, buddy) are set right after
+    through update_dive. Every request is spaced by the cooldown."""
+    from src.core.convert.fit_reader import read_fit
+    client = _UploadClient(answer={"detailedImportResult": {"uploadId": 9, "successes": [{"internalId": 123456}],
+                                                             "failures": []}},
+                           current={"activityId": 123456, "summaryDTO": {"startTimeLocal": "2026-06-22T10:00:00.0",
+                                                                        "duration": 120, "maxDepth": 12.0}})
+    sleeps = []
+    g = _fit_garmin(client, monkeypatch, sleeps)
+    dive = _fit_dive()
+
+    assert g.add_dive(dive) == "123456" and g.add_skipped_reason is None
+    (name, data), = client.uploads
+    assert name.endswith(".fit") and data[8:12] == b".FIT"
+    back = read_fit(data)
+    assert back.date_time == dive.date_time and back.date_time_utc == dive.date_time_utc
+    assert len(back.samples) == len(dive.samples) and back.max_depth == 12.0
+    assert back.gas_mixtures[0].oxygen == 32.0 and back.gas_mixtures[0].start_pressure == 200.0
+    assert client.posts == []                                # no manual activity
+    (url, payload), = client.puts                            # the follow-up: what the .fit cannot carry
+    assert url == "/activity-service/activity/123456"
+    assert payload["description"] == "Wreck dive" and payload["diveInfo"]["buddy"] == "Ann"
+    assert sleeps and all(s >= 0.25 for s in sleeps)
+
+
+def test_garmin_fit_upload_finds_the_activity_while_connect_is_processing(monkeypatch):
+    """Connect answers 202 before the activity exists: no id in the answer,
+    so the newest diving activities are listed (spaced by at least
+    FIT_UPLOAD_POLL_SECONDS) for the one that starts at the dive's time."""
+    from src.core.services import garmin as garmin_module
+    client = _UploadClient(answer={"detailedImportResult": {"uploadId": 9, "successes": [], "failures": []}},
+                           recent=[{"activityId": 1, "startTimeLocal": "2026-06-21 10:00:00"},
+                                   {"activityId": 777, "startTimeLocal": "2026-06-22 10:00:30"}])
+    sleeps = []
+    g = _fit_garmin(client, monkeypatch, sleeps)
+    assert g.add_dive(_fit_dive(notes=None, buddy=None, suit=None)) == "777"
+    assert client.listed == 1 and garmin_module.FIT_UPLOAD_POLL_SECONDS in sleeps
+    assert client.puts == []                                 # nothing the activity holds was left out
+
+    client.recent = [{"activityId": 1, "startTimeLocal": "2026-06-21 10:00:00"}]
+    client.listed = 0
+    assert g.add_dive(_fit_dive(notes=None, buddy=None, suit=None)) is None   # uploaded, id unknown: said, failed
+    assert client.listed == garmin_module.FIT_UPLOAD_POLL_ATTEMPTS and g.add_skipped_reason is None
+
+
+def test_garmin_fit_upload_tells_a_duplicate_from_a_failure(monkeypatch):
+    """Connect's duplicate answer (HTTP 409, or a failure saying "Duplicate
+    Activity") is a skip with a reason, like Divelogs' "already exists"
+    (check.md B4); a rate limit or any other error is a failure."""
+    from garminconnect import GarminConnectConnectionError, GarminConnectTooManyRequestsError
+    client = _UploadClient(error=GarminConnectConnectionError("API Error 409 - Duplicate Activity."))
+    g = _fit_garmin(client, monkeypatch)
+    assert g.add_dive(_fit_dive()) is None and "already on Garmin Connect" in g.add_skipped_reason
+
+    g.add_skipped_reason = None
+    client.error = None
+    client.answer = {"detailedImportResult": {"successes": [], "failures": [
+        {"internalId": 4242, "messages": [{"code": 202, "content": "Duplicate Activity."}]}]}}
+    assert g.add_dive(_fit_dive()) is None and "activity 4242" in g.add_skipped_reason
+
+    for error in (GarminConnectTooManyRequestsError("429"), GarminConnectConnectionError("API Error 429"),
+                  GarminConnectConnectionError("API Error 500"),
+                  GarminConnectConnectionError("API Error 500 - upload 14093 failed")):   # "409" inside a number
+        g.add_skipped_reason = None
+        client.error = error
+        assert g.add_dive(_fit_dive()) is None and g.add_skipped_reason is None
+    assert client.puts == [] and client.posts == []
+
+
+def test_garmin_fit_upload_only_with_the_switch_on_and_a_profile(monkeypatch):
+    """Off (the default), or a dive without samples: the manual activity
+    as before, nothing uploaded."""
+    client = _UploadClient()
+    g = _fit_garmin(client, monkeypatch)
+    g.fit_upload = False
+    assert g.add_dive(_fit_dive()) == "555" and client.uploads == []
+    g.fit_upload = True
+    assert g.add_dive(_fit_dive(samples=[])) == "555" and client.uploads == []
+    assert len(client.posts) == 2
+
+
+def test_garmin_upload_details_name_what_the_fit_cannot_carry():
+    """upload_details (the dry run's line and the results entry): sent as
+    .fit, what is set on the activity afterwards, what is lost - never the
+    other services' ids (the link is in sync_state); nothing when off."""
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    assert g.upload_details(_fit_dive()) == {}               # off by default
+    g.fit_upload = True
+    details = g.upload_details(_fit_dive())
+    assert details["upload_as"] == "fit" and details["fit_drops"] == ["suit"]
+    assert "set on the activity after the upload: buddy, notes" in details["note"]
+    assert "not carried to Garmin: suit" in details["note"] and "service ids" not in details["note"]
+    assert g.upload_details(_fit_dive(samples=[])) == {}
+    # another service's service fields never reach Garmin, so they are not
+    # listed; Garmin's own name fields are, and the site goes in as the name
+    set_after, dropped = g.fit_upload_split(_fit_dive(location="Reef", buddy=None, notes=None, suit=None,
+                                                      service_fields={"divesite": "Ön", "activityName": "Reef",
+                                                                      "locationName": "Malmö"}))
+    assert set_after == ["activity name", "location name"] and dropped == []
+
+
+def test_garmin_fit_upload_gives_a_dive_without_a_zone_the_account_zone():
+    """A dive with no UTC clock and no zone would be written as if its local
+    clock were UTC; it gets the zone a manual activity is stamped with."""
+    from src.core.convert.edit import utc_offset_of
+    from src.core.services.garmin import GarminAdapter
+    g = GarminAdapter("dummy", "dummy")
+    g.upload_timezone = "Asia/Kuala_Lumpur"
+    zoneless = _fit_dive(date_time_utc=None)
+    ready = g._fit_ready(zoneless)
+    assert ready.timezone == "Asia/Kuala_Lumpur" and zoneless.timezone is None
+    assert utc_offset_of(ready).total_seconds() == 8 * 3600
+    dive = _fit_dive()
+    assert g._fit_ready(dive) is dive                        # its own clocks win
+
+
+def test_divelogs_air_temperature_read_and_written():
+    """plans/gap-roadmap.md R10b: Divelogs' ``airtemp`` is the dive's
+    ``air_temp`` - read (0, what Divelogs holds when none is set, is none;
+    below zero is kept), sent with every add and update like ``depthtemp``
+    (0 when the dive has none, so an update keeps what was read), in °F on
+    an imperial account - and named in the catalogue for a rule to use."""
+    from src.core.services.divelogs import DivelogsAdapter
+    metric = DivelogsAdapter("dummy", "dummy")
+    imperial = DivelogsAdapter("dummy", "dummy")
+    imperial.imperial_units = True
+    base = {"date": "2026-06-22", "time": "12:00:00", "duration": 3000, "maxdepth": 15.0}
+
+    assert metric._map_to_unified(dict(base, airtemp=24.5)).air_temp == 24.5
+    assert metric._map_to_unified(dict(base, airtemp="27")).air_temp == 27.0
+    assert metric._map_to_unified(dict(base, airtemp=-3)).air_temp == -3.0
+    for unset in ({"airtemp": 0}, {"airtemp": ""}, {"airtemp": None}, {}):
+        assert metric._map_to_unified(dict(base, **unset)).air_temp is None, unset
+    assert imperial._map_to_unified(dict(base, airtemp=77)).air_temp == 25.0
+
+    dive = metric._map_to_unified(dict(base, airtemp=24.5))
+    assert metric._map_from_unified(dive)["airtemp"] == 24.5
+    assert imperial._map_from_unified(dive)["airtemp"] == 76.1
+    assert metric._map_from_unified(metric._map_to_unified(base))["airtemp"] == 0     # none: Divelogs' own unset value
+    # an update of a dive read from Divelogs sends back what was read
+    assert metric._map_to_unified(metric._map_from_unified(dive)).air_temp == 24.5
+
+    spec = next(f for f in DivelogsAdapter.field_catalog() if f.key == "divelogs.air_temp")
+    assert (spec.unified, spec.type, spec.unit, spec.writable) == ("air_temp", "number", "°C", True)

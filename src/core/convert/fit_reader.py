@@ -2,12 +2,16 @@
 
 The decoder is `fitdecode` (MIT, pure Python). The reading rules are ported
 from UWMedia's ``parsers/garmin.py`` (MIT, same owner): the local zone from
-the ``activity`` message's ``local_timestamp`` against its ``timestamp``,
+the ``activity`` message's ``local_timestamp`` against its ``timestamp``
+(kept as a fixed offset, ``UTC+05:30``, half hours included - R7),
 entry and exit positions from the ``session``, gases from ``dive_gas``, the
 ``tank_update`` readings merged onto the ``record`` samples, ``dive_alert``
 events. Added here, from the messages UWMedia's telemetry reader skips:
-``dive_summary`` (dive number, bottom time, surface interval, CNS),
-``dive_settings`` (deco model, gradient factors, water type and density),
+``dive_summary`` (dive number, bottom time, surface interval, CNS, SAC and
+RMV, OTU), ``dive_gas.mode`` (a rebreather's diluent as the tank's role;
+plans/gap-roadmap.md R6), ``dive_settings`` (deco model, gradient factors, water type and density; a
+rebreather's low and high setpoint, which the setpoint switch alerts turn
+into ``setpoint_change`` events and a per-sample setpoint - check.md B17),
 ``tank_summary`` (start and end pressure per transmitter), the transmitter
 profiles (message 147, named by libdivecomputer's ``garmin.c``: name and
 volume) and the ``dive_gas_switched`` event.
@@ -40,9 +44,11 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 import fitdecode
 
 from src.core import garmin_files
+from src.core.convert.edit import zone_for_offset
 from src.core.models import (
     EVENT_ALERT,
     EVENT_GAS_SWITCH,
+    EVENT_SETPOINT_CHANGE,
     KNOWN_WATER_TYPES,
     DiveEvent,
     GasMixture,
@@ -76,7 +82,19 @@ DIVE_MODES: Dict[Any, str] = {
 APNEA_SUB_SPORTS = frozenset({"apnea_diving", 56, "apnea_hunting", 57, "dynamic_apnea", 121})
 # dive_settings.model -> the name Subsurface and the UDDF files use.
 DECO_MODELS = {"zhl_16c": "ZHL-16C"}
+# dive_gas.mode -> GasMixture.tank_role (R6). Garmin's profile knows two
+# modes: open_circuit (0), which is no role - a sidemount or stage tank is
+# open circuit too, so it stays None - and closed_circuit_diluent (1), the
+# role the writer encodes back (fit_writer.py). The number is for a
+# fitdecode whose profile does not name the value.
+GAS_ROLES: Dict[Any, str] = {"closed_circuit_diluent": "diluent", 1: "diluent"}
 # The FIT events a dive keeps; the timer and lap events are the dive's own start and stop.
+# A Garmin rebreather's setpoint switches (check.md B17): the dive_alert
+# names, and which of dive_settings' two setpoints each switches to.
+SETPOINT_ALERTS: Dict[str, str] = {
+    "setpoint_switch_auto_low": "low", "setpoint_switch_manual_low": "low",
+    "setpoint_switch_auto_high": "high", "setpoint_switch_manual_high": "high",
+}
 EVENT_TANK_POD_CONNECTED = "tank_pod_connected"
 EVENT_TANK_POD_DISCONNECTED = "tank_pod_disconnected"
 
@@ -105,6 +123,7 @@ class _Gas:
     index: int
     oxygen: float
     helium: float
+    role: Optional[str] = None
 
 
 @dataclass
@@ -161,16 +180,15 @@ def _naive_utc(fit_seconds: int) -> datetime:
 
 
 def zone_name(offset_seconds: int) -> Optional[str]:
-    """The IANA name of a fixed offset, for whole hours: ``Etc/GMT-7`` is
-    UTC+7 (the Etc zones carry the inverted sign of the POSIX convention).
-    A FIT holds the offset, not the zone, so this is the most that can be
-    said; a half-hour offset has no Etc zone and gives None."""
-    hours, rest = divmod(offset_seconds, 3600)
-    if rest or not -12 <= hours <= 14:
+    """The ``timezone`` value of a FIT's UTC offset: the fixed-offset
+    spelling ``UTC+07:00`` / ``UTC+05:30`` (`edit.zone_for_offset`, the
+    same the Dive edit page stores), since a FIT holds the offset, not the
+    zone. Half-hour and quarter-hour offsets (India, Nepal, Newfoundland,
+    Adelaide) are kept like whole hours (plans/gap-roadmap.md R7; before it
+    they gave None). An offset outside -12..+14 h is no zone: None."""
+    if not -12 * 3600 <= offset_seconds <= 14 * 3600:
         return None
-    if hours == 0:
-        return "Etc/UTC"
-    return f"Etc/GMT{'-' if hours > 0 else '+'}{abs(hours)}"
+    return zone_for_offset(timedelta(seconds=offset_seconds))
 
 
 def decode(data: bytes) -> _Messages:
@@ -249,15 +267,21 @@ def _tanks(messages: _Messages) -> List[_Tank]:
 
 def _gases(messages: _Messages) -> List[_Gas]:
     """The gases of the dive in ``dive_gas`` order, without the disabled
-    ones; ``index`` is the message index the gas switch events refer to."""
+    ones; ``index`` is the message index the gas switch events refer to,
+    ``role`` the tank role its ``mode`` names (`GAS_ROLES`; None for open
+    circuit or no mode)."""
     out = []
     for gas in messages.all("dive_gas"):
         if _value(gas, "status") == "disabled":
             continue
         index = _int(_value(gas, "message_index"))
         oxygen, helium = _float(_value(gas, "oxygen_content")), _float(_value(gas, "helium_content"))
+        mode = _value(gas, "mode")
+        role = GAS_ROLES.get(mode) if mode is not None else None
+        if role is None and mode is not None:
+            role = GAS_ROLES.get(_int(_value(gas, "mode", raw=True)))
         out.append(_Gas(index if index is not None else len(out), oxygen if oxygen is not None else 21.0,
-                        helium if helium is not None else 0.0))
+                        helium if helium is not None else 0.0, role))
     return out
 
 
@@ -265,10 +289,14 @@ def _gas_mixtures(gases: Sequence[_Gas], tanks: Sequence[_Tank]) -> List[GasMixt
     """One entry per tank, pairing transmitter i with gas i as Garmin Connect
     does (``tankIndex`` = ``gasIndex``). More transmitters than gases: the
     extra tanks hold the first gas (a single-gas dive with two transmitters).
-    More gases than transmitters: the extra gases have no pressures."""
+    More gases than transmitters: the extra gases have no pressures. The
+    role is the gas's own (its ``dive_gas.mode``): an extra tank that holds
+    the first gas does not take its diluent role (on a rebreather the
+    second transmitter is the oxygen, not a diluent)."""
     out = []
     for i in range(max(len(gases), len(tanks))):
-        gas = gases[i] if i < len(gases) else (gases[0] if gases else None)
+        own = gases[i] if i < len(gases) else None
+        gas = own if own is not None else (gases[0] if gases else None)
         tank = tanks[i] if i < len(tanks) else None
         out.append(GasMixture(
             oxygen=gas.oxygen if gas else 21.0,
@@ -277,6 +305,7 @@ def _gas_mixtures(gases: Sequence[_Gas], tanks: Sequence[_Tank]) -> List[GasMixt
             end_pressure=tank.end_pressure if tank else None,
             tank_volume=tank.volume if tank else None,
             tank_name=tank.name if tank else None,
+            tank_role=own.role if own else None,
         ))
     return out
 
@@ -325,6 +354,42 @@ def _samples(messages: _Messages, start: int, tanks: Sequence[_Tank]) -> List[Un
     return samples
 
 
+def setpoint_switches(events: Sequence[DiveEvent]) -> List[DiveEvent]:
+    """The setpoint changes a FIT holds: those named by a Garmin setpoint
+    switch alert, with a value, in time order."""
+    return sorted((e for e in events if e.type == EVENT_SETPOINT_CHANGE and e.name in SETPOINT_ALERTS
+                   and e.value is not None), key=lambda e: e.time)
+
+
+def setpoints_of(events: Sequence[DiveEvent]) -> Dict[str, float]:
+    """``{"low": bar, "high": bar}`` as far as the setpoint switches name them."""
+    return {SETPOINT_ALERTS[e.name]: float(e.value) for e in setpoint_switches(events)}
+
+
+def sample_setpoints(times: Sequence[Optional[int]], events: Sequence[DiveEvent],
+                     setpoints: Optional[Dict[str, float]] = None) -> List[Optional[float]]:
+    """The setpoint in force at each sample time, from the logged switches
+    only (B17): the value of the last switch at or before the sample, and
+    before the first switch the other of the two setpoints (a dive that
+    first switches to high was on low until then) when ``setpoints`` (the
+    file's dive_settings, else what the switches name) knows it. No switch:
+    no setpoint anywhere - none is invented."""
+    switches = setpoint_switches(events)
+    if not switches:
+        return [None] * len(times)
+    known = dict(setpoints_of(events), **{k: v for k, v in (setpoints or {}).items() if v is not None})
+    first_side = SETPOINT_ALERTS[switches[0].name]
+    current = known.get("high" if first_side == "low" else "low")
+    out: List[Optional[float]] = []
+    i = 0
+    for t in times:
+        while i < len(switches) and t is not None and switches[i].time <= t:
+            current = float(switches[i].value)
+            i += 1
+        out.append(current)
+    return out
+
+
 def _average_depth(samples: Sequence[UnifiedSample]) -> Optional[float]:
     """Time-weighted (trapezoid) mean depth over the whole profile."""
     if not samples:
@@ -337,8 +402,12 @@ def _average_depth(samples: Sequence[UnifiedSample]) -> Optional[float]:
     return round(area / ((samples[-1].time or 0) - (samples[0].time or 0)), 3)
 
 
-def _events(messages: _Messages, start: int, gases: Sequence[_Gas], tanks: Sequence[_Tank]) -> List[DiveEvent]:
-    """Gas switches, alerts and transmitter connections, in time order."""
+def _events(messages: _Messages, start: int, gases: Sequence[_Gas], tanks: Sequence[_Tank],
+            setpoints: Optional[Dict[str, Optional[float]]] = None) -> List[DiveEvent]:
+    """Gas switches, alerts, setpoint switches (a ``setpoint_change`` named
+    by the alert, its value the dive_settings setpoint it switches to;
+    ``setpoints`` = {"low", "high"}) and transmitter connections, in time
+    order."""
     gas_entry = {gas.index: i for i, gas in enumerate(gases)}
     tank_entry = {tank.sensor: i for i, tank in enumerate(tanks)}
     out: List[DiveEvent] = []
@@ -353,6 +422,9 @@ def _events(messages: _Messages, start: int, gases: Sequence[_Gas], tanks: Seque
             gas = gases[entry] if entry is not None else None
             out.append(DiveEvent(time=time, type=EVENT_GAS_SWITCH, tank=entry,
                                  oxygen=gas.oxygen if gas else None, helium=gas.helium if gas else None))
+        elif kind == "dive_alert" and str(data) in SETPOINT_ALERTS:
+            out.append(DiveEvent(time=time, type=EVENT_SETPOINT_CHANGE, name=str(data),
+                                 value=(setpoints or {}).get(SETPOINT_ALERTS[str(data)])))
         elif kind == "dive_alert":
             out.append(DiveEvent(time=time, type=EVENT_ALERT, name=str(data) if data is not None else None,
                                  value=_float(raw)))
@@ -466,6 +538,11 @@ def to_unified(messages: _Messages, name: Optional[str] = None, member: Optional
 
     tanks, gases = _tanks(messages), _gases(messages)
     samples = _samples(messages, start, tanks)
+    setpoints = {"low": _float(_value(settings, "ccr_low_setpoint")), "high": _float(_value(settings, "ccr_high_setpoint"))}
+    events = _events(messages, start, gases, tanks, setpoints)
+    for sample, setpoint in zip(samples, sample_setpoints([s.time for s in samples], events, setpoints)):
+        if setpoint is not None and sample.channels is not None:
+            sample.channels.setpoint = setpoint
     duration = _int(_value(session, "total_timer_time"))
     if duration is None:
         duration = _int(_value(session, "total_elapsed_time"))
@@ -504,7 +581,7 @@ def to_unified(messages: _Messages, name: Optional[str] = None, member: Optional
         lng=_degrees(_value(session, "start_position_long")),
         samples=samples,
         device_logged=True,
-        events=_events(messages, start, gases, tanks),
+        events=events,
         computer_vendor=str(vendor).capitalize() if isinstance(vendor, str) else None,
         computer_model=_model(messages),
         computer_serial=str(serial) if serial else None,
@@ -521,6 +598,11 @@ def to_unified(messages: _Messages, name: Optional[str] = None, member: Optional
         bottom_time=_int(_value(summary, "bottom_time")),
         cns_start=_float(_value(summary, "start_cns")),
         cns_end=_float(_value(summary, "end_cns")),
+        # the watch's own air consumption and oxygen toxicity (R6): volume SAC
+        # and RMV in L/min (fitdecode applies the profile's scale of 100), OTU
+        sac=_float(_value(summary, "avg_volume_sac")),
+        rmv=_float(_value(summary, "avg_rmv")),
+        otu=_float(_value(summary, "o2_toxicity")),
     )
 
 

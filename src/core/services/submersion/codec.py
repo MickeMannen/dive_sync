@@ -1,6 +1,6 @@
-"""Submersion profile-series codecs (rework.md F10), ported from the
-``ProfileSeriesCodec`` v1 format and verified byte-for-byte against real
-exports (tests/data/submersion).
+"""Submersion profile-series codecs (rework.md F10), written from the
+description of Submersion's ``ProfileSeriesCodec`` v1 format and verified byte-for-byte against the
+owner's own exports (tests/data/submersion).
 
 Layout (after zlib): ``version(1) | sampleCount varint | one block per
 column``. A block starts with a presence byte: 0 = all null (no values

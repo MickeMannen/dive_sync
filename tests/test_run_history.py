@@ -21,10 +21,12 @@ def test_count_results_keeps_only_what_happened():
         "updated_on_divelogs": [{}],
         "deleted_on_divelogs": [],
         "skipped": [{}],
+        "failed": [{"action": "update"}],
         "conflicts": [],
         "source": "garmin",
     })
-    assert counts == {"matched": 4, "uploaded_to_divelogs": 2, "updated_on_divelogs": 1, "skipped": 1}
+    assert counts == {"matched": 4, "uploaded_to_divelogs": 2, "updated_on_divelogs": 1, "skipped": 1, "failed": 1}
+    assert "failed" not in run_history.count_results({"failed": [], "matched_count": 0})
 
 
 def test_record_and_list_newest_first():

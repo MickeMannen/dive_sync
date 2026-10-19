@@ -653,3 +653,16 @@ def test_mock_adapters_delete_dive(tmp_path):
 
 
 
+
+
+def test_mock_garmin_says_what_would_go_as_a_fit(tmp_path):
+    """The offline Garmin stands in for the real one in a dry run (R13): its
+    upload_details follow the run's fit_upload switch like GarminAdapter's."""
+    from src.core.models import UnifiedSample
+    from src.core.services.mock_adapters import LocalMockGarminAdapter
+    adapter = LocalMockGarminAdapter(mock_data_dir=str(tmp_path))
+    dive = UnifiedDive(date_time=datetime(2026, 6, 22, 10), duration=120, max_depth=10.0, notes="n",
+                       samples=[UnifiedSample(time=0, depth=0.0), UnifiedSample(time=60, depth=10.0)])
+    assert adapter.fit_upload is False and adapter.upload_details(dive) == {}
+    adapter.fit_upload = True
+    assert adapter.upload_details(dive)["upload_as"] == "fit"

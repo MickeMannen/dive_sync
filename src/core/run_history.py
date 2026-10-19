@@ -37,13 +37,15 @@ def history_path() -> str:
 
 def count_results(results: Optional[Dict[str, Any]]) -> Dict[str, int]:
     """How many dives each kind of action touched: uploaded_to_<svc>,
-    updated_on_<svc>, deleted_on_<svc>, skipped and conflicts. Empty lists
-    are left out so a listing names only what happened; matched_count is
-    kept even at 0, as it says the run compared something."""
+    updated_on_<svc>, deleted_on_<svc>, skipped, failed (writes the receiver
+    refused or that broke) and conflicts. Empty lists are left out so a
+    listing names only what happened; matched_count is kept even at 0, as
+    it says the run compared something."""
     counts: Dict[str, int] = {}
     for key, value in (results or {}).items():
         if isinstance(value, list) and value and (
-                key.startswith(("uploaded_to_", "updated_on_", "deleted_on_")) or key in ("skipped", "conflicts")):
+                key.startswith(("uploaded_to_", "updated_on_", "deleted_on_"))
+                or key in ("skipped", "failed", "conflicts")):
             counts[key] = len(value)
     if isinstance((results or {}).get("matched_count"), int):
         counts["matched"] = results["matched_count"]

@@ -78,6 +78,102 @@ def test_run_sync_thread_success_sends_no_alert(monkeypatch):
     assert calls == []
 
 
+def _capture_summaries(monkeypatch, settings):
+    from src.core.config import ConfigManager
+    from src.core import notify
+    monkeypatch.setattr(ConfigManager, "load_settings", lambda path=None: settings)
+    sent = []
+    monkeypatch.setattr(notify, "notify_run_finished",
+                        lambda url, job_id, pair, results, dry_run: sent.append((url, job_id, pair, results, dry_run)))
+    failures = []
+    monkeypatch.setattr(notify, "notify_run_failure", lambda *a: failures.append(a))
+    return sent, failures
+
+
+def test_run_sync_thread_sends_summary_when_notify_on_always(monkeypatch):
+    """R24: notify_on 'always' sends the finished run's summary, with the job,
+    the direction it went and the dry-run flag; no failure alert."""
+    from src.core.sync_engine import SyncEngine
+    results = {"uploaded_to_divelogs": [{"id": "1"}], "skipped": []}
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False: results)
+    sent, failures = _capture_summaries(
+        monkeypatch, SettingsModel(notify_url="https://ntfy.sh/mytopic", notify_on="always"))
+
+    scheduler.run_sync_thread(dry_run=True)
+
+    assert sent == [("https://ntfy.sh/mytopic", "Manual", "garmin -> divelogs", results, True)]
+    assert failures == []
+
+
+def test_run_label_names_the_direction_the_run_went():
+    class Engine:
+        source_id, target_id = "garmin", "divelogs"
+
+        def __init__(self, receiver):
+            self.receiver = receiver
+
+        def receiver_id(self):
+            return self.receiver
+
+    assert scheduler._run_label(Engine("divelogs")) == "garmin -> divelogs"
+    assert scheduler._run_label(Engine("garmin")) == "divelogs -> garmin"
+    assert scheduler._run_label(Engine(None)) == "garmin / divelogs"      # an unusable direction
+    assert scheduler._run_label(None) is None
+
+
+def test_run_sync_thread_summary_only_on_changes(monkeypatch):
+    """R24 'changes': a run that only matched and skipped sends nothing; one
+    that uploaded sends the summary."""
+    from src.core.sync_engine import SyncEngine
+    settings = SettingsModel(notify_url="https://x", notify_on="changes")
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False: {"skipped": [{}], "matched_count": 3})
+    sent, _ = _capture_summaries(monkeypatch, settings)
+    scheduler.run_sync_thread(dry_run=False)
+    assert sent == []
+
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False: {"updated_on_divelogs": [{}]})
+    scheduler.run_sync_thread(dry_run=False)
+    assert len(sent) == 1
+
+
+def test_run_sync_thread_no_summary_by_default_or_without_url(monkeypatch):
+    """The default notify_on 'failure' keeps the pre-R24 behaviour: a
+    finished run sends nothing; so does 'always' with no notify_url."""
+    from src.core.sync_engine import SyncEngine
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False: {"uploaded_to_divelogs": [{}]})
+    sent, _ = _capture_summaries(monkeypatch, SettingsModel(notify_url="https://x"))
+    scheduler.run_sync_thread(dry_run=False)
+    sent2, _ = _capture_summaries(monkeypatch, SettingsModel(notify_on="always"))
+    scheduler.run_sync_thread(dry_run=False)
+    assert sent == [] and sent2 == []
+
+
+def test_run_sync_thread_failed_run_sends_only_the_failure_alert(monkeypatch):
+    from src.core.sync_engine import SyncEngine
+
+    def boom(self, dry_run=False):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(SyncEngine, "run_sync", boom)
+    sent, failures = _capture_summaries(monkeypatch, SettingsModel(notify_url="https://x", notify_on="always"))
+    scheduler.run_sync_thread(dry_run=False)
+    assert sent == [] and len(failures) == 1
+
+
+def test_run_sync_thread_broken_summary_never_fails_the_run(monkeypatch):
+    from src.core.sync_engine import SyncEngine
+    from src.core import notify
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False: {"status": "ok"})
+    _capture_summaries(monkeypatch, SettingsModel(notify_url="https://x", notify_on="always"))
+
+    def broken(*a):
+        raise RuntimeError("relay down")
+
+    monkeypatch.setattr(notify, "notify_run_finished", broken)
+    scheduler.run_sync_thread(dry_run=False)
+    assert scheduler.last_sync_results["Manual"] == {"status": "ok"}
+
+
 def test_run_sync_thread_keys_results_by_job_id(monkeypatch):
     from src.core.sync_engine import SyncEngine
 
@@ -437,3 +533,18 @@ def test_run_sync_thread_forwards_the_myssi_account_pick(monkeypatch):
     captured.clear()
     scheduler.run_sync_thread(False, {"source": "garmin", "target": "ssi", "directionality": "to_ssi"})
     assert "ssi_account" not in captured
+
+
+def test_run_sync_thread_forwards_the_garmin_fit_upload_choice(monkeypatch):
+    """R13 (beta): a job's, the dashboard's or the Sync page's
+    garmin_fit_upload reaches the run as an override; left out (None), the
+    pair's setting applies."""
+    from src.core.sync_engine import SyncEngine
+    seen = {}
+    monkeypatch.setattr(SyncEngine, "__init__", lambda self, *a, **k: setattr(self, "run_overrides", {}))
+    monkeypatch.setattr(SyncEngine, "run_sync", lambda self, dry_run=False, **kw: seen.update(kw) or {})
+    scheduler.run_sync_thread(True, {"directionality": "to_garmin", "garmin_fit_upload": True})
+    assert seen["garmin_fit_upload_override"] is True
+    seen.clear()
+    scheduler.run_sync_thread(True, CronJobModel(id="j", directionality="to_garmin").model_dump())
+    assert "garmin_fit_upload_override" not in seen

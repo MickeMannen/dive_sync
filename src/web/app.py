@@ -5,7 +5,7 @@ import logging
 import asyncio
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
@@ -93,6 +93,8 @@ class CronJobSchema(BaseModel):
     source: Optional[str] = None
     target: Optional[str] = None
     use_garmin_cache: Optional[bool] = None
+    # beta (plans/gap-roadmap.md R13): the job's new Garmin dives as .fit; None = the pair's setting
+    garmin_fit_upload: Optional[bool] = None
     garmin_username: Optional[str] = None
     divelogs_username: Optional[str] = None
     # the MySSI account (email) of a job with MySSI as a side (plans/myssi-sync.md K5)
@@ -108,6 +110,8 @@ class SettingsSchema(BaseModel):
     propagate_deletes: bool = False
     create_on_garmin: bool = False
     create_device_dives_on_submersion: bool = False
+    # R13 (beta); not on the dashboard's settings form, so omitted keeps what is stored
+    garmin_fit_upload: Optional[bool] = None
     schedule: List[Dict[str, int]]
     cron_jobs: List[CronJobSchema] = []
     # Omitted (None) keeps the board / pairs currently on disk, so a settings
@@ -119,6 +123,9 @@ class SettingsSchema(BaseModel):
     # Same omitted-keeps-current rule; an explicit "" (an emptied form field,
     # as opposed to a missing key) disables alerts.
     notify_url: Optional[str] = None
+    # When the webhook is sent (plans/gap-roadmap.md R24): failure (default),
+    # changes or always; omitted keeps what is stored
+    notify_on: Optional[Literal["failure", "changes", "always"]] = None
     # The dashboard's unit system (plans/units.md J6): app-local, kept in
     # web_prefs.json by src/web/prefs.py, never in SettingsModel / settings.json
     # and never part of the sync profile. Omitted keeps what is stored.
@@ -136,6 +143,8 @@ class SyncTriggerRequest(BaseModel):
     sync_gases: Optional[bool] = None
     # None = the saved default (sync_filters.use_garmin_cache)
     use_garmin_cache: Optional[bool] = None
+    # beta (plans/gap-roadmap.md R13): this run's new Garmin dives as .fit; None = the pair's setting
+    garmin_fit_upload: Optional[bool] = None
     garmin_username: Optional[str] = None
     divelogs_username: Optional[str] = None
     shearwater_account: Optional[str] = None
@@ -198,6 +207,7 @@ def save_settings(data: SettingsSchema):
                 source=job.source,
                 target=job.target,
                 use_garmin_cache=job.use_garmin_cache,
+                garmin_fit_upload=job.garmin_fit_upload,
                 garmin_username=job.garmin_username,
                 divelogs_username=job.divelogs_username,
                 ssi_account=job.ssi_account,
@@ -240,11 +250,14 @@ def save_settings(data: SettingsSchema):
             propagate_deletes=data.propagate_deletes,
             create_on_garmin=data.create_on_garmin,
             create_device_dives_on_submersion=data.create_device_dives_on_submersion,
+            garmin_fit_upload=(data.garmin_fit_upload if data.garmin_fit_upload is not None
+                               else current.garmin_fit_upload),
             schedule=schedule_slots,
             cron_jobs=cron_jobs,
             sync_pairs=sync_pairs,
             garmin_timezone=current.garmin_timezone,
             notify_url=data.notify_url if data.notify_url is not None else current.notify_url,
+            notify_on=data.notify_on if data.notify_on is not None else current.notify_on,
         )
         # Every pair's board is checked against its own catalogue (rework.md G5)
         for pair in settings.sync_pairs:

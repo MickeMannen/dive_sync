@@ -6,6 +6,8 @@ import pytest
 
 from src.core.convert import edit
 from src.core.convert.edit import (
+    EDITABLE_FIELDS,
+    tzinfo_of,
     EditError,
     apply_edits,
     format_utc_offset,
@@ -24,7 +26,7 @@ def recorded_dive(**kwargs) -> UnifiedDive:
     """A computer-logged dive at 09:56:11 UTC+7 with samples, channels, two
     tanks and events (the two-transmitter fixture's shape, smaller)."""
     fields = dict(
-        date_time=datetime(2026, 8, 29, 9, 56, 11), date_time_utc=datetime(2026, 8, 29, 2, 56, 11), timezone="Etc/GMT-7",
+        date_time=datetime(2026, 8, 29, 9, 56, 11), date_time_utc=datetime(2026, 8, 29, 2, 56, 11), timezone="UTC+07:00",
         duration=2780, max_depth=11.92, avg_depth=5.894, temp_min=30.0, temp_max=31.0, temp_avg=30.0, dive_number=38,
         lat=-10.0, lng=-30.0, exit_lat=-10.00005, exit_lng=-29.9998, location="House Reef", buddy="Kim",
         computer_vendor="Garmin", computer_model="Descent X50i", computer_serial="1000000001", computer_firmware="7.05",
@@ -56,6 +58,27 @@ def instants(dive: UnifiedDive):
 
 # ---------------------------------------------------------------- offsets
 
+def test_tzinfo_of_every_spelling():
+    """A fixed offset is a `datetime.timezone`, never a zone-database
+    lookup: the UTC±hh:mm spelling for any offset, and the Etc/GMT∓N names
+    of older dives with their inverted sign (the database has no Etc zone
+    for a half hour); an IANA name is its zone; nothing or an unknown name
+    is None (R7)."""
+    from datetime import timezone as tz
+    from zoneinfo import ZoneInfo
+    assert tzinfo_of("UTC+05:30") == tz(timedelta(hours=5, minutes=30)) and tzinfo_of("UTC-03:30") == tz(timedelta(hours=-3, minutes=-30))
+    assert tzinfo_of("UTC+05:45") == tz(timedelta(hours=5, minutes=45)) and tzinfo_of("UTC+07:00") == tz(timedelta(hours=7))
+    assert tzinfo_of("UTC") is tz.utc and tzinfo_of("Z") is tz.utc and tzinfo_of("Etc/UTC") is tz.utc
+    assert tzinfo_of("Etc/GMT-7") == tz(timedelta(hours=7)) and tzinfo_of("Etc/GMT+5") == tz(timedelta(hours=-5))
+    assert tzinfo_of("Asia/Kolkata") == ZoneInfo("Asia/Kolkata") and tzinfo_of("Asia/Kathmandu") == ZoneInfo("Asia/Kathmandu")
+    assert tzinfo_of(None) is None and tzinfo_of("") is None and tzinfo_of("Not/AZone") is None and tzinfo_of("UTC+25:00") is None
+    # a dive in India: the page shows +05:30, the two clocks agree with the zone
+    dive = recorded_dive(timezone="UTC+05:30", date_time=datetime(2026, 8, 29, 8, 26, 11))
+    assert utc_offset_text(dive) == "+05:30"
+    assert utc_offset_text(recorded_dive(timezone="Asia/Kathmandu", date_time_utc=None)) == "+05:45"
+    assert utc_offset_text(recorded_dive(timezone="America/St_Johns", date_time_utc=None)) == "-02:30"   # summer time in August
+    assert utc_offset_text(recorded_dive(timezone="America/St_Johns", date_time=datetime(2026, 1, 10, 9, 0), date_time_utc=None)) == "-03:30"
+
 def test_utc_offset_parsing_and_formatting():
     assert parse_utc_offset("+07:00") == timedelta(hours=7) and parse_utc_offset("-03:30") == timedelta(hours=-3, minutes=-30)
     assert parse_utc_offset("+7") == timedelta(hours=7) and parse_utc_offset("UTC+8") == timedelta(hours=8)
@@ -66,13 +89,18 @@ def test_utc_offset_parsing_and_formatting():
             parse_utc_offset(bad)
     assert format_utc_offset(timedelta(hours=7)) == "+07:00" and format_utc_offset(timedelta(hours=-3, minutes=-30)) == "-03:30"
     assert format_utc_offset(timedelta(0)) == "+00:00" and format_utc_offset(None) == ""
-    # the timezone value for an edited offset: the FIT reader's Etc spelling, a half hour as UTC+hh:mm
-    assert zone_for_offset(timedelta(hours=7)) == "Etc/GMT-7" and zone_for_offset(timedelta(hours=-5)) == "Etc/GMT+5"
-    assert zone_for_offset(timedelta(0)) == "Etc/UTC" and zone_for_offset(timedelta(hours=5, minutes=30)) == "UTC+05:30"
+    # the timezone value for an edited offset (the FIT reader's spelling too, R7): one fixed-offset
+    # spelling for whole hours and half or quarter hours alike
+    assert zone_for_offset(timedelta(hours=7)) == "UTC+07:00" and zone_for_offset(timedelta(hours=-5)) == "UTC-05:00"
+    assert zone_for_offset(timedelta(0)) == "UTC" and zone_for_offset(timedelta(hours=5, minutes=30)) == "UTC+05:30"
+    assert zone_for_offset(timedelta(hours=5, minutes=45)) == "UTC+05:45" and zone_for_offset(timedelta(hours=-3, minutes=-30)) == "UTC-03:30"
     assert zone_for_offset(None) is None
-    # and back: every spelling the model may hold
+    # and back: every spelling the model may hold, the Etc names of dives cached or edited before R7 included
+    assert zone_offset("UTC+07:00") == timedelta(hours=7) and zone_offset("UTC-05:00") == timedelta(hours=-5)
+    assert zone_offset("UTC") == timedelta(0) and zone_offset("UTC+05:30") == timedelta(hours=5, minutes=30)
+    assert zone_offset("UTC+05:45") == timedelta(hours=5, minutes=45) and zone_offset("UTC-03:30") == timedelta(hours=-3, minutes=-30)
     assert zone_offset("Etc/GMT-7") == timedelta(hours=7) and zone_offset("Etc/GMT+5") == timedelta(hours=-5)
-    assert zone_offset("Etc/UTC") == timedelta(0) and zone_offset("UTC+05:30") == timedelta(hours=5, minutes=30)
+    assert zone_offset("Etc/UTC") == timedelta(0)
     assert zone_offset("Asia/Kuala_Lumpur", datetime(2026, 8, 29, 10)) == timedelta(hours=8)
     assert zone_offset("Europe/Stockholm", datetime(2026, 7, 1, 12)) == timedelta(hours=2)        # summer time
     assert zone_offset("Europe/Stockholm", datetime(2026, 1, 1, 12)) == timedelta(hours=1)
@@ -99,7 +127,7 @@ def test_shift_dive_moves_every_sample_and_event_by_the_delta():
     assert shifted.duration == 2780 and shifted.bottom_time == 2599
     # the UTC clock follows, the zone stays
     assert shifted.date_time == datetime(2026, 8, 29, 11, 26, 11) and shifted.date_time_utc == datetime(2026, 8, 29, 4, 26, 11)
-    assert shifted.timezone == "Etc/GMT-7"
+    assert shifted.timezone == "UTC+07:00"
     # everything else is carried, and the dive given is untouched
     assert shifted.samples[0].channels.pressures == {0: 204.0, 1: 210.0} and shifted.events[2].name == "Safety stop begin"
     assert shifted.gas_mixtures == dive.gas_mixtures and shifted.max_depth == 11.92
@@ -112,8 +140,8 @@ def test_shift_dive_moves_every_sample_and_event_by_the_delta():
 
 def test_shift_dive_zone_change_without_a_wall_clock_change():
     dive = recorded_dive()
-    moved = shift_dive(dive, dive.date_time, "Etc/GMT-8")
-    assert moved.date_time == dive.date_time and moved.timezone == "Etc/GMT-8"
+    moved = shift_dive(dive, dive.date_time, "UTC+08:00")
+    assert moved.date_time == dive.date_time and moved.timezone == "UTC+08:00"
     assert moved.date_time_utc == datetime(2026, 8, 29, 1, 56, 11)        # one hour earlier in UTC
     assert instants(moved) == instants(dive)
     # zone and wall clock together
@@ -131,8 +159,8 @@ def test_shift_dive_zone_change_without_a_wall_clock_change():
     # a hand-logged dive without any clock but the local one: nothing to recompute
     plain = shift_dive(hand_logged_dive(), datetime(2025, 7, 4, 17, 0))
     assert plain.date_time == datetime(2025, 7, 4, 17, 0) and plain.date_time_utc is None and plain.timezone is None
-    given_zone = shift_dive(hand_logged_dive(), datetime(2025, 7, 4, 17, 0), "Etc/GMT-2")
-    assert given_zone.date_time_utc == datetime(2025, 7, 4, 15, 0) and given_zone.timezone == "Etc/GMT-2"
+    given_zone = shift_dive(hand_logged_dive(), datetime(2025, 7, 4, 17, 0), "UTC+02:00")
+    assert given_zone.date_time_utc == datetime(2025, 7, 4, 15, 0) and given_zone.timezone == "UTC+02:00"
     # an aware datetime is taken as the wall clock
     from datetime import timezone as tz
     aware = shift_dive(dive, datetime(2026, 8, 29, 12, 0, tzinfo=tz.utc))
@@ -235,7 +263,7 @@ def test_apply_edits_tanks_add_remove_edit():
 def test_apply_edits_shifts_through_date_time_and_zone():
     dive = recorded_dive()
     out = apply_edits(dive, {"date": "2026-08-30", "time": "10:00", "utc_offset": "+08:00", "buddy": "Sam"})
-    assert out.date_time == datetime(2026, 8, 30, 10, 0, 0) and out.timezone == "Etc/GMT-8"
+    assert out.date_time == datetime(2026, 8, 30, 10, 0, 0) and out.timezone == "UTC+08:00"
     assert out.date_time_utc == datetime(2026, 8, 30, 2, 0, 0) and out.buddy == "Sam"
     assert [s.time for s in out.samples] == [0, 600, 2780] and out.duration == 2780
     # the time alone, with seconds; the date alone; the zone alone
@@ -263,3 +291,34 @@ def test_profile_fields_are_locked_on_a_recorded_dive():
     assert apply_edits(hand_logged_dive(), {"duration": "100", "max_depth": "20", "avg_depth": "5"}).duration == 100
     assert apply_edits(recorded_dive(), {"temp_min": "29", "bottom_time": "2000"}).bottom_time == 2000
     assert set(edit.PROFILE_FIELDS) <= set(edit.EDITABLE_FIELDS) and "tanks" in edit.EDITABLE_FIELDS
+
+
+def test_apply_edits_sac_is_a_number_in_litres_per_minute():
+    """R9: the SAC field stores the computer's volumetric SAC (L/min at
+    the surface); blank clears it, a negative one is refused, and the
+    computed SAC is never written into the dive by an edit."""
+    dive = recorded_dive(sac=11.2)
+    assert apply_edits(dive, {"sac": "14.5"}).sac == 14.5
+    assert apply_edits(dive, {"sac": ""}).sac is None
+    assert apply_edits(dive, {"notes": "x"}).sac == 11.2
+    with pytest.raises(EditError, match="SAC"):
+        apply_edits(dive, {"sac": "-1"})
+    with pytest.raises(EditError, match="SAC"):
+        apply_edits(dive, {"sac": "lots"})
+    assert "sac" in EDITABLE_FIELDS and "rmv" not in EDITABLE_FIELDS and "otu" not in EDITABLE_FIELDS
+
+
+def test_apply_edits_air_temperature_and_suit():
+    """R10: the air temperature is a number in °C (-60..60, blank clears),
+    the suit free text (blank clears)."""
+    dive = hand_logged_dive(air_temp=20.0, suit="3 mm")
+    out = apply_edits(dive, {"air_temp": "31.5", "suit": "  drysuit "})
+    assert (out.air_temp, out.suit) == (31.5, "drysuit")
+    cleared = apply_edits(dive, {"air_temp": "", "suit": ""})
+    assert cleared.air_temp is None and cleared.suit is None
+    assert apply_edits(dive, {"notes": "x"}).air_temp == 20.0
+    with pytest.raises(EditError, match="Air temp"):
+        apply_edits(dive, {"air_temp": "70"})
+    with pytest.raises(EditError, match="Air temp"):
+        apply_edits(dive, {"air_temp": "hot"})
+    assert "air_temp" in EDITABLE_FIELDS and "suit" in EDITABLE_FIELDS

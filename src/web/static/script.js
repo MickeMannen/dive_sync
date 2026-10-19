@@ -76,6 +76,7 @@ function summarizeJobResult(last) {
     .filter(([k, v]) => (k.startsWith("uploaded_to_") || k.startsWith("updated_on_")) && Array.isArray(v))
     .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v.length}`);
   if (last.conflicts && last.conflicts.length) parts.push(`conflicts: ${last.conflicts.length}`);
+  if (last.failed && last.failed.length) parts.push(`failed: ${last.failed.length}`);
   return (last.dry_run ? "[dry run] " : "") + (parts.join(" · ") || "ok");
 }
 
@@ -145,6 +146,7 @@ function summarizeRun(run) {
     .filter((k) => /^(uploaded_to|updated_on|deleted_on)_/.test(k))
     .map((k) => `${actionLabel(k).toLowerCase()}: ${counts[k]}`);
   if (counts.conflicts) parts.push(`conflicts: ${counts.conflicts}`);
+  if (counts.failed) parts.push(`failed: ${counts.failed}`);
   return (run.dry_run ? "[dry run] " : "") + (parts.join(" · ") || "no changes");
 }
 
@@ -230,6 +232,12 @@ function renderHistoryRun(run) {
     sections.push(`<h3>Skipped (${results.skipped.length})</h3>` +
       historyTable(["Dive", "Reason"], results.skipped.map((e) => [e.time || "", (e.reason || "").replace(/_/g, " ")])));
   }
+  // writes the receiver refused or that broke (never listed as done above)
+  if (results.failed && results.failed.length) {
+    sections.push(`<h3>Failed (${results.failed.length})</h3>` +
+      historyTable(["Dive", "Action", "Service", "Id", "Reason"], results.failed.map((e) =>
+        [e.time || "", e.action || "", serviceName(e.service), e.id || "", e.reason || ""])));
+  }
   if (!run.error && !sections.length) sections.push(`<p class="muted">Nothing to upload, update or delete.</p>`);
   const log = run.log || [];
   sections.push(`<details class="history-log-block"${run.status === "error" ? " open" : ""}><summary>Log (${log.length} line${log.length === 1 ? "" : "s"})</summary>
@@ -241,7 +249,9 @@ function renderHistoryRun(run) {
     ["Direction", run.source || run.target ? `${serviceName(run.source)} → ${serviceName(run.target)}` : "–"],
     ["Started", formatWhen(run.started_at)],
     ["Duration", formatDuration(run.duration_s)],
-    ["Result", run.status === "error" ? "failed" : (run.dry_run ? "ok (dry run: nothing written)" : "ok")],
+    ["Result", run.status === "error" ? "failed"
+      : (results.failed && results.failed.length) ? `ok, but ${results.failed.length} write${results.failed.length === 1 ? "" : "s"} failed`
+      : (run.dry_run ? "ok (dry run: nothing written)" : "ok")],
   ];
   if (results.matched_count !== undefined) meta.push(["Dives matched", String(results.matched_count)]);
   const box = $("history-detail");
@@ -342,6 +352,8 @@ async function triggerSync() {
     sync_gases: $("trigger-gases").checked,
     use_garmin_cache: $("trigger-garmin-cache").checked,
   };
+  // R13 (beta): unticked leaves it to the pair's setting (off by default)
+  if ($("trigger-garmin-fit").checked) payload.garmin_fit_upload = true;
   const garminAccount = $("trigger-garmin-account").value;
   const divelogsAccount = $("trigger-divelogs-account").value;
   const ssiAccount = $("trigger-ssi-account").value;
@@ -607,11 +619,12 @@ function populateDefaults(settings) {
   $("api-cooldown").value = settings.api_cooldown_seconds;
   $("units").value = settings.units === "imperial" ? "imperial" : "metric";
   $("notify-url").value = settings.notify_url || "";
+  $("notify-on").value = ["changes", "always"].includes(settings.notify_on) ? settings.notify_on : "failure";
 }
 
 async function saveNotifyUrl() {
   $("notify-message").textContent = "Saving…";
-  const { ok, message } = await postSettings(settingsPayload({ notify_url: $("notify-url").value.trim() }));
+  const { ok, message } = await postSettings(settingsPayload({ notify_url: $("notify-url").value.trim(), notify_on: $("notify-on").value }));
   $("notify-message").textContent = message;
   if (ok) currentSettings = await (await fetch("/api/settings")).json();
 }
@@ -735,6 +748,7 @@ function jobOptions(job) {
   const bits = [job.only_new ? "only new dives" : "all dives"];
   if (!job.sync_gases) bits.push("no gases");
   if (job.use_garmin_cache === false) bits.push("no Garmin cache");
+  if (job.garmin_fit_upload) bits.push("new Garmin dives as .fit (beta)");
   if (job.garmin_username) bits.push(job.garmin_username);
   if (job.divelogs_username) bits.push(job.divelogs_username);
   if (job.ssi_account) bits.push(job.ssi_account);
@@ -801,6 +815,7 @@ function openJobEditor(index) {
   $("job-only-new").checked = job ? !!job.only_new : true;
   $("job-gases").checked = job ? !!job.sync_gases : true;
   $("job-garmin-cache").checked = job ? job.use_garmin_cache !== false : true;
+  $("job-garmin-fit").checked = !!job?.garmin_fit_upload;
   $("job-garmin-account").value = job?.garmin_username || "";
   $("job-divelogs-account").value = job?.divelogs_username || "";
   $("job-ssi-account").value = job?.ssi_account || "";
@@ -842,6 +857,7 @@ function applyJobEditor() {
     only_new: $("job-only-new").checked,
     sync_gases: $("job-gases").checked,
     use_garmin_cache: $("job-garmin-cache").checked,
+    garmin_fit_upload: $("job-garmin-fit").checked ? true : null,
     enabled: old.enabled ?? true,
     garmin_username: $("job-garmin-account").value || null,
     divelogs_username: $("job-divelogs-account").value || null,

@@ -15,6 +15,70 @@ def recorded_water_temp(value: Any) -> Optional[float]:
         return None
     return None if value == 0.0 else value
 
+
+# --- Surface air consumption (plans/gap-roadmap.md R9) ----------------------
+#
+# A dive's SAC is the computer's own when it logged one (UnifiedDive.sac, a
+# Garmin .fit's avg_volume_sac) and otherwise computed from the tanks:
+# the gas breathed at the surface is the pressure drop times the cylinder
+# volume, and a breath at depth costs the ambient pressure in atmospheres,
+#
+#     SAC = sum(bar used x litres) / (minutes x (avg depth / 10 + 1))
+#
+# summed over every cylinder (what makes the number mean something on a
+# multi-tank dive). The front ends show the one `dive_sac` gives and say
+# which it is; nothing writes a computed SAC back into a dive.
+
+SAC_LOGGED = "logged"       # the computer's own value (UnifiedDive.sac)
+SAC_COMPUTED = "computed"   # from the tanks, the average depth and the duration
+
+
+def surface_air_consumption(tanks: Any, avg_depth_m: Any, duration_s: Any) -> Optional[float]:
+    """The volumetric SAC in litres per minute at the surface from ``tanks``
+    - (volume in litres, start bar, end bar) triples, any of them None - an
+    average depth in metres and a duration in seconds; None unless the dive
+    has everything the sum needs: a cylinder with a volume and a pressure
+    drop, an average depth and a duration. A volume of 0 (Divelogs stores
+    that when the size was never filled in) is missing data, not a
+    zero-litre tank."""
+    try:
+        minutes = float(duration_s) / 60.0
+        depth = float(avg_depth_m)
+    except (TypeError, ValueError):
+        return None
+    if minutes <= 0 or depth <= 0:
+        return None
+    litres = 0.0
+    for volume, start, end in tanks:
+        try:
+            volume, start, end = float(volume or 0), float(start or 0), float(end or 0)
+        except (TypeError, ValueError):
+            continue
+        used = start - end
+        if volume > 0 and used > 0:
+            litres += used * volume
+    if litres <= 0:
+        return None
+    return litres / (minutes * (depth / 10.0 + 1.0))
+
+
+def computed_sac(dive: "UnifiedDive") -> Optional[float]:
+    """`surface_air_consumption` of a dive's own tanks, average depth and duration."""
+    return surface_air_consumption(((g.tank_volume, g.start_pressure, g.end_pressure) for g in dive.gas_mixtures),
+                                   dive.avg_depth, dive.duration)
+
+
+def dive_sac(dive: "UnifiedDive") -> Tuple[Optional[float], str]:
+    """The SAC a front end shows for ``dive`` and where it comes from:
+    ``(litres per minute, SAC_LOGGED)`` for the computer's own value,
+    ``(litres per minute, SAC_COMPUTED)`` for one computed from the tanks,
+    ``(None, "")`` when there is neither."""
+    if dive.sac is not None:
+        return dive.sac, SAC_LOGGED
+    value = computed_sac(dive)
+    return (value, SAC_COMPUTED) if value is not None else (None, "")
+
+
 class GasMixture(BaseModel):
     oxygen: float = Field(21.0, description="Oxygen percentage (0-100)")
     helium: float = Field(0.0, description="Helium percentage (0-100)")
@@ -60,6 +124,33 @@ KNOWN_EVENT_TYPES: Tuple[str, ...] = (EVENT_GAS_SWITCH, EVENT_ALERT, EVENT_MODE_
 # recognises the computer's own; another value is kept as it was read.
 KNOWN_DIVE_MODES: Tuple[str, ...] = ("oc_single_gas", "oc_multi_gas", "gauge", "ccr", "scr", "apnea")
 KNOWN_WATER_TYPES: Tuple[str, ...] = ("fresh", "salt", "en13319", "custom")
+# The water density (g/l = kg/m3) Subsurface assumes for a water type (its
+# core/units.h) when the computer gave none, and the way back: Subsurface's
+# three values plus Garmin's seawater (1025, what a Descent's FIT and
+# Subsurface's Garmin import store for "salt"). Another density is a
+# density without a type (plans/gap-roadmap.md R10).
+SALINITY_BY_WATER_TYPE: Dict[str, int] = {"fresh": 1000, "salt": 1030, "en13319": 1020}
+WATER_TYPE_BY_SALINITY: Dict[int, str] = {1000: "fresh", 1020: "en13319", 1030: "salt", 1025: "salt"}
+
+
+def water_type_of_salinity(salinity: Any) -> Optional[str]:
+    """The water type a density in g/l stands for (`WATER_TYPE_BY_SALINITY`,
+    rounded to whole g/l); None for none or a density no type has."""
+    if salinity in (None, ""):
+        return None
+    try:
+        return WATER_TYPE_BY_SALINITY.get(int(round(float(salinity))))
+    except (TypeError, ValueError):
+        return None
+
+
+def salinity_of(water_type: Optional[str], water_density: Optional[float] = None) -> Optional[int]:
+    """The density in g/l a format writes for a dive's water: the computer's
+    own density when it has one, else the value Subsurface assumes for the
+    water type; None when neither says."""
+    if water_density:
+        return int(round(water_density))
+    return SALINITY_BY_WATER_TYPE.get(water_type or "")
 
 
 def _without_unset(data: Dict[str, Any], keep: Tuple[str, ...] = ()) -> Dict[str, Any]:
@@ -91,6 +182,14 @@ class SampleChannels(BaseModel):
     cns: Optional[float] = Field(None, description="CNS oxygen toxicity as a percentage (12.0 = 12 %)")
     ppo2: Optional[float] = Field(None, description="Oxygen partial pressure in bar (open circuit: of the gas breathed; a rebreather: of the loop)")
     setpoint: Optional[float] = Field(None, description="Rebreather PO2 setpoint in bar")
+    o2_cells: Dict[int, float] = Field(
+        default_factory=dict,
+        description=(
+            "A rebreather's measured PO2 per oxygen cell in bar at this sample, keyed by the cell's 0-based index "
+            "(Subsurface's sensor1 is cell 0, UDDF's measuredpo2 by its o2sensor). Empty when the computer logged "
+            "no cells; ppo2 stays the computer's one (voted or averaged) value (plans/gap-roadmap.md R18)"
+        ),
+    )
     gf99: Optional[float] = Field(None, description="Current gradient factor of the leading tissue as a percentage (Shearwater's GF99)")
     gas_time: Optional[int] = Field(None, description="Remaining gas time in seconds (Garmin's air time remaining, Shearwater's GTR)")
     heart_rate: Optional[int] = Field(None, description="Heart rate in beats per minute")
@@ -204,29 +303,66 @@ class UnifiedDive(BaseModel):
     water_type: Optional[str] = Field(None, description="Water setting of the computer: 'fresh', 'salt', 'en13319' or 'custom' (KNOWN_WATER_TYPES)")
     water_density: Optional[float] = Field(None, description="Water density in kg/m3 the computer converted pressure to depth with, e.g. 1025.0")
     dive_mode: Optional[str] = Field(None, description="How the dive was dived: 'oc_single_gas', 'oc_multi_gas', 'gauge', 'ccr', 'scr' or 'apnea' (KNOWN_DIVE_MODES)")
-    exit_lat: Optional[float] = Field(None, description="Latitude where the diver surfaced (lat/lng are the entry)")
+    # the exit position is synced since R8 (SYNCED_SPARSE_FIELDS; the catalogue field 'exit_gps' is the pair)
+    exit_lat: Optional[float] = Field(None, description="Latitude where the diver surfaced (lat/lng are the entry; a drift dive's other end)")
     exit_lng: Optional[float] = Field(None, description="Longitude where the diver surfaced")
     surface_interval: Optional[int] = Field(None, description="Time at the surface since the previous dive, in seconds")
     bottom_time: Optional[int] = Field(None, description="Bottom time in seconds as the computer counted it (duration is the whole dive)")
     cns_start: Optional[float] = Field(None, description="CNS oxygen toxicity at the start of the dive, as a percentage")
     cns_end: Optional[float] = Field(None, description="CNS oxygen toxicity at the end of the dive, as a percentage")
+    sac: Optional[float] = Field(None, description="Surface air consumption in litres per minute at the surface (volumetric SAC), as the computer computed it (Garmin's avg_volume_sac); plans/gap-roadmap.md R9 computes and syncs it")
+    rmv: Optional[float] = Field(None, description="Respiratory minute volume in litres per minute as the computer reports it (Garmin's avg_rmv: the gas drawn per minute at depth, the SAC times the mean ambient pressure)")
+    otu: Optional[float] = Field(None, description="Oxygen toxicity units accumulated over the dive, as the computer computed them")
+    # --- Synced, but left out of the JSON when unset like the carried fields (SPARSE_DIVE_FIELDS; R10) ---
+    air_temp: Optional[float] = Field(None, description="Air temperature at the surface in Celsius, as logged by hand or by the computer")
+    suit: Optional[str] = Field(None, description="The exposure suit worn, as free text ('5 mm wetsuit', 'drysuit')")
 
     @model_serializer(mode="wrap")
     def _omit_unset_carried(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
-        """Every key the dive had before I1, always; a carried field only
-        when it holds something."""
+        """Every key the dive had before I1, always; a sparse field (carried
+        or synced) only when it holds something."""
         data = handler(self)
-        for name in CARRIED_DIVE_FIELDS:
+        for name in SPARSE_DIVE_FIELDS:
             if name in data and (data[name] is None or data[name] == []):
                 del data[name]
         return data
 
 
-# The UnifiedDive fields that are carried, not synced: left out of the JSON
-# when unset, and never named by a field catalogue (tests/test_models.py
-# holds both to it, and makes a new UnifiedDive field choose a side).
-CARRIED_DIVE_FIELDS: Tuple[str, ...] = (
+# The UnifiedDive fields added after I1, in the model's order: left out of
+# the JSON when unset, so caches, backups and conflicts written for a dive
+# without them are byte for byte what they were (tests/test_models.py holds
+# it, and makes a new UnifiedDive field choose a side).
+SPARSE_DIVE_FIELDS: Tuple[str, ...] = (
     "events", "computer_vendor", "computer_model", "computer_serial", "computer_firmware",
     "gf_low", "gf_high", "deco_model", "water_type", "water_density", "dive_mode",
-    "exit_lat", "exit_lng", "surface_interval", "bottom_time", "cns_start", "cns_end",
+    "exit_lat", "exit_lng", "surface_interval", "bottom_time", "cns_start", "cns_end", "sac", "rmv", "otu",
+    "air_temp", "suit",
 )
+# The sparse fields a field catalogue may name, so a rule can sync them
+# (plans/gap-roadmap.md R10): the water type, the air temperature and the
+# suit; since R8 the exit position too (as the pair 'exit_gps' in a
+# catalogue, like 'gps' is lat/lng). Every other sparse field is carried,
+# not synced: never named by a catalogue, compared by nothing.
+SYNCED_SPARSE_FIELDS: Tuple[str, ...] = ("water_type", "air_temp", "suit", "exit_lat", "exit_lng")
+CARRIED_DIVE_FIELDS: Tuple[str, ...] = tuple(f for f in SPARSE_DIVE_FIELDS if f not in SYNCED_SPARSE_FIELDS)
+
+# Rebreather (CCR) support - the O2 cells, the setpoint, a diluent tank, the
+# Shearwater cell bytes - has not been checked against a real CCR dive yet
+# (plans/gap-roadmap.md R18b, owner 2026-10-19: add it anyway and say so). A
+# page showing a dive that holds any of it shows this line, muted, as the
+# MySSI pages show their beta note.
+CCR_NOTE = ("Rebreather (CCR) data: not yet tested with a real CCR dive - compare the cells, setpoint and "
+            "diluent with your dive computer's own log before relying on them.")
+CCR_DIVE_MODES: Tuple[str, ...] = ("ccr", "scr")
+CCR_TANK_ROLES: Tuple[str, ...] = ("diluent", "oxygen")
+
+
+def has_ccr_data(dive: "UnifiedDive") -> bool:
+    """Whether ``dive`` holds anything of a rebreather: a closed-circuit
+    dive mode, a diluent or oxygen tank, or a sample with a setpoint or O2
+    cell readings. What `CCR_NOTE` is shown for."""
+    if dive.dive_mode in CCR_DIVE_MODES:
+        return True
+    if any(gm.tank_role in CCR_TANK_ROLES for gm in dive.gas_mixtures):
+        return True
+    return any(s.channels is not None and (s.channels.setpoint is not None or s.channels.o2_cells) for s in dive.samples)

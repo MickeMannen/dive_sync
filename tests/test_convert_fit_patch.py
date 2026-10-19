@@ -196,7 +196,7 @@ def test_synthetic_shift_moves_every_timestamp_and_the_local_clock(tmp_path):
     the UTC delta and activity.local_timestamp follows the new offset."""
     source = minimal_dive()
     original = read_fit(source)
-    assert original.timezone == "Etc/GMT-1" and original.date_time == original.date_time_utc + timedelta(hours=1)
+    assert original.timezone == "UTC+01:00" and original.date_time == original.date_time_utc + timedelta(hours=1)
     new_local = original.date_time + timedelta(hours=1)
     edited = edit.apply_edits(original, {"time": new_local.strftime("%H:%M:%S"), "utc_offset": "+03:00"})
     assert edited.date_time_utc == original.date_time_utc - timedelta(hours=1)
@@ -205,7 +205,7 @@ def test_synthetic_shift_moves_every_timestamp_and_the_local_clock(tmp_path):
     assert report.shifted_seconds == -3600 and report.patched == ["start time (-3600 s on every timestamp)", "time zone"]
     assert report.not_carried == []
     back = read_fit(str(out))
-    assert back.date_time == new_local and back.date_time_utc == edited.date_time_utc and back.timezone == "Etc/GMT-3"
+    assert back.date_time == new_local and back.date_time_utc == edited.date_time_utc and back.timezone == "UTC+03:00"
     assert [s.time for s in back.samples] == [s.time for s in original.samples] and back.duration == original.duration
     assert back.events == original.events
     _same_but(original, back, "date_time", "date_time_utc", "timezone")
@@ -230,8 +230,27 @@ def test_synthetic_zone_change_alone_moves_the_utc_instant(tmp_path):
     assert report.shifted_seconds == 3 * 3600 and "time zone" in report.patched
     back = read_fit(str(out))
     assert back.date_time == original.date_time and back.date_time_utc == original.date_time_utc + timedelta(hours=3)
-    assert back.timezone == "Etc/GMT+2"
+    assert back.timezone == "UTC-02:00"
     _same_but(original, back, "date_time_utc", "timezone")
+
+
+def test_synthetic_half_hour_zone_is_patched_and_read_back(tmp_path):
+    """A half-hour zone (India, +05:30) typed on the page: the activity's
+    local timestamp moves by the exact 4.5 h against the file's +01:00,
+    and the patched file reads back with the zone kept as UTC+05:30 (R7)."""
+    source = minimal_dive()
+    original = read_fit(source)
+    edited = edit.apply_edits(original, {"utc_offset": "+05:30"})
+    assert edited.timezone == "UTC+05:30" and edited.date_time_utc == original.date_time_utc - timedelta(hours=4, minutes=30)
+    out = tmp_path / "india.fit"
+    report = patch_fit(source, out, original, edited)
+    assert report.shifted_seconds == -(4 * 3600 + 1800) and "time zone" in report.patched
+    back = read_fit(str(out))
+    assert (back.date_time, back.date_time_utc, back.timezone) == (original.date_time, edited.date_time_utc, "UTC+05:30")
+    _same_but(original, back, "date_time_utc", "timezone")
+    with fitdecode.FitReader(str(out)) as reader:
+        activity = next(f for f in reader if f.frame_type == fitdecode.FIT_FRAME_DATA and f.name == "activity")
+    assert activity.get_value("local_timestamp", raw_value=True) - activity.get_value("timestamp", raw_value=True) == 5 * 3600 + 1800
 
 
 def test_synthetic_gas_change_and_a_tank_the_file_has_no_record_for(tmp_path):
@@ -356,7 +375,7 @@ def test_two_tanks_start_shift_and_zone(tmp_path):
     report = patch_fit(source, out, original, edited)
     assert report.shifted_seconds == 0 and report.patched == ["time zone"]
     back = read_fit(str(out))
-    assert back.date_time == later and back.date_time_utc == original.date_time_utc and back.timezone == "Etc/GMT-8"
+    assert back.date_time == later and back.date_time_utc == original.date_time_utc and back.timezone == "UTC+08:00"
     _same_but(original, back, "date_time", "timezone")
     _assert_identical_outside(data, out.read_bytes(), [(34, 5)])
     # an hour later in the same zone
@@ -366,7 +385,7 @@ def test_two_tanks_start_shift_and_zone(tmp_path):
     assert report.shifted_seconds == 3600 and report.patched == ["start time (+3600 s on every timestamp)"]
     back = read_fit(str(out))
     assert back.date_time == later and back.date_time_utc == original.date_time_utc + timedelta(hours=1)
-    assert back.timezone == original.timezone == "Etc/GMT-7"
+    assert back.timezone == original.timezone == "UTC+07:00"
     assert [s.time for s in back.samples] == [s.time for s in original.samples] and back.events == original.events
     _same_but(original, back, "date_time", "date_time_utc")
     spans, _crcs = _walk_spans(data)
@@ -480,3 +499,41 @@ def test_message_and_field_numbers_are_the_profiles():
     assert profile.MESSAGE_TYPES[323].fields[1].name == "start_pressure" and profile.MESSAGE_TYPES[323].fields[2].name == "end_pressure"
     assert profile.MESSAGE_TYPES[34].fields[5].name == "local_timestamp"
     assert module.WATER_TYPES == {name: value for value, name in profile.FIELD_TYPES["water_type"].enum.items()}
+
+
+def test_synthetic_sac_patch(tmp_path):
+    """R9: an edited SAC is written into dive_summary.avg_volume_sac (L/min
+    in hundredths) when the file has the field; a file without it reports
+    the SAC as not carried. The pressure SAC and RMV stay as logged."""
+    with_sac = build_fit([_file_id(), _session(), _activity(), _record(0, 0.5, 24), _record(60, 18.0, 22),
+                          _record(120, 1.0, 23), _dive_gas(0, 32), _gas_switch(0, 0),
+                          _dive_summary(sac=11.2, rmv=22.5, pressure_sac=1.01)])
+    original = read_fit(with_sac)
+    assert original.sac == 11.2 and original.rmv == 22.5
+    edited = edit.apply_edits(original, {"sac": "14.26"})
+    out = tmp_path / "sac.fit"
+    report = patch_fit(with_sac, out, original, edited)
+    assert report.patched == ["SAC"] and report.not_carried == []
+    back = read_fit(str(out))
+    assert back.sac == pytest.approx(14.26) and back.rmv == 22.5
+    _same_but(original, back, "sac")
+    _assert_identical_outside(with_sac, out.read_bytes(), [(DIVE_SUMMARY, 13)])
+    _assert_well_formed(out)
+    # cleared: the field is set to invalid and reads back as none
+    cleared = patch_fit(with_sac, tmp_path / "none.fit", original, edit.apply_edits(original, {"sac": ""}))
+    assert cleared.patched == ["SAC"] and read_fit(str(tmp_path / "none.fit")).sac is None
+    # a file whose summary has no SAC field
+    source = minimal_dive()
+    original = read_fit(source)
+    report = patch_fit(source, tmp_path / "x.fit", original, edit.apply_edits(original, {"sac": "14"}))
+    assert report.patched == [] and report.not_carried == ["SAC (the file has no field for it)"]
+
+
+def test_air_temperature_and_suit_edits_are_reported_not_written(tmp_path):
+    """R10: an edited air temperature or suit is named as not carried; a
+    FIT has no field for either."""
+    source = minimal_dive()
+    original = read_fit(source)
+    edited = edit.apply_edits(original, {"air_temp": "28.5", "suit": "drysuit"})
+    report = patch_fit(source, None, original, edited)
+    assert report.patched == [] and report.not_carried == ["air temperature", "suit"]

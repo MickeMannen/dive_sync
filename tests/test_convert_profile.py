@@ -142,10 +142,11 @@ def test_sample_details_in_deco_shows_the_stop_and_tts_instead_of_ndl():
     dive = _deco_dive()
     d = profile.sample_details(dive, 2)
     assert d["deco"] == "Deco: stop 6 m for 3 min, TTS 12 min" and "ndl" not in d
-    assert d["tanks"] == ["Back gas 150 bar"] and d["gas"] == "Air (Back gas)"
+    # tank 2 is not logged here: its last reading (200 bar at 10:00) is shown
+    assert d["tanks"] == ["Back gas 150 bar", "Tank 2 200 bar"] and d["gas"] == "Air (Back gas)"
     # the sample at the switch: the new gas, the single `pressure` field as tank 1, the setpoint
     d = profile.sample_details(dive, 3)
-    assert d["gas"] == "EAN50 (Tank 2)" and d["tanks"] == ["Back gas 140 bar"] and d["setpoint"] == "Setpoint 1.30 bar"
+    assert d["gas"] == "EAN50 (Tank 2)" and d["tanks"] == ["Back gas 140 bar", "Tank 2 200 bar"] and d["setpoint"] == "Setpoint 1.30 bar"
     assert d["deco"] == "Deco: stop 6 m for 2 min, TTS 5 min"
     # out of deco again: NDL back, no deco line; a stop of 0 is "no stop"
     d = profile.sample_details(dive, 4)
@@ -154,6 +155,44 @@ def test_sample_details_in_deco_shows_the_stop_and_tts_instead_of_ndl():
     assert profile.sample_details(dive, 0) == {"time": "0:00", "depth": "0.0 m", "temp": "28.0 °C", "gas": "Air (Back gas)",
                                                "lines": ["0:00", "0.0 m", "28.0 °C", "Air (Back gas)"]}
     assert profile.sample_details(dive, 6) == {} and profile.sample_details(dive, -1) == {}
+
+
+def test_a_sample_missing_a_value_shows_the_last_one_logged():
+    """Computers log a tank pressure, the temperature or the NDL every few
+    samples: a sample without one shows the last reading before it, per
+    tank; a newer NDL ends a held deco stop; nothing before the first."""
+    dive = _deco_dive()
+    d = profile.sample_details(dive, 5)                   # the surface sample logs only depth and temperature
+    assert d["tanks"] == ["Back gas 140 bar", "Tank 2 200 bar"] and d["ndl"] == "NDL 99 min" and "deco" not in d
+    assert d["cns"] == "CNS 12 %" and d["heart_rate"] == "HR 92 bpm" and d["setpoint"] == "Setpoint 1.30 bar"
+    d = profile.sample_details(dive, 3)                   # in deco, no NDL logged: the stop, not the NDL of 10:00
+    assert d["deco"] == "Deco: stop 6 m for 2 min, TTS 5 min" and "ndl" not in d
+    assert "tanks" not in profile.sample_details(dive, 0) and "cns" not in profile.sample_details(dive, 0)
+    temp, pressures, ch = profile.held_values(dive, 2)
+    assert temp == 27.0 and pressures == {0: 150.0, 1: 200.0} and ch.ndl == 0 and ch.deco_stop_depth == 6.0
+
+
+def test_o2_cells_show_on_one_line_and_are_held_cell_by_cell():
+    """A rebreather's cells (plans/gap-roadmap.md R18): one `Cells` line
+    after the setpoint, in cell order; a sample that logs only some cells
+    keeps the others' last readings; a cell no sample has logged yet, or one
+    with no reading between two that have, is a dash."""
+    dive = _dive(samples=[
+        _sample(0, 0.0, 28.0, ppo2=0.7, setpoint=0.7, o2_cells={0: 0.69, 1: 0.71, 2: 0.70}),
+        _sample(60, 20.0, 27.0, ppo2=1.2, setpoint=1.2, o2_cells={0: 1.22, 2: 1.19}),      # cell 2 (index 1) not logged
+        _sample(120, 20.0, 27.0),
+        _sample(180, 20.0, 27.0, o2_cells={2: 1.18}),
+    ], gases=[GasMixture(oxygen=21, helium=0, tank_role="diluent")])
+    d = profile.sample_details(dive, 0)
+    assert d["po2"] == "PO2 0.70 bar" and d["setpoint"] == "Setpoint 0.70 bar" and d["cells"] == "Cells 0.69 / 0.71 / 0.70 bar"
+    assert d["lines"] == ["0:00", "0.0 m", "28.0 °C", "Air", "PO2 0.70 bar", "Setpoint 0.70 bar", "Cells 0.69 / 0.71 / 0.70 bar"]
+    assert profile.sample_details(dive, 1)["cells"] == "Cells 1.22 / 0.71 / 1.19 bar"
+    assert profile.sample_details(dive, 2)["cells"] == "Cells 1.22 / 0.71 / 1.19 bar"
+    assert profile.sample_details(dive, 3)["cells"] == "Cells 1.22 / 0.71 / 1.18 bar"
+    _temp, _pressures, ch = profile.held_values(dive, 3)
+    assert ch.o2_cells == {0: 1.22, 1: 0.71, 2: 1.18} and ch.setpoint == 1.2
+    assert profile.cells_text({0: 1.2, 2: 1.21}) == "Cells 1.20 / - / 1.21 bar"
+    assert "cells" not in profile.sample_details(_deco_dive(), 3)
 
 
 def test_sample_details_imperial_converts_depth_temperature_and_pressures():
@@ -172,12 +211,13 @@ def test_sample_details_imperial_converts_depth_temperature_and_pressures():
 
 def test_sample_details_without_a_gas_list_and_with_no_channels():
     """A dive from a service cache (depth/temp/time only): no gas line, no
-    tanks; a sample without a temperature has no temp line either."""
+    tanks; a sample without a temperature shows the last one logged."""
     dive = profile.dive_from_samples([{"time": 0, "depth": 0.0, "temp": 20.0}, {"time": 3700, "depth": 12.34},
                                       {"time": 10, "depth": None, "temp": 1.0}])
     assert len(dive.samples) == 2 and not dive.gas_mixtures and not dive.events
     assert profile.sample_details(dive, 0) == {"time": "0:00", "depth": "0.0 m", "temp": "20.0 °C", "lines": ["0:00", "0.0 m", "20.0 °C"]}
-    assert profile.sample_details(dive, 1) == {"time": "1:01:40", "depth": "12.3 m", "lines": ["1:01:40", "12.3 m"]}
+    assert profile.sample_details(dive, 1) == {"time": "1:01:40", "depth": "12.3 m", "temp": "20.0 °C",
+                                               "lines": ["1:01:40", "12.3 m", "20.0 °C"]}
     assert profile.clock_text(59) == "0:59" and profile.clock_text(3600) == "1:00:00" and profile.clock_text(7265) == "2:01:05"
     assert profile.detail_lines({"time": "1:00", "tanks": [], "depth": "", "gas": None}) == ["1:00"]
     assert profile.gas_switch_markers(dive) == [] and profile.ceiling_series(dive) == []
@@ -210,5 +250,5 @@ def test_two_tanks_fit_gives_tank_pressures_gas_and_no_band():
     assert d["tanks"] == ["Tank 1 204 bar", "Tank 2 210 bar"] and d["gas"] == "Air (Tank 1)"
     assert d["po2"] == "PO2 0.25 bar" and d["cns"] == "CNS 0 %" and "ndl" not in d and "deco" not in d
     d = profile.sample_details(dive, 200, "imperial")
-    assert d["ndl"] == "NDL 127 min" and d["gas_time"] == "Gas time 91 min" and d["tanks"] == ["Tank 2 2605 psi"]
+    assert d["ndl"] == "NDL 127 min" and d["gas_time"] == "Gas time 91 min" and d["tanks"][-1] == "Tank 2 2605 psi" and len(d["tanks"]) == 2
     assert d["depth"] == "38 ft" and d["temp"] == "86 °F"

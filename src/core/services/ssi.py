@@ -60,8 +60,9 @@ refuses - untested. Since plans/myssi-sync.md K1 it is a sync service
 **add-only** one: ``accepts_updates`` is False until the owner's update
 test (K6/K7), so the engine sends new dives and says once per matched
 dive that its changes were not sent; ``accepts_mirror_deletes`` is False
-for good (a MySSI delete is permanent), so a mirror run logs what it would
-have deleted and leaves it. A dive with two or more tanks is refused by
+for good (a MySSI delete is permanent), so no sync run - Mirror or a pair
+with propagate deletes on - deletes here: it logs what it would have
+deleted and leaves it. A dive with two or more tanks is refused by
 ``add_dive`` (`cannot_add_reason`; the engine counts it as skipped) until
 I7b maps the other tanks. The ``_divecomputer_dive_ref`` a dive was sent
 with (``garmin:<activity id>``, `computer_reference`) is read back into
@@ -1543,6 +1544,7 @@ def logbook_dive_to_unified(entry: SsiLogbookDive, sites: Optional[Dict[int, Ssi
         gf_high=_as_int(raw.get("odin_user_log_gf_set_2")),
         surface_interval=_as_int(raw.get("odin_user_log_si_before")),
         water_type=water_type,
+        air_temp=_as_float(raw.get("odin_user_log_airtemp_c")),
     )
 
 
@@ -1561,7 +1563,8 @@ class SsiAdapter(BaseDiveAdapter):
     # Add-only until the owner's update test (plans/myssi-sync.md K6/K7).
     accepts_updates = False
     # A MySSI delete is permanent and the dive number may not come back
-    # (owner, 2026-10-19): a mirror run only logs what it would delete.
+    # (owner, 2026-10-19): no sync run deletes here (Mirror or propagate
+    # deletes only log what they would have deleted); the Dives page does.
     accepts_mirror_deletes = False
     @classmethod
     def as_stored(cls, field_type: str, value: Any) -> Any:
@@ -1599,6 +1602,9 @@ class SsiAdapter(BaseDiveAdapter):
             FieldSpec(key="ssi.gps", label="GPS position", type="gps", unified="gps", writable=True),
             FieldSpec(key="ssi.tanks", label="Main tank", type="tanks", unified="tanks", writable=True),
             FieldSpec(key="ssi.samples", label="Dive profile", type="samples", unified="samples", writable=True),
+            # R10: the water type goes out with a new dive (build_payload's watertype id); the air temperature is read only
+            FieldSpec(key="ssi.water_type", label="Water type (salt / fresh)", type="text", unified="water_type", writable=True),
+            FieldSpec(key="ssi.air_temp", label="Air temperature", type="number", unified="air_temp", unit="°C", writable=False),
         ]
 
     def __init__(self, email: str, password: str, token: Optional[str] = None, *,
@@ -1664,15 +1670,22 @@ class SsiAdapter(BaseDiveAdapter):
         read-back): the SSI id when the dive was sent and read back, None
         when it was skipped (a duplicate, or refused by `cannot_add_reason`)
         or failed (the reason is logged)."""
+        self.add_skipped_reason = None
         reason = self.cannot_add_reason(dive)
         if reason:
             logger.warning("MySSI: dive %s skipped: %s", dive.date_time.strftime("%Y-%m-%d %H:%M"), reason)
+            self.add_skipped_reason = reason
             return None
         result = upload_dives(self.client, [dive])[0]
         if result.status == STATUS_SENT:
             return result.ssi_id
-        level = logger.warning if result.status == STATUS_SKIPPED else logger.error
-        level("MySSI: dive at %s not added - %s", dive.date_time.strftime("%Y-%m-%d %H:%M"), result.reason)
+        if result.status == STATUS_SKIPPED:
+            # left out on purpose (the logbook already has it): the engine
+            # counts it as skipped, not failed (check.md B4)
+            self.add_skipped_reason = result.reason or "already in the MySSI logbook"
+            logger.warning("MySSI: dive at %s not added - %s", dive.date_time.strftime("%Y-%m-%d %H:%M"), result.reason)
+        else:
+            logger.error("MySSI: dive at %s not added - %s", dive.date_time.strftime("%Y-%m-%d %H:%M"), result.reason)
         return None
 
     def update_dive(self, external_id: str, dive: UnifiedDive) -> bool:

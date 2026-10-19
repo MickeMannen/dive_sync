@@ -269,6 +269,38 @@ def test_notify_url_round_trips_and_is_kept_when_omitted(tmp_path, monkeypatch):
     assert client.get("/api/settings").json()["notify_url"] == ""
 
 
+def test_notify_on_round_trips_is_kept_when_omitted_and_checked(tmp_path, monkeypatch):
+    """R24: notify_on defaults to 'failure', is saved by the alerts form,
+    kept by a form that omits it, and an unknown value is refused."""
+    _isolated_settings(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/api/settings").json()["notify_on"] == "failure"
+
+    payload = _base_settings_payload()
+    payload["notify_url"] = "https://ntfy.sh/mytopic"
+    payload["notify_on"] = "changes"
+    assert client.post("/api/settings", json=payload).status_code == 200
+    assert client.get("/api/settings").json()["notify_on"] == "changes"
+
+    assert client.post("/api/settings", json=_base_settings_payload()).status_code == 200
+    assert client.get("/api/settings").json()["notify_on"] == "changes"
+
+    payload["notify_on"] = "sometimes"
+    assert client.post("/api/settings", json=payload).status_code == 422
+    assert client.get("/api/settings").json()["notify_on"] == "changes"
+
+
+def test_dashboard_offers_when_to_send_alerts():
+    client = TestClient(app)
+    html = client.get("/").text
+    assert 'id="notify-on"' in html
+    for value in ("failure", "changes", "always"):
+        assert f'<option value="{value}">' in html
+    with open("src/web/static/script.js") as f:
+        js = f.read()
+    assert 'notify_on: $("notify-on").value' in js
+
+
 def test_notify_test_endpoint(monkeypatch):
     client = TestClient(app)
     from src.core import notify
@@ -1070,3 +1102,63 @@ def test_dashboard_has_the_myssi_section_and_pickers():
     with open("src/web/static/script.js") as f:
         js = f.read()
     assert "ssi_accounts" in js and "ssi_account" in js and 'ssi: "MySSI"' in js
+
+
+def test_dashboard_shows_failed_writes_in_the_run_views():
+    """check.md B3/B4: a run's ``failed`` writes are counted in the job
+    results and the history list, and the run view lists them under their
+    own heading, apart from the uploaded/updated ones."""
+    with open("src/web/static/script.js") as f:
+        js = f.read()
+    assert "if (counts.failed) parts.push(`failed: ${counts.failed}`)" in js
+    assert "if (last.failed && last.failed.length) parts.push(`failed: ${last.failed.length}`)" in js
+    assert "<h3>Failed (${results.failed.length})</h3>" in js
+    assert 'write${results.failed.length === 1 ? "" : "s"} failed' in js
+
+
+def test_garmin_fit_upload_on_jobs_sync_now_and_kept_by_the_settings_form(tmp_path, monkeypatch):
+    """R13 (beta): a job stores garmin_fit_upload (None when unticked, the
+    pair's setting then applies), Sync now passes it to the run, and the
+    settings form - which has no such field - keeps the stored global value."""
+    from src.core.config import ConfigManager
+    _isolated_settings(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/api/settings").json()["garmin_fit_upload"] is False          # off by default
+
+    payload = _base_settings_payload()
+    payload["cron_jobs"] = [
+        {"id": "to-garmin", "source": "divelogs", "target": "garmin", "directionality": "to_garmin",
+         "frequency": "daily", "hour": 6, "minute": 0, "day_of_week": 0, "interval_minutes": 60,
+         "only_new": True, "sync_gases": True, "enabled": True, "garmin_fit_upload": True},
+        {"id": "plain", "frequency": "daily", "hour": 7, "minute": 0, "day_of_week": 0, "interval_minutes": 60,
+         "only_new": True, "sync_gases": True, "enabled": True}]
+    assert client.post("/api/settings", json=payload).status_code == 200
+    jobs = {j["id"]: j for j in client.get("/api/settings").json()["cron_jobs"]}
+    assert jobs["to-garmin"]["garmin_fit_upload"] is True and jobs["plain"]["garmin_fit_upload"] is None
+
+    settings = ConfigManager.load_settings()
+    settings.garmin_fit_upload = True
+    ConfigManager.save_settings(settings)
+    assert client.post("/api/settings", json=payload).status_code == 200
+    assert client.get("/api/settings").json()["garmin_fit_upload"] is True           # not wiped by the form
+
+    called = []
+    monkeypatch.setattr(scheduler, "run_sync_thread", lambda dry_run, custom_settings=None: called.append(custom_settings))
+    assert client.post("/api/sync/trigger", json={"dry_run": True, "garmin_fit_upload": True}).status_code == 200
+    assert called[-1]["garmin_fit_upload"] is True
+    assert client.post("/api/sync/trigger", json={"dry_run": True}).status_code == 200
+    assert "garmin_fit_upload" not in called[-1]
+
+
+def test_dashboard_offers_new_garmin_dives_as_fit():
+    """The page: a "New Garmin dives as .fit (beta)" box next to Sync now and
+    in the job editor; ticked, the run or job carries garmin_fit_upload."""
+    client = TestClient(app)
+    html = client.get("/").text
+    for element in ("trigger-garmin-fit", "job-garmin-fit"):
+        assert f'id="{element}"' in html, element
+    assert html.count("New Garmin dives as .fit (beta)") == 2
+    with open("src/web/static/script.js") as f:
+        js = f.read()
+    assert 'if ($("trigger-garmin-fit").checked) payload.garmin_fit_upload = true;' in js
+    assert 'garmin_fit_upload: $("job-garmin-fit").checked ? true : null,' in js

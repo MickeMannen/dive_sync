@@ -231,3 +231,47 @@ def test_help_names_myssi_and_the_account_flag(tmp_path):
     text = " ".join(res.stdout.split())
     assert "--ssi-account EMAIL" in text and "ssi[:<email>] (MySSI, beta)" in text
     assert "new dives only" in text and "MySSI" in text
+
+
+def test_sync_summary_lists_failed_writes_apart_from_the_done_ones(capsys):
+    """check.md B3/B4: the summary block names the writes the receiver
+    refused or could not do under "Failed", with the service, id, time and
+    reason, and leaves them out of the uploaded/updated counts; a run with
+    nothing failed has no such line."""
+    import sync as cli
+    results = {"dry_run": False, "directionality": "to_divelogs", "matched_count": 2, "source": "garmin",
+               "target": "divelogs", "uploaded_to_divelogs": [{"time": "2026-06-22 12:00:00", "source_id": "1"}],
+               "uploaded_to_garmin": [], "updated_on_divelogs": [], "updated_on_garmin": [], "conflicts": [],
+               "failed": [{"action": "update", "service": "divelogs", "id": "2", "time": "2026-06-23 09:00:00",
+                           "reason": "Divelogs.org did not take the update"},
+                          {"action": "add", "service": "divelogs", "time": "2026-06-24 09:00:00"}]}
+    cli.print_sync_summary(results, "Garmin Connect", "Divelogs.org")
+    out = capsys.readouterr().out
+    assert "Uploaded to Divelogs.org: 1" in out and "Updated on Divelogs.org: 0" in out
+    assert "Failed: 2 (not done; see the log for why)" in out
+    assert "  - update on Divelogs.org ID 2, dive at 2026-06-23 09:00:00: Divelogs.org did not take the update" in out
+    assert "  - add on Divelogs.org, dive at 2026-06-24 09:00:00" in out
+    results["failed"] = []
+    cli.print_sync_summary(results, "Garmin Connect", "Divelogs.org")
+    assert "Failed" not in capsys.readouterr().out
+
+
+def test_garmin_fit_upload_flag_dry_run_lists_the_fit_uploads(tmp_path):
+    """R13 (beta): --garmin-fit-upload makes this run send its new Garmin
+    dives as .fit files; with --dry-run the log lists each and what a .fit
+    cannot carry, and nothing is written. Without the flag (and the pair's
+    setting off) the same run says nothing about .fit."""
+    profiled = dict(D1, samplerate=60, sampledata=[{"d": 0.0}, {"d": 9.0}, {"d": 18.2}, {"d": 5.0}, {"d": 0.0}])
+    _write_mock(tmp_path, [], [profiled])
+    (tmp_path / "settings.json").write_text(json.dumps({"settings_version": 2, "create_on_garmin": True,
+                                                        "sync_filters": {"only_new": False}}))
+    res = _run(tmp_path, "--direction", "to_garmin", "--dry-run", "--full-sync", "--garmin-fit-upload")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "new dives with a profile are uploaded as .fit files (beta)" in out
+    assert ("as a .fit file (profile, tanks and gases); set on the activity after the upload: notes, location name, "
+            "activity name") in out and "not carried" not in out
+    assert not list((tmp_path / "mock" / "garmin" / "default" / "data").glob("*.json"))
+    res = _run(tmp_path, "--direction", "to_garmin", "--dry-run", "--full-sync")
+    assert res.returncode == 0 and ".fit" not in res.stdout + res.stderr
+    assert "--garmin-fit-upload" in _run(tmp_path, "--help").stdout

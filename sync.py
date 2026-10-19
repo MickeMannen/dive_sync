@@ -159,6 +159,43 @@ def print_test_mapping(out, catalog=None, units="metric"):
     print("\nRead-only: nothing was written.")
 
 
+def print_sync_summary(results, source_name, target_name):
+    """The block after a run: what was uploaded, updated, left as a
+    conflict, and what the receiver refused or could not do (``failed``,
+    check.md B3/B4) - a failed write is never listed as done."""
+    print("\n" + "="*50)
+    print("       DIVE SYNC RESULTS SUMMARY")
+    print("="*50)
+    print(f"Dry Run Mode:    {results['dry_run']}")
+    print(f"Directionality:  {results['directionality']}")
+    print(f"Matched Dives:   {results['matched_count']}")
+    print("-"*50)
+    src, tgt = results["source"], results["target"]
+    names = {src: source_name, tgt: target_name}
+    for side, other in ((tgt, src), (src, tgt)):
+        items = results[f"uploaded_to_{side}"]
+        print(f"Uploaded to {names[side]}: {len(items)}")
+        for item in items:
+            print(f"  - {item['time']} ({names[other]} ID: {item['source_id']})")
+    for side, other in ((src, tgt), (tgt, src)):
+        items = results[f"updated_on_{side}"]
+        print(f"Updated on {names[side]}: {len(items)}")
+        for item in items:
+            print(f"  - {item['time']} ({names[side]} ID: {item['id']}, paired with {names[other]} ID: {item['linked_id']})")
+    conflicts = results.get("conflicts", [])
+    if conflicts:
+        print(f"Conflicts for manual resolution: {len(conflicts)} (see --list-conflicts)")
+    failed = results.get("failed", [])
+    if failed:
+        print(f"Failed: {len(failed)} (not done; see the log for why)")
+        for item in failed:
+            where = names.get(item.get("service"), item.get("service") or "?")
+            which = f" ID {item['id']}" if item.get("id") else ""
+            reason = f": {item['reason']}" if item.get("reason") else ""
+            print(f"  - {item.get('action', 'write')} on {where}{which}, dive at {item.get('time', '?')}{reason}")
+    print("="*50)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Dive Sync: Dive synchronization engine between Garmin Connect, Divelogs.org, Subsurface, "
@@ -217,6 +254,17 @@ def main():
              "refresh cache (needed to pick up an edit to only notes, buddy, weight or visibility)."
     )
     
+    parser.add_argument(
+        "--garmin-fit-upload",
+        dest="garmin_fit_upload",
+        action="store_true",
+        default=None,
+        help="Beta: upload the new dives this run creates on Garmin Connect as .fit files (profile, tanks and gases "
+             "arrive) instead of manual activities with the summary only. Creating new dives on Garmin must be on "
+             "for the pair (create_on_garmin). Without the flag the pair's garmin_fit_upload setting applies (off "
+             "by default). With --dry-run the log lists what would be uploaded and what a .fit cannot carry."
+    )
+
     def direction_value(value: str) -> str:
         value = value.strip().lower()
         if value == "bidirectional":
@@ -460,6 +508,8 @@ def main():
                 run_kwargs["direction_override"] = args.direction
             if args.no_garmin_cache:
                 run_kwargs["use_garmin_cache_override"] = False
+            if args.garmin_fit_upload:
+                run_kwargs["garmin_fit_upload_override"] = True
             results = engine.run_sync(
                 dry_run=args.dry_run,
                 date_from_override=args.date_from,
@@ -468,30 +518,7 @@ def main():
                 **run_kwargs
             )
             
-            # Print sync results summary
-            print("\n" + "="*50)
-            print("       DIVE SYNC RESULTS SUMMARY")
-            print("="*50)
-            print(f"Dry Run Mode:    {results['dry_run']}")
-            print(f"Directionality:  {results['directionality']}")
-            print(f"Matched Dives:   {results['matched_count']}")
-            print("-"*50)
-            src, tgt = results["source"], results["target"]
-            names = {src: engine.source_name, tgt: engine.target_name}
-            for side, other in ((tgt, src), (src, tgt)):
-                items = results[f"uploaded_to_{side}"]
-                print(f"Uploaded to {names[side]}: {len(items)}")
-                for item in items:
-                    print(f"  - {item['time']} ({names[other]} ID: {item['source_id']})")
-            for side, other in ((src, tgt), (tgt, src)):
-                items = results[f"updated_on_{side}"]
-                print(f"Updated on {names[side]}: {len(items)}")
-                for item in items:
-                    print(f"  - {item['time']} ({names[side]} ID: {item['id']}, paired with {names[other]} ID: {item['linked_id']})")
-            conflicts = results.get("conflicts", [])
-            if conflicts:
-                print(f"Conflicts for manual resolution: {len(conflicts)} (see --list-conflicts)")
-            print("="*50)
+            print_sync_summary(results, engine.source_name, engine.target_name)
 
     except Exception as e:
         logger.exception("Synchronization engine failed: %s", e)

@@ -114,14 +114,14 @@ ColumnLayout {
         return {
             date: fDate.text, time: fTime.text, utc_offset: fOffset.text,
             duration: fDuration.text, max_depth: fMaxDepth.text, avg_depth: fAvgDepth.text,
-            temp_min: fTempMin.text, temp_max: fTempMax.text, temp_avg: fTempAvg.text,
+            temp_min: fTempMin.text, temp_max: fTempMax.text, temp_avg: fTempAvg.text, air_temp: fAirTemp.text,
             dive_number: fDiveNumber.text, surface_interval: fSurfaceInterval.text, bottom_time: fBottomTime.text,
             dive_mode: fDiveMode.currentText, water_type: fWaterType.currentText, water_density: fWaterDensity.text,
             location: fLocation.text, lat: fLat.text, lng: fLng.text, exit_lat: fExitLat.text, exit_lng: fExitLng.text,
-            buddy: fBuddy.text, notes: fNotes.text, weight: fWeight.text, visibility: fVisibility.text,
+            buddy: fBuddy.text, notes: fNotes.text, weight: fWeight.text, visibility: fVisibility.text, suit: fSuit.text,
             computer_vendor: fVendor.text, computer_model: fModel.text, computer_serial: fSerial.text,
             computer_firmware: fFirmware.text, gf_low: fGfLow.text, gf_high: fGfHigh.text, deco_model: fDecoModel.text,
-            cns_start: fCnsStart.text, cns_end: fCnsEnd.text, tanks: tanks
+            cns_start: fCnsStart.text, cns_end: fCnsEnd.text, sac: fSac.text, tanks: tanks
         }
     }
     // A field commit (Return, Tab, a click elsewhere): the form goes to the
@@ -464,6 +464,7 @@ ColumnLayout {
                         fDate.text = form.date || ""; fTime.text = form.time || ""; fOffset.text = form.utc_offset || ""
                         fDuration.text = form.duration || ""; fMaxDepth.text = form.max_depth || ""; fAvgDepth.text = form.avg_depth || ""
                         fTempMin.text = form.temp_min || ""; fTempMax.text = form.temp_max || ""; fTempAvg.text = form.temp_avg || ""
+                        fAirTemp.text = form.air_temp || ""; fSuit.text = form.suit || ""
                         fDiveNumber.text = form.dive_number || ""; fSurfaceInterval.text = form.surface_interval || ""
                         fBottomTime.text = form.bottom_time || ""; fWaterDensity.text = form.water_density || ""
                         fLocation.text = form.location || ""; fLat.text = form.lat || ""; fLng.text = form.lng || ""
@@ -474,6 +475,7 @@ ColumnLayout {
                         fSerial.text = form.computer_serial || ""; fFirmware.text = form.computer_firmware || ""
                         fGfLow.text = form.gf_low || ""; fGfHigh.text = form.gf_high || ""; fDecoModel.text = form.deco_model || ""
                         fCnsStart.text = form.cns_start || ""; fCnsEnd.text = form.cns_end || ""
+                        fSac.text = form.sac || ""; fSac.placeholder = form.sac_hint || ""
                         var choices = page.sel.choices || {}
                         loadChoice(fDiveMode, choices.dive_mode, form.dive_mode)
                         loadChoice(fWaterType, choices.water_type, form.water_type)
@@ -538,6 +540,17 @@ ColumnLayout {
                             onClicked: convertController.selectedCount > 1 ? convertController.revertSelected() : convertController.revert(convertController.currentRow)
                         }
                     }
+                    // Rebreather data is untested (plans/gap-roadmap.md R18b): said, muted, under the source line
+                    Text {
+                        objectName: "ccrNote"
+                        visible: page.hasDive && !!page.sel.ccr_note
+                        text: page.sel.ccr_note || ""
+                        color: Theme.muted
+                        font.pixelSize: 11
+                        font.italic: true
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
                     Text {
                         objectName: "enrichedLine"
                         visible: page.editing && (page.sel.enriched || "") !== ""
@@ -580,10 +593,15 @@ ColumnLayout {
                             Edit { id: fTempMin; objectName: "edit-temp-min"; label: "Water temp min (" + units.labels.temperature + ")"; onEditingFinished: page.stageCurrent() }
                             Edit { id: fTempMax; objectName: "edit-temp-max"; label: "Water temp max (" + units.labels.temperature + ")"; onEditingFinished: page.stageCurrent() }
                             Edit { id: fTempAvg; objectName: "edit-temp-avg"; label: "Water temp avg (" + units.labels.temperature + ")"; onEditingFinished: page.stageCurrent() }
+                            Edit { id: fAirTemp; objectName: "edit-air-temp"; label: "Air temp (" + units.labels.temperature + ")"; onEditingFinished: page.stageCurrent() }
                             Edit { id: fSurfaceInterval; objectName: "edit-surface-interval"; label: "Surface interval (min)"; onEditingFinished: page.stageCurrent() }
                             Choice { id: fDiveMode; objectName: "edit-dive-mode"; label: "Dive mode"; onPicked: page.stageCurrent() }
                             Choice { id: fWaterType; objectName: "edit-water-type"; label: "Water type"; onPicked: page.stageCurrent() }
                             Edit { id: fWaterDensity; objectName: "edit-water-density"; label: "Water density (kg/m³)"; onEditingFinished: page.stageCurrent() }
+                            // the computer's own SAC; when it logged none the placeholder holds the one computed from the tanks (R9)
+                            Edit { id: fSac; objectName: "edit-sac"; label: "SAC (" + units.labels.sac + ")"; onEditingFinished: page.stageCurrent() }
+                            Edit { objectName: "show-rmv"; label: "RMV (" + units.labels.sac + ")"; readOnly: true; text: page.hasDive ? (page.sel.rmv || "") : "" }
+                            Edit { objectName: "show-otu"; label: "OTU"; readOnly: true; text: page.hasDive ? (page.sel.otu || "") : "" }
                             Item { Layout.fillWidth: true }
                         }
                     }
@@ -619,6 +637,7 @@ ColumnLayout {
                             Edit { id: fBuddy; objectName: "edit-buddy"; label: "Buddy"; Layout.columnSpan: 2; fieldWidth: 300; onEditingFinished: page.stageCurrent() }
                             Edit { id: fWeight; objectName: "edit-weight"; label: "Weight (" + units.labels.weight + ")"; onEditingFinished: page.stageCurrent() }
                             Edit { id: fVisibility; objectName: "edit-visibility"; label: "Visibility (" + units.labels.depth + ")"; onEditingFinished: page.stageCurrent() }
+                            Edit { id: fSuit; objectName: "edit-suit"; label: "Suit"; Layout.columnSpan: 2; fieldWidth: 300; onEditingFinished: page.stageCurrent() }
                         }
                         Text { text: "Notes"; color: Theme.muted; font.pixelSize: 11 }
                         // Grows with its text rather than scrolling inside the page

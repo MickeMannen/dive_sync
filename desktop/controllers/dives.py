@@ -44,6 +44,9 @@ ALL_COLUMNS = [
     ("water_temp", "Water temp", True),
     ("avg_depth", "Avg Depth", True),
     ("sac", "SAC (L/min)", True),
+    ("air_temp", "Air temp", True),
+    ("water_type", "Water type", False),
+    ("suit", "Suit", False),
     ("tanks", "Tanks", False),
     ("notes", "Notes", False),
     ("id", "Dive ID", False),
@@ -71,7 +74,12 @@ SERVICE_DEFAULT_ON = {"garmin": ["fit", "activity_name", "device"]}
 
 
 # Columns a service never has a value for, left out of its table and dialog.
-SERVICE_HIDDEN_COLUMNS = {"subsurface": {"visibility"}}      # Subsurface rates visibility 0-5, no distance
+# The air temperature, water type and suit (R10) are held by the services cached as
+# UnifiedDive; Garmin's raw cache has no slot for them, Divelogs' only for the
+# air temperature (its ``airtemp``, R10b).
+_NO_R10_COLUMNS = {"air_temp", "water_type", "suit"}
+SERVICE_HIDDEN_COLUMNS = {"subsurface": {"visibility"},      # Subsurface rates visibility 0-5, no distance
+                          "garmin": set(_NO_R10_COLUMNS), "divelogs": {"water_type", "suit"}}
 # What a shared column means on a service, where it differs from the heading.
 SERVICE_COLUMN_LABELS = {"subsurface": {"location": "Dive site"}, "divelogs": {"location": "Location, dive site"},
                          "ssi": {"location": "Dive site"}}      # MySSI: a site from SSI's own database
@@ -113,7 +121,7 @@ DEFAULT_VISIBLE_COLUMNS = [key for key, _, _ in ALL_COLUMNS[:9]]
 COLUMN_WIDTHS = {"date": 100, "time": 80, "dive_number": 70, "location": 240, "max_depth": 100, "duration": 90,
                  "buddy": 110, "weight": 90, "visibility": 90, "water_temp": 110, "avg_depth": 100,
                  "sac": 100, "tanks": 180, "notes": 220, "id": 110, "garmin_id": 110, "fit": 50, "device": 150,
-                 "activity_name": 220}
+                 "activity_name": 220, "air_temp": 90, "water_type": 90, "suit": 120}
 # The one column that takes whatever width is left over, so the table fits
 # the window at any size instead of only near the size it was designed at:
 # the fixed columns are all short, bounded values, and the location is the
@@ -207,6 +215,8 @@ def display_value(row: Dict[str, Any], key: str, system: str) -> str:
             return display_number("depth", value, system)
         if key == "sac":
             return display_number("sac", value, system)
+        if key == "air_temp":
+            return display_number("temperature", value, system)
         if key == "water_temp" and row.get("water_temps") is not None:
             return dive_cache._format_water_temp(*row["water_temps"], units=system)
         if key == "tanks" and row.get("tanks_detail") is not None:
@@ -238,7 +248,7 @@ def display_row(row: Dict[str, Any], system: str) -> Dict[str, Any]:
             out[key] = display_value(row, key, system)
     if system == core_units.METRIC:
         return out
-    for key in ("max_depth", "avg_depth", "sac", "water_temp", "tanks"):
+    for key in ("max_depth", "avg_depth", "sac", "air_temp", "water_temp", "tanks"):
         if key in row:
             out[key] = display_value(row, key, system)
     if row.get("water_temp_value") not in (None, ""):

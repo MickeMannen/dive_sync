@@ -50,6 +50,7 @@
         <label class="inline-checkbox"><input type="checkbox" id="trigger-only-new" checked> Only new dives</label>
         <label class="inline-checkbox"><input type="checkbox" id="trigger-gases" checked> Sync gases</label>
         <label class="inline-checkbox" title="Read a Garmin dive from the local copy when Garmin's list shows it unchanged, instead of downloading it again. Edits to only notes, buddy, weight or visibility are not visible in that list: untick to pick those up."><input type="checkbox" id="trigger-garmin-cache" checked> Use cached Garmin dives</label>
+        <label class="inline-checkbox" title="Beta. A new dive this run creates on Garmin Connect is uploaded as a .fit file, so its profile, tanks and gases arrive; without it Garmin gets a manual activity with the summary only. Creating new dives on Garmin must be on for the pair. Try it on one dive first (a dry run lists what would be uploaded)."><input type="checkbox" id="trigger-garmin-fit"> New Garmin dives as .fit (beta)</label>
         <button type="button" id="trigger-sync">Sync now</button>
         <span id="trigger-message" class="muted"></span>
       </div>
@@ -366,6 +367,7 @@
           <label class="inline-checkbox"><input type="checkbox" id="job-only-new" checked> Only new dives</label>
           <label class="inline-checkbox"><input type="checkbox" id="job-gases" checked> Sync gases</label>
           <label class="inline-checkbox"><input type="checkbox" id="job-garmin-cache" checked> Use cached Garmin dives</label>
+          <label class="inline-checkbox" title="Beta. A new dive this run creates on Garmin Connect is uploaded as a .fit file, so its profile, tanks and gases arrive; without it Garmin gets a manual activity with the summary only. Creating new dives on Garmin must be on for the pair. Try it on one dive first (a dry run lists what would be uploaded)."><input type="checkbox" id="job-garmin-fit"> New Garmin dives as .fit (beta)</label>
           <button type="button" id="job-add">Add job</button>
           <button type="button" class="secondary" id="job-cancel">Cancel</button>
         </div>
@@ -377,10 +379,15 @@
     </section>
 
     <section class="card">
-      <h2>Failure alerts</h2>
-      <p class="muted">Get told when an unattended sync fails: the dashboard sends a short text message to this address whenever a scheduled or manual run fails. Works with ntfy (paste your topic URL, e.g. https://ntfy.sh/your-topic) and most generic webhook receivers; Gotify needs its endpoint to accept a raw text body.</p>
+      <h2>Alerts</h2>
+      <p class="muted">Get told how an unattended sync went: the dashboard sends a short text message to this address whenever a scheduled or manual run fails, and - if you choose - after a run that changed something or after every run, with what it added, updated, skipped and failed. Works with ntfy (paste your topic URL, e.g. https://ntfy.sh/your-topic) and most generic webhook receivers; Gotify needs its endpoint to accept a raw text body.</p>
       <div class="inline-form notify-form">
         <label>Webhook URL <input type="text" id="notify-url" placeholder="https://ntfy.sh/your-topic"></label>
+        <label title="When a message is sent. A dry run never counts as a change.">Send <select id="notify-on">
+          <option value="failure">when a run fails</option>
+          <option value="changes">when a run changes something or fails</option>
+          <option value="always">after every run</option>
+        </select></label>
         <div class="actions">
           <button type="button" id="notify-test">Test</button>
           <button type="button" id="notify-save">Save</button>

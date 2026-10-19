@@ -2,9 +2,10 @@ import os
 import re
 import json
 import logging
+import tempfile
 import time
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 from garminconnect import (
     Garmin,
@@ -19,6 +20,22 @@ from src.core import garmin_files, progress
 from src.core.models import UnifiedDive, GasMixture, UnifiedSample, recorded_water_temp
 
 logger = logging.getLogger("dive_sync.garmin")
+
+# A new dive uploaded as a .fit (plans/gap-roadmap.md R13): what fit_drops
+# names that the activity itself holds, set through update_dive right after
+# the upload (the activity name and location are the site's).
+FIT_DROPS_SET_AFTER_UPLOAD = frozenset({"site", "buddy", "notes", "weight", "visibility",
+                                        "activityName", "locationName"})
+# Garmin's own service fields (the board's activityName / locationName) as
+# the log names them; another service's service fields never reach Garmin,
+# so they are not listed as lost to the .fit either.
+GARMIN_SERVICE_FIELDS = {"activityName": "activity name", "locationName": "location name"}
+# While Connect is still processing an upload (HTTP 202, no id yet): how
+# often and how far apart the newest activities are listed to find it, and
+# how close its start must be to the dive's.
+FIT_UPLOAD_POLL_ATTEMPTS = 3
+FIT_UPLOAD_POLL_SECONDS = 3.0
+FIT_UPLOAD_MATCH_SECONDS = 120
 
 
 def safe_account_id(username: str) -> str:
@@ -70,6 +87,8 @@ class GarminAdapter(BaseDiveAdapter):
             FieldSpec(key="garmin.weight", label="Weight", type="number", unified="weight"),
             FieldSpec(key="garmin.visibility", label="Visibility", type="number", unified="visibility"),
             FieldSpec(key="garmin.gps", label="GPS position", type="gps", unified="gps"),
+            # endLatitude/endLongitude of the summary (R8); read only until a write is verified against Connect
+            FieldSpec(key="garmin.exit_gps", label="Exit position", type="gps", unified="exit_gps", writable=False),
             FieldSpec(key="garmin.tanks", label="Tanks / gases", type="tanks", unified="tanks", writable=False),
             FieldSpec(key="garmin.samples", label="Dive profile", type="samples", unified="samples", writable=False),
         ]
@@ -91,6 +110,10 @@ class GarminAdapter(BaseDiveAdapter):
         # or detected from the newest dive's timeZoneUnitDTO on first use.
         self.upload_timezone: Optional[str] = None
         self._detected_timezone: Optional[str] = None
+        # True: add_dive uploads a dive with a profile as a .fit file instead
+        # of posting a manual activity (settings garmin_fit_upload, R13, beta;
+        # set by SyncEngine.run_sync for the run).
+        self.fit_upload: bool = False
         # The account's refresh cache (garmin_files.cache_dir). When set,
         # fetch_dives reads a dive whose listing entry is unchanged from
         # there instead of spending three API calls on it, and writes what it
@@ -343,10 +366,170 @@ class GarminAdapter(BaseDiveAdapter):
         finally:
             time.sleep(self.cooldown_seconds)
 
+    # -- new dives as a .fit upload (plans/gap-roadmap.md R13, beta) --------
+
+    def sends_as_fit(self, dive: UnifiedDive) -> bool:
+        """True when ``add_dive`` uploads this dive as a ``.fit`` file:
+        ``fit_upload`` is on and the dive has a profile. A dive without
+        samples is posted as a manual activity either way - a ``.fit`` of a
+        summary alone gains nothing over it."""
+        return bool(self.fit_upload) and bool(dive.samples)
+
+    def fit_upload_split(self, dive: UnifiedDive) -> Tuple[List[str], List[str]]:
+        """What the ``.fit`` of ``dive`` leaves out (`fit_writer.fit_drops`),
+        as (set on the activity right after the upload, through the same
+        call a matched dive's update uses; not carried at all). The other
+        services' ids are left out of both: the link lives in sync_state."""
+        from src.core.convert.fit_writer import fit_drops
+        own = dive.model_copy(update={"service_fields": {k: v for k, v in dive.service_fields.items()
+                                                         if k in GARMIN_SERVICE_FIELDS}})
+        drops = [d for d in fit_drops(own) if d != "service ids"]
+        if own.service_fields.get("activityName"):
+            drops = [d for d in drops if d != "site"]       # the site goes in as the activity name
+        set_after = [GARMIN_SERVICE_FIELDS.get(d, d) for d in drops if d in FIT_DROPS_SET_AFTER_UPLOAD]
+        return set_after, [d for d in drops if d not in FIT_DROPS_SET_AFTER_UPLOAD]
+
+    def upload_details(self, dive: UnifiedDive) -> Dict[str, Any]:
+        """BaseDiveAdapter.upload_details: for a dive sent as a ``.fit``,
+        ``upload_as`` "fit", ``fit_drops`` (what it cannot carry) and the
+        log line; nothing for a manual activity."""
+        if not self.sends_as_fit(dive):
+            return {}
+        set_after, dropped = self.fit_upload_split(dive)
+        note = "as a .fit file (profile, tanks and gases)"
+        if set_after:
+            note += f"; set on the activity after the upload: {', '.join(set_after)}"
+        if dropped:
+            note += f"; not carried to Garmin: {', '.join(dropped)}"
+        return {"upload_as": "fit", "fit_drops": dropped, "note": note}
+
+    def _fit_ready(self, dive: UnifiedDive) -> UnifiedDive:
+        """``dive`` as the ``.fit`` is written from it: with no UTC clock and
+        no zone the writer would take the local clock as UTC, which Connect
+        shows shifted by the account's offset, so such a dive gets the
+        account's zone - the zone a manual activity is stamped with."""
+        from src.core.convert.edit import utc_offset_of
+        if utc_offset_of(dive) is not None:
+            return dive
+        ready = dive.model_copy(deep=True)
+        ready.timezone = self.resolve_upload_timezone()
+        return ready
+
+    @staticmethod
+    def _upload_outcome(result: Any) -> Tuple[Optional[str], Optional[str]]:
+        """(the new activity id, the id of the activity Connect already has
+        when it answers "duplicate") from the upload service's
+        ``detailedImportResult``; (None, None) when it says neither, e.g.
+        while it is still processing the file (HTTP 202)."""
+        report = result.get("detailedImportResult") if isinstance(result, dict) else None
+        if not isinstance(report, dict):
+            return None, None
+        for success in report.get("successes") or []:
+            if isinstance(success, dict) and success.get("internalId"):
+                return str(success["internalId"]), None
+        for failure in report.get("failures") or []:
+            if not isinstance(failure, dict):
+                continue
+            texts = " ".join(str((m or {}).get("content") or "") for m in failure.get("messages") or []
+                             if isinstance(m, dict))
+            if "duplicate" in texts.lower():
+                return None, str(failure.get("internalId") or "") or "?"
+        return None, None
+
+    @staticmethod
+    def _is_duplicate_error(error: Exception) -> bool:
+        """Connect's answer to a file it already has: HTTP 409, "Duplicate
+        Activity" (garminconnect raises it as an API Error 409)."""
+        text = str(error).lower()
+        return re.search(r"\b409\b", text) is not None or "duplicate" in text
+
+    def _find_uploaded_activity(self, dive: UnifiedDive) -> Optional[str]:
+        """The id of the activity a ``.fit`` upload just made, when the upload
+        service answered before it finished processing: the newest diving
+        activities listed again (a few tries, `FIT_UPLOAD_POLL_SECONDS`
+        apart - never faster than the cooldown) for one starting within
+        `FIT_UPLOAD_MATCH_SECONDS` of the dive."""
+        for _ in range(FIT_UPLOAD_POLL_ATTEMPTS):
+            time.sleep(max(self.cooldown_seconds, FIT_UPLOAD_POLL_SECONDS))
+            try:
+                recent = self.client.get_activities(0, 10, activitytype="diving") or []
+            except Exception as e:
+                logger.warning("Could not list the newest Garmin activities to find the upload: %s", e)
+                continue
+            for activity in recent:
+                start = self._parse_datetime(activity.get("startTimeLocal") or "")
+                if start and abs((start - dive.date_time).total_seconds()) <= FIT_UPLOAD_MATCH_SECONDS \
+                        and activity.get("activityId"):
+                    return str(activity["activityId"])
+        return None
+
+    def _add_dive_as_fit(self, dive: UnifiedDive) -> Optional[str]:
+        """``add_dive`` for a dive sent as a ``.fit`` (R13): the dive written
+        from scratch with the Dive edit page's FIT writer, uploaded through
+        garminconnect's ``upload_activity`` (Connect's upload service, the
+        file Connect's own web upload takes), the new activity's id read
+        from the answer (or found by its start time while Connect is still
+        processing it), then what the file cannot hold but the activity can
+        (name, notes, buddy, weight, visibility, location) set through
+        ``update_dive``. A duplicate answer sets ``add_skipped_reason``."""
+        from src.core.convert.fit_writer import encode_fit
+        fit_dive = self._fit_ready(dive)
+        try:
+            data = encode_fit(fit_dive)
+        except Exception as e:
+            logger.error("Could not write the dive at %s as a .fit file: %s", dive.date_time, e)
+            return None
+        logger.info("Uploading the dive at %s to Garmin Connect as a .fit file (%d bytes)...", dive.date_time, len(data))
+        with tempfile.TemporaryDirectory(prefix="dive_sync_fit_") as folder:
+            path = os.path.join(folder, f"dive_sync {dive.date_time.strftime('%Y-%m-%d %H-%M-%S')}.fit")
+            with open(path, "wb") as f:
+                f.write(data)
+            time.sleep(self.cooldown_seconds)
+            try:
+                result = self.client.upload_activity(path)
+            except GarminConnectTooManyRequestsError as e:
+                logger.error("Garmin Connect rate-limited the upload (HTTP 429); wait 10-15 minutes before the "
+                             "next run: %s", e)
+                return None
+            except Exception as e:
+                if self._is_duplicate_error(e):
+                    self.add_skipped_reason = "already on Garmin Connect (Connect answered: duplicate activity)"
+                    logger.info("Garmin Connect already has the dive at %s (duplicate upload): %s", dive.date_time, e)
+                    return None
+                if re.search(r"\b429\b", str(e)):
+                    logger.error("Garmin Connect rate-limited the upload (HTTP 429); wait 10-15 minutes before the "
+                                 "next run: %s", e)
+                else:
+                    logger.error("Error uploading the dive at %s to Garmin Connect: %s", dive.date_time, e)
+                return None
+            finally:
+                time.sleep(self.cooldown_seconds)
+        activity_id, duplicate_of = self._upload_outcome(result)
+        if duplicate_of:
+            self.add_skipped_reason = f"already on Garmin Connect as activity {duplicate_of} (duplicate upload)"
+            logger.info("Garmin Connect already has the dive at %s: activity %s", dive.date_time, duplicate_of)
+            return None
+        if not activity_id:
+            activity_id = self._find_uploaded_activity(dive)
+        if not activity_id:
+            logger.error("The dive at %s was uploaded to Garmin Connect, but Connect did not say the new activity's "
+                         "id and it was not found in the newest activities; the next run matches it by its start "
+                         "time instead of creating it again.", dive.date_time)
+            return None
+        logger.info("Successfully uploaded the dive to Garmin Connect as a .fit file. Activity ID: %s", activity_id)
+        set_after, _ = self.fit_upload_split(dive)
+        if set_after and not self.update_dive(activity_id, dive):
+            logger.warning("Garmin activity %s was created, but %s could not be set on it; the next sync run of "
+                           "this pair sets them.", activity_id, ", ".join(set_after))
+        return activity_id
+
     def add_dive(self, dive: UnifiedDive) -> Optional[str]:
         if not self.logged_in and not self.login():
             logger.error("Cannot add dive: Not authenticated with Garmin Connect.")
             return None
+
+        if self.sends_as_fit(dive):
+            return self._add_dive_as_fit(dive)
 
         logger.info("Adding dive at %s to Garmin Connect...", dive.date_time)
         try:
@@ -710,6 +893,15 @@ class GarminAdapter(BaseDiveAdapter):
         lat = float(lat) if lat is not None else None
         lng = float(lng) if lng is not None else None
 
+        # The exit position (plans/gap-roadmap.md R8): Connect's endLatitude /
+        # endLongitude, read only - whether a PUT takes them back is unverified.
+        exit_lat = sum_dto.get("endLatitude", summary.get("endLatitude"))
+        exit_lng = sum_dto.get("endLongitude", summary.get("endLongitude"))
+        if exit_lat is None or exit_lng is None:
+            exit_lat = exit_lng = None          # a position is a pair
+        else:
+            exit_lat, exit_lng = float(exit_lat), float(exit_lng)
+
         # Parse profile chart data samples
         samples = []
         if activity_details and isinstance(activity_details, dict):
@@ -796,6 +988,8 @@ class GarminAdapter(BaseDiveAdapter):
             samples=samples,
             device_logged=device_logged,
             service_fields={"activityName": activity_name, "locationName": location_name},
+            exit_lat=exit_lat,
+            exit_lng=exit_lng,
         )
 
         try:

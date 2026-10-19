@@ -10,7 +10,8 @@ ColumnLayout {
         syncController.runSyncBetween(dryRun.checked, sourceBox.currentValue || "", targetBox.currentValue || "",
                                       onlyNew.checked, gases.checked,
                                       // blank: the accounts picked below, which the controller remembers
-                                      "", "", garminCache.checked, mirror.checked)
+                                      "", "", garminCache.checked, mirror.checked,
+                                      garminFit.visible && garminFit.checked)
     }
 
     Dialog {
@@ -165,6 +166,18 @@ ColumnLayout {
                     visible: parent.hovered
                     delay: 500
                 }
+            }
+        }
+        // plans/gap-roadmap.md R13 (beta): only when the run writes Garmin
+        CheckBox {
+            id: garminFit
+            objectName: "garminFitCheck"
+            text: "New Garmin dives as .fit (beta)"
+            visible: syncController.offersGarminFit(targetBox.currentValue || "")
+            Tip {
+                text: "Beta. A new dive this run creates on Garmin Connect is uploaded as a .fit file, so its profile, tanks and gases arrive; without it Garmin gets a manual activity with the summary only. Name, notes, buddy, weight and visibility are set on the activity afterwards; the log names what a .fit cannot carry. Creating new dives on Garmin must be on for the pair (Mapping page). Try one dive first: a dry run lists what would be uploaded."
+                visible: parent.hovered
+                delay: 300
             }
         }
         RowLayout {

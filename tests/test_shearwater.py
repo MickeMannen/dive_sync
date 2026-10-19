@@ -4,6 +4,7 @@ The fixture is the owner's own ``dive_data.db`` with its free text
 (Buddy, Location, Site, Notes) replaced by placeholders; ids, dates,
 depths, gases, profile blobs and the cloud bookkeeping are the real ones.
 """
+import json
 import logging
 import os
 import shutil
@@ -11,6 +12,7 @@ from datetime import datetime
 
 import pytest
 
+from src.core.services import shearwater as sw
 from src.core.services.shearwater import (
     ShearwaterAdapter, DROPDOWN_OPTIONS, parse_gnss, parse_number, psi_to_bar, bar_to_psi_text,
 )
@@ -57,7 +59,7 @@ def test_reads_the_owner_fixture(db_copy):
     assert d.service_fields["location"] == "Location 452"
     assert d.service_fields["environment"] == "Lake/Quarry" and d.service_fields["thermal_comfort"] == "Very Hot"
     assert d.service_fields["malfunctions"] == "None"           # the option's label, not a null
-    assert d.service_fields["air_temperature"] == 12.0
+    assert d.air_temp == 12.0 and "air_temperature" not in d.service_fields          # the dive's own field since R10
     assert d.service_fields["environment_notes"] == "Environment notes 452"
     assert d.weight is None and d.lat is None and d.lng is None
     # one transmitter on, pressures from TankProfileData (PSI -> bar), named after the transmitter
@@ -68,11 +70,33 @@ def test_reads_the_owner_fixture(db_copy):
     # the profile decoded from the computer's own log (H5): every sample as logged, 2 s apart, with
     # the transmitter's pressure; the 60 s surface tail after the dive time is kept (decision 2026-09-30)
     assert len(d.samples) == 927
-    assert d.samples[0].model_dump() == {"depth": 1.0, "temp": 30.0, "time": 2, "pressure": 202.57}
+    # ... and every channel the computer logged, in the models' units (plans/gap-roadmap.md R5): the
+    # transmitter's pressure keyed by its tank, NDL/TTS in seconds, CNS and GF99 as percentages, ppO2 in
+    # bar; no setpoint on an open-circuit dive, no GTR before the computer has one
+    assert d.samples[0].model_dump() == {"depth": 1.0, "temp": 30.0, "time": 2, "pressure": 202.57,
+                                         "channels": {"pressures": {0: 202.57}, "ndl": 0, "tts": 60, "deco_stop_depth": 0.0,
+                                                      "cns": 0.0, "ppo2": 0.23, "gf99": 0.0}}
+    at_600 = next(s for s in d.samples if s.time == 600)
+    assert at_600.model_dump() == {"depth": 21.3, "temp": 29.0, "time": 600, "pressure": 169.75,
+                                   "channels": {"pressures": {0: 169.75}, "ndl": 1440, "tts": 360, "deco_stop_depth": 0.0,
+                                                "cns": 1.0, "ppo2": 0.65, "gas_time": 1920}}
+    assert not any(s.channels.setpoint for s in d.samples) and not any(s.channels.deco_stop_time for s in d.samples)
     assert (d.samples[-1].time, d.samples[-1].depth, d.samples[-1].pressure) == (1854, 0.0, 111.28)
     assert max(s.depth for s in d.samples) == d.max_depth
     assert next(s.pressure for s in d.samples if s.time == d.duration) == gas.end_pressure
     assert all(s.pressure is None for s in _by_number(dives)[427].samples)   # no transmitter on that dive
+    assert all(s.channels.pressures == {} and s.channels.ndl is not None for s in _by_number(dives)[427].samples)
+    # one gas, air, from the first sample on: no gas switch; the header's carried fields
+    assert d.events == []
+    assert (d.computer_vendor, d.computer_model, d.computer_serial) == ("Shearwater", "Perdix 2", "A5419AC1")
+    assert (d.gf_low, d.gf_high, d.dive_mode, d.water_type, d.water_density) == (40, 85, "oc_single_gas", "en13319", 1020.0)
+    # dive 433: transmitters T1 and T4 on, so gas_mixtures is [T1, T4] and T4's readings are tank 1's
+    d433 = _by_number(dives)[433]
+    assert [g.tank_name for g in d433.gas_mixtures] == ["T1", "T4"]
+    at_200 = next(s for s in d433.samples if s.time == 200)
+    assert (at_200.pressure, at_200.channels.pressures) == (179.13, {0: 179.13, 1: 162.03})
+    assert sum(1 for s in d433.samples if len(s.channels.pressures) == 2) == 208
+    assert all(set(s.channels.pressures) <= {0, 1} for s in d433.samples)
 
     # the editable pressure columns win over the JSON
     d432 = _by_number(dives)[432]
@@ -115,6 +139,8 @@ def test_catalogue_covers_every_editable_column():
     for name in COLUMNS:
         assert name in specs, name
     assert specs["air_temperature"].type == "number" and specs["environment"].type == "text"
+    assert specs["air_temperature"].unified == "air_temp" and specs["air_temperature"].unit == "°C"   # R10: the key stays, the value moved
+    assert specs["water_type"].unified == "water_type" and not specs["water_type"].writable         # the computer's setting, read only
     assert specs["site"].label == "Site" and specs["site"].unified == "location"       # the app's Site = the dive site
     assert specs["location"].unified is None and "area" in specs["location"].label     # the app's Location = the area
     assert len({f.key.lower() for f in specs.values()}) == len(specs)                   # no two keys differing by case
@@ -169,10 +195,53 @@ def test_engine_creates_the_dives_on_a_uddf_file(db_copy, tmp_path):
     assert written[452].gas_mixtures[0].start_pressure == 202.57
     profile = written[452].samples                                     # the UDDF file gets the profile
     assert len(profile) == 927 and profile[0].time == 2 and max(s.depth for s in profile) == 25.3
+    # ... with the channels (R5): the NDL, CNS and ppO2 at 600 s and, on dive 433, the second transmitter's
+    # pressure under its own tank; the computer and its settings as carried fields
+    at_600 = next(s for s in profile if s.time == 600)
+    assert (at_600.channels.ndl, at_600.channels.cns, at_600.channels.ppo2, at_600.channels.pressures) == (1440, 1.0, 0.65, {0: 169.75})
+    at_200 = next(s for s in written[433].samples if s.time == 200)
+    assert at_200.channels.pressures == {0: 179.13, 1: 162.03} and len(written[433].gas_mixtures) == 2
+    assert (written[452].computer_model, written[452].computer_serial, written[452].gf_low) == ("Perdix 2", "A5419AC1", 40)
     again = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "c.json"),
                        source_adapter=ShearwaterAdapter(db_copy), target_adapter=UddfAdapter(out))
     res = again.run_sync(dry_run=False)
     assert res["uploaded_to_uddf"] == [] and res["uploaded_to_shearwater"] == []
+    # the carried channels and events are no difference on a re-run: the profiles compare equal (depth, temperature,
+    # time) and nothing conflicts. (The tanks are re-sent on this pair on HEAD already: UDDF does not round-trip the
+    # transmitter's name - not an R5 effect.)
+    from src.core.fields import are_samples_different
+    source = _by_number(ShearwaterAdapter(db_copy).fetch_dives())
+    assert not are_samples_different(source[452].samples, written[452].samples)
+    assert not are_samples_different(source[433].samples, written[433].samples)
+    assert res["conflicts"] == [] and res["uploaded_to_uddf"] == []
+
+
+def test_tank_slots_and_the_transmitter_map():
+    """``transmitter_tanks``: which ``gas_mixtures`` entry each transmitter
+    slot is, following ``parse_tanks``'s keeping rule (R5)."""
+    def row(*slots, **columns):
+        data = {"TankData": [{"GasProfile": {"O2Percent": o2}, "DiveTransmitter": {"Name": name, "IsOn": on},
+                              "StartPressurePSI": start, "EndPressurePSI": end}
+                             for name, on, o2, start, end in slots]}
+        return {"TankProfileData": json.dumps(data), **columns}
+
+    t1_t4 = row(("T1", True, 21, "2704", "1294"), ("T2", False, 21, "", ""), ("T3", False, 21, "", ""), ("T4", True, 21, "", "716"),
+                (None, None, 21, "", ""), (None, None, 21, "", ""))
+    assert [(i, g.tank_name) for i, g in sw.tank_slots(t1_t4)] == [(0, "T1"), (3, "T4")]
+    assert sw.transmitter_tanks(t1_t4) == {0: 0, 3: 1} and [g.tank_name for g in sw.parse_tanks(t1_t4)] == ["T1", "T4"]
+    t2_only = row(("T1", False, 21, "", ""), ("T2", True, 32, "3000", "1000"), ("T3", False, 21, "", ""), ("T4", False, 21, "", ""))
+    assert sw.transmitter_tanks(t2_only) == {1: 0} and sw.parse_tanks(t2_only)[0].oxygen == 32.0
+    # a slot switched off but with a hand-typed pressure column is kept (as parse_tanks keeps it), so it is a tank too
+    typed = row(("T1", False, 21, "", ""), ("T2", False, 21, "", ""), Tank1PressureStart="2857.24", Tank1PressureEnd="1218.32")
+    assert sw.transmitter_tanks(typed) == {0: 0} and sw.parse_tanks(typed)[0].start_pressure == 197.0
+    # an unnamed extra slot that is kept is a tank but no transmitter
+    extra = row(("T1", True, 21, "2700", "1300"), ("T2", False, 21, "", ""), ("T3", False, 21, "", ""), ("T4", False, 21, "", ""),
+                (None, None, 50, "3000", "2000"))
+    assert sw.transmitter_tanks(extra) == {0: 0} and len(sw.parse_tanks(extra)) == 2
+    # no slots at all: the gas profiles give the mixes and no transmitter has a tank
+    gases = {"TankProfileData": json.dumps({"GasProfiles": [{"O2Percent": 21, "HePercent": 0}, {"O2Percent": 50, "HePercent": 0}]})}
+    assert sw.transmitter_tanks(gases) == {} and [g.oxygen for g in sw.parse_tanks(gases)] == [21.0, 50.0]
+    assert sw.transmitter_tanks({"TankProfileData": "not json"}) == {} and sw.parse_tanks({}) == []
 
 
 def test_profile_failures_leave_the_dive_without_samples(db_copy, caplog, monkeypatch):
@@ -199,7 +268,7 @@ def test_profile_failures_leave_the_dive_without_samples(db_copy, caplog, monkey
     assert any("log format 'sw-legacy' is not sw-pnf" in m for m in messages)
     assert any("has no log in log_data; no profile" in m for m in messages)
     # an unexpected error inside the decoder is a warning too
-    monkeypatch.setattr(sw, "decode_profile", lambda blob: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(sw, "decode_log", lambda blob, *args: (_ for _ in ()).throw(RuntimeError("boom")))
     caplog.clear()
     with caplog.at_level(logging.WARNING):
         dives = _by_number(adapter.fetch_dives())
@@ -238,10 +307,15 @@ def test_profile_on_the_board_and_in_the_other_services(db_copy, tmp_path):
     new_id = subsurface.add_dive(dive)
     assert new_id == "2025/10/19-Sun-15=21=08/Dive-452"
     computer = open(os.path.join(repo, "2025", "10", "19-Sun-15=21=08", "Divecomputer")).read()
-    assert "\n  0:02 1.0m 30.0°C 202.57bar:0\n" in computer and "\n 30:54 0.0m 30.0°C 111.28bar:0" in computer
+    # every channel the log holds goes along since R12 (Subsurface's own spelling, sticky values on change)
+    assert "\n  0:02 1.0m 30.0°C 202.57bar:0 ndl=0:00 tts=1:00 po2=0.23bar\n  0:04 1.3m 30.0°C 202.57bar:0\n" in computer
+    assert "\n 30:54 0.0m 30.0°C 111.28bar:0" in computer
     assert computer.count("bar:0") == 927
     back = {d.external_ids["subsurface"]: d for d in subsurface.fetch_dives()}[new_id]
     assert len(back.samples) == 927 and back.samples[0].pressure == 202.57 and back.samples[-1].depth == 0.0
+    assert [s.channels.ppo2 for s in back.samples[:3]] == [s.channels.ppo2 for s in dive.samples[:3]] == [0.23, 0.23, 0.24]
+    from src.core.fields import are_samples_different
+    assert not are_samples_different(dive.samples, back.samples)
     assert (back.gas_mixtures[0].start_pressure, back.gas_mixtures[0].end_pressure) == (202.57, 112.52)
 
 
@@ -381,8 +455,8 @@ def test_update_writes_columns_and_cloud_stamps(db_copy, tmp_path, monkeypatch, 
     dive.dive_number = 500                                      # never written: the computer's number stays
     dive.weight, dive.weight_unit = 10.0, "pound"
     dive.lat, dive.lng = 5.123456, 103.654321
-    dive.service_fields.update({"location": "Tenggol", "environment": "ocean/sea", "weather": "Hailstorm",
-                                "air_temperature": 30.0, "symptoms": "none"})
+    dive.service_fields.update({"location": "Tenggol", "environment": "ocean/sea", "weather": "Hailstorm", "symptoms": "none"})
+    dive.air_temp = 30.0
     assert adapter.update_dive(dive_id, dive) is True
 
     lmst, stamps, row = _meta(db_copy, dive_id)
@@ -480,3 +554,72 @@ def test_engine_writes_garmin_metadata_into_the_app(db_copy, tmp_path, monkeypat
     assert caplog.text.count("Garmin Connect has 2 dive(s) that Shearwater app does not have (1992-06-13 to 1993-08-28)") == 1
     _, stamps, row = _meta(db_copy, "881855471760954690")
     assert (row["Buddy"], row["Notes"]) == ("Anna", "From Garmin") and stamps["Buddy"] > 0 and stamps["Notes"] > 0
+
+
+def test_mirror_run_never_tries_to_delete_in_the_app(db_copy, tmp_path, monkeypatch, caplog):
+    """check.md B2: `delete_dive` always refuses, so the adapter says so up
+    front (accepts_mirror_deletes False) and a Mirror run towards Shearwater
+    logs each dive it would have deleted and counts it, instead of a false
+    "Failed to delete" warning per dive. The database is untouched."""
+    import logging
+    import src.core.services.shearwater as sw
+    from src.core.config import ConfigManager, SettingsModel, SyncFilters
+    from src.core.fields import common_default_links
+    from src.core.sync_engine import SyncEngine
+    from tests.test_link_engine import FakeGarmin, _dive
+    assert ShearwaterAdapter.accepts_mirror_deletes is False
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sw, "app_is_running", lambda: False)
+    path = str(tmp_path / "settings.json")
+    ConfigManager.save_settings(SettingsModel(directionality="to_shearwater", sync_filters=SyncFilters(only_new=False),
+                                              api_cooldown_seconds=0.0,
+                                              field_links=common_default_links("garmin", "shearwater")), path)
+    garmin = [_dive(date_time=datetime(2025, 10, 20, 10, 4, 50), external_ids={"garmin": "g454"}, dive_number=454,
+                    duration=2831, max_depth=21.1)]
+    engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "c.json"),
+                        source_adapter=FakeGarmin(garmin), target_adapter=ShearwaterAdapter(db_copy))
+    with caplog.at_level(logging.INFO):
+        res = engine.run_sync(dry_run=False, mirror_override=True)
+    assert res["matched_count"] == 1 and res["deleted_on_shearwater"] == []
+    kept = [s for s in res["skipped"] if s["reason"] == "mirror_never_deletes_here"]
+    assert len(kept) == 26 and all(s["id"] for s in kept)
+    assert "Failed to delete" not in caplog.text and "WARNING" not in caplog.text and "ERROR" not in caplog.text
+    assert caplog.text.count("not deleted (a mirror never deletes on Shearwater app)") == 26
+    assert len(ShearwaterAdapter(db_copy).fetch_dives()) == 27
+
+
+def test_air_temperature_is_the_dives_own_field(db_copy):
+    """R10: ``AirTemperature`` is read into ``UnifiedDive.air_temp`` (the
+    catalogue key ``shearwater.air_temperature`` stays, so saved rules keep
+    working) and written from it - or, for a dive cached before R10, from
+    the service field it used to be; the water type is the computer's
+    setting, read from the log and never written."""
+    from src.core.models import UnifiedDive
+    adapter = ShearwaterAdapter(db_copy)
+    row = {"AirTemperature": "12", "Site": "Reef"}
+    base = dict(date_time=datetime(2026, 1, 1), duration=100, max_depth=10.0, location="Reef")
+    assert adapter._changes(row, UnifiedDive(**base, air_temp=12.0)) == {}
+    assert adapter._changes(row, UnifiedDive(**base, air_temp=30.5)) == {"AirTemperature": "30.5"}
+    assert adapter._changes(row, UnifiedDive(**base, service_fields={"air_temperature": 30.0})) == {"AirTemperature": "30"}   # pre-R10 cache
+    assert adapter._changes(row, UnifiedDive(**base)) == {"AirTemperature": None}      # none means clear, like the other fields
+    assert adapter._changes({"Site": "Reef"}, UnifiedDive(**base)) == {}
+    assert adapter._changes(row, UnifiedDive(**base, air_temp=12.0, water_type="fresh", suit="drysuit")) == {}   # no column for them
+
+
+CCR_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "test_data", "misc_test_files", "ccr_shearwater.db")
+
+
+@pytest.mark.skipif(not os.path.isfile(CCR_DB), reason="the owner's test_data/misc_test_files are not present")
+def test_owner_ccr_dive_has_a_diluent_and_an_oxygen_tank():
+    """check.md B16 on a real Petrel 3 CCR dive: the app stores 21 % for
+    both tanks; D1 is the diluent (the loop's air) and O2 the oxygen."""
+    from src.core.models import has_ccr_data
+    dive = ShearwaterAdapter(CCR_DB).fetch_dives()[0]
+    assert dive.dive_mode == "ccr" and has_ccr_data(dive)
+    assert [(g.tank_name, g.oxygen, g.helium, g.tank_role) for g in dive.gas_mixtures] == [
+        ("D1", 21.0, 0.0, "diluent"), ("O2", 100.0, 0.0, "oxygen")]
+
+
+def test_fixture_open_circuit_dives_are_unchanged_by_the_ccr_rule():
+    """No open-circuit dive of the fixture gets a role from B16."""
+    assert all(g.tank_role is None for d in ShearwaterAdapter(FIXTURE).fetch_dives() for g in d.gas_mixtures)

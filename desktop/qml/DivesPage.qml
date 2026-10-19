@@ -557,6 +557,17 @@ ColumnLayout {
                     font.pixelSize: 11
                     font.italic: true
                 }
+                // Rebreather data is untested (plans/gap-roadmap.md R18b): said on a dive that holds any
+                Text {
+                    objectName: "ccrNote"
+                    visible: !!detailCard.sel.ccr_note
+                    text: detailCard.sel.ccr_note || ""
+                    color: Theme.muted
+                    font.pixelSize: 11
+                    font.italic: true
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
                 Text {
                     visible: controller.fitSupported && !!detailCard.sel.filename
                     text: detailCard.sel.manual ? "FIT file: none (hand-logged dive)"

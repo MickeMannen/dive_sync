@@ -18,7 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.core import garmin_files, layout
 from src.core.config import ConfigManager
-from src.core.models import recorded_water_temp
+from src.core.models import (CCR_DIVE_MODES, CCR_NOTE, CCR_TANK_ROLES, SAC_COMPUTED, SAC_LOGGED, recorded_water_temp,
+                             surface_air_consumption)
 from src.core import units as core_units
 
 logger = logging.getLogger("dive_sync.dive_cache")
@@ -131,47 +132,29 @@ def _format_tanks(tanks: List[Dict[str, Any]], units: str = core_units.METRIC) -
 
 
 def _format_sac(tanks: List[Dict[str, Any]], avg_depth: Any, duration_seconds: Any,
-                units: str = core_units.METRIC) -> str:
+                units: str = core_units.METRIC, logged: Any = None) -> str:
     """Surface Air Consumption in litres per minute, e.g. "14.2" (or cubic
-    feet per minute with one decimal when ``units`` is imperial, "0.5").
+    feet per minute with one decimal when ``units`` is imperial, "0.5"):
+    the computer's own value when the cached dive holds one (``logged``,
+    ``UnifiedDive.sac``), else computed from the tanks by
+    ``models.surface_air_consumption`` (every cylinder added up, which is
+    what makes the number meaningful on a multi-tank dive; both services
+    report bar, litres, metres and seconds here, so there is no unit
+    conversion to do). "" when there is neither."""
+    value, _source = _sac_of(tanks, avg_depth, duration_seconds, logged)
+    return core_units.format_sac(value, units) if value is not None else ""
 
-    Gas breathed at the surface is ``pressure drop x cylinder volume``, and
-    at depth a breath costs the ambient pressure in atmospheres, so::
 
-        SAC = sum(bar used x litres) / (minutes x (avg depth / 10 + 1))
-
-    Every cylinder is added up, which is what makes the number meaningful on
-    a multi-tank dive. Both services report bar, litres, metres and seconds
-    here, so there is no unit conversion to do.
-
-    Returns "" unless the dive has everything the sum needs: a cylinder with
-    a volume and both pressures, an average depth and a duration. A volume of
-    0 (Divelogs stores that when the cylinder size was never filled in) is
-    missing data, not a zero-litre tank."""
-    try:
-        minutes = float(duration_seconds) / 60.0
-        depth = float(avg_depth)
-    except (TypeError, ValueError):
-        return ""
-    if minutes <= 0 or depth <= 0:
-        return ""
-
-    litres = 0.0
-    for tank in tanks:
+def _sac_of(tanks: List[Dict[str, Any]], avg_depth: Any, duration_seconds: Any, logged: Any = None) -> Tuple[Optional[float], str]:
+    """(SAC in L/min, ``SAC_LOGGED`` / ``SAC_COMPUTED`` / "") for a row."""
+    if logged not in (None, ""):
         try:
-            volume = float(tank.get("volume") or 0)
-            start_p = float(tank.get("start_pressure") or 0)
-            end_p = float(tank.get("end_pressure") or 0)
+            return float(logged), SAC_LOGGED
         except (TypeError, ValueError):
-            continue
-        used = start_p - end_p
-        if volume > 0 and used > 0:
-            litres += used * volume
-    if litres <= 0:
-        return ""
-
-    ata = depth / 10.0 + 1.0
-    return core_units.format_sac(litres / (minutes * ata), units)
+            pass
+    triples = ((t.get("volume"), t.get("start_pressure"), t.get("end_pressure")) for t in tanks if isinstance(t, dict))
+    value = surface_air_consumption(triples, avg_depth, duration_seconds)
+    return (value, SAC_COMPUTED) if value is not None else (None, "")
 
 
 def _dives_dirs(service: str, username: Optional[str], base_dir: Optional[str] = None) -> List[str]:
@@ -347,6 +330,7 @@ def list_garmin_dives(username: Optional[str] = None, base_dir: Optional[str] = 
                 "max_depth": max_depth_display,
                 "avg_depth": avg_depth_display,
                 "sac": _format_sac(tanks, avg_depth, duration),
+                "sac_source": _sac_of(tanks, avg_depth, duration)[1],
                 "water_temp": water_temp,
                 "water_temp_value": water_temp_value,
                 # the three readings in °C, for a display in another unit system
@@ -435,6 +419,12 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
             except (TypeError, ValueError):
                 depthtemp = None
             water_temp = _format_water_temp(depthtemp, None, None)
+            # R10b: Divelogs' airtemp, 0 = none (what Divelogs holds when unset)
+            try:
+                airtemp = float(data.get("airtemp"))
+                airtemp = airtemp if airtemp != 0.0 else None
+            except (TypeError, ValueError):
+                airtemp = None
 
             tanks = [
                 {
@@ -477,6 +467,7 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
                 "max_depth": data.get("maxdepth") or 0.0,
                 "avg_depth": avg_depth_display,
                 "sac": _format_sac(tanks, data.get("meandepth"), data.get("duration")),
+                "sac_source": _sac_of(tanks, data.get("meandepth"), data.get("duration"))[1],
                 "water_temp": water_temp,
                 "water_temp_value": depthtemp,
                 "water_temps": [depthtemp, None, None],
@@ -488,6 +479,7 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
                 "location": location,
                 "notes": data.get("notes") or "",
                 "garmin_id": garmin_id,
+                "air_temp": _format_number(airtemp) if airtemp is not None else "",
                 "weight": weight_str,
                 "visibility": visibility_str,
                 "buddy": buddy,
@@ -632,6 +624,22 @@ def download_service_dives(service: str, overwrite: bool = False, base_dir: Opti
     return written
 
 
+def _ccr_note(data: Dict[str, Any]) -> str:
+    """`models.CCR_NOTE` when a cached UnifiedDive (as its JSON dict) holds
+    rebreather data - `models.has_ccr_data`'s rule on the dict: a closed or
+    semi-closed dive mode, a diluent or oxygen tank, a sample with a
+    setpoint or O2 cells -, else "" (R18b: CCR is untested, the page says so)."""
+    if data.get("dive_mode") in CCR_DIVE_MODES:
+        return CCR_NOTE
+    if any((gas or {}).get("tank_role") in CCR_TANK_ROLES for gas in (data.get("gas_mixtures") or [])):
+        return CCR_NOTE
+    for sample in data.get("samples") or []:
+        channels = (sample or {}).get("channels") or {}
+        if channels.get("setpoint") is not None or channels.get("o2_cells"):
+            return CCR_NOTE
+    return ""
+
+
 def _unified_row(data: Dict[str, Any], service: str, filename: str) -> Dict[str, Any]:
     """One cached UnifiedDive as the same row dict list_garmin_dives() and
     list_divelogs_dives() produce, so the dive table and editor need no
@@ -662,7 +670,10 @@ def _unified_row(data: Dict[str, Any], service: str, filename: str) -> Dict[str,
         "duration": _seconds_to_minutes_display(data.get("duration") or 0),
         "max_depth": f"{float(data['max_depth']):.2f}" if data.get("max_depth") is not None else "",
         "avg_depth": f"{float(data['avg_depth']):.2f}" if data.get("avg_depth") is not None else "",
-        "sac": _format_sac(tanks, data.get("avg_depth"), data.get("duration")),
+        # the computer's own SAC when the dive holds one, else computed from the tanks (R9)
+        "sac": _format_sac(tanks, data.get("avg_depth"), data.get("duration"), logged=data.get("sac")),
+        "sac_source": _sac_of(tanks, data.get("avg_depth"), data.get("duration"), data.get("sac"))[1],
+        "ccr_note": _ccr_note(data),
         "water_temp": _format_water_temp(*temps),
         "water_temp_value": next((t for t in (temps[2], temps[0]) if t is not None), None),
         "water_temps": temps,
@@ -676,6 +687,10 @@ def _unified_row(data: Dict[str, Any], service: str, filename: str) -> Dict[str,
         "weight": "" if weight is None else f"{_format_number(weight)} {_weight_unit(data)}".strip(),
         "visibility": "" if visibility is None else f"{_format_number(visibility)} {_visibility_unit(data)}".strip(),
         "buddy": data.get("buddy") or "",
+        # R10: the air temperature (°C, as stored), the water type and the suit, blank when the dive has none
+        "air_temp": _format_number(data["air_temp"]) if data.get("air_temp") is not None else "",
+        "water_type": data.get("water_type") or "",
+        "suit": data.get("suit") or "",
         "filename": filename,
         # a recorded depth profile: its depths and duration follow from it
         # (Subsurface writes them only for hand-logged dives)

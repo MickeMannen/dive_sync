@@ -165,11 +165,15 @@ def test_header_click_sorting_and_per_service_columns(qapp, scratch_data_dir, fa
     # just its own extra.
     divelogs_keys = [col["key"] for col in c.allColumns]
     garmin_keys = [col["key"] for col in DivesController("garmin").allColumns]
-    shared = [k for k, _, _ in ALL_COLUMNS]
+    # the air temperature, water type and suit (R10) are columns of the UnifiedDive-cached services;
+    # Divelogs has the air temperature too (R10b)
+    shared = [k for k, _, _ in ALL_COLUMNS if k not in ("air_temp", "water_type", "suit")]
+    on_divelogs = [k for k, _, _ in ALL_COLUMNS if k not in ("water_type", "suit")]
     # Garmin also has the dive's title (activity name), placed in front of Location
     with_title = shared[:shared.index("location")] + ["activity_name"] + shared[shared.index("location"):]
-    assert divelogs_keys == shared + ["garmin_id"] and garmin_keys == with_title + ["fit", "device"]
+    assert divelogs_keys == on_divelogs + ["garmin_id"] and garmin_keys == with_title + ["fit", "device"]
     assert {"avg_depth", "sac", "tanks", "notes", "id"} <= set(shared)   # more than the original ten
+    assert {"air_temp", "water_type", "suit"} <= {k for k, _, _ in ALL_COLUMNS}
     c.setVisibleColumns(["date", "garmin_id"])
     assert c.visibleColumns == ["date", "garmin_id"]
     assert c.model.data(c.model.index(0, 1)) == "g-1"
@@ -355,6 +359,14 @@ def test_sync_controller_runs_scheduler_off_thread(qapp, scratch_data_dir, fake_
     monkeypatch.setattr(scheduler, "run_sync_thread", failing)
     c.runSync(False, "to_divelogs", True, True, "")
     assert wait_until(qapp, lambda: not c.running) and c.status == "Failed: kaboom"
+
+    # check.md B3/B4: a run that finished but whose receiver refused some
+    # writes says so, instead of "Sync complete." as if everything was taken
+    def partly(dry_run, custom_settings=None):
+        scheduler.last_sync_results = {"Manual": {"matched_count": 1, "failed": [{"action": "update", "id": "2"}]}}
+    monkeypatch.setattr(scheduler, "run_sync_thread", partly)
+    c.runSync(False, "to_divelogs", True, True, "")
+    assert wait_until(qapp, lambda: not c.running) and c.status == "Sync complete. 1 dive failed — check the log."
 
 
 def test_sync_controller_offers_every_configured_service(qapp, scratch_data_dir, fake_keyring, monkeypatch, submersion_enabled):
@@ -2625,6 +2637,18 @@ def test_convert_page_renders_dives_and_the_sidebar_order(qapp, scratch_data_dir
     assert _save_button(page, "uddf").property("text") == "Save as UDDF…" and _save_button(page, "uddf").property("enabled") is True
     assert page.findChild(QObject, "fitConnectNote").property("visible") is True
     assert page.findChild(QObject, "fitDropsNote").property("visible") is True
+    # the CCR-untested note (R18b): hidden on dive 101 (open circuit), shown on dive 103 (a rebreather dive with
+    # its setpoint and three cells), hidden again when the selection moves back
+    from src.core.models import CCR_NOTE
+    ccr_note = page.findChild(QObject, "ccrNote")
+    assert ccr_note is not None and ccr_note.property("visible") is False and c.selected["ccr_note"] == ""
+    c.clickRow(2)
+    wait(qapp, 100)
+    assert c.selected["dive_number"] == 103 and c.selected["ccr_note"] == CCR_NOTE
+    assert ccr_note.property("visible") is True and ccr_note.property("text") == CCR_NOTE
+    c.clickRow(0)
+    wait(qapp, 100)
+    assert ccr_note.property("visible") is False
     # the Garmin-cache checkbox (I9): on by default, toggling it reaches the controller and the prefs file
     box = page.findChild(QObject, "enrichCheckBox")
     assert box is not None and box.property("checked") is True and c.enrichFromCache is True
@@ -3025,7 +3049,7 @@ def test_dive_edit_controller_edits_a_hand_logged_dive(qapp, scratch_data_dir, f
                                 "temp_min", "temp_max", "temp_avg", "dive_number", "water_density", "gf_low", "gf_high", "cns_start",
                                 "cns_end", "lat", "lng", "exit_lat", "exit_lng", "weight", "visibility", "location", "buddy", "notes",
                                 "computer_vendor", "computer_model", "computer_serial", "computer_firmware", "deco_model",
-                                "dive_mode", "water_type", "tanks"}
+                                "dive_mode", "water_type", "tanks", "sac", "sac_hint", "air_temp", "suit"}
     before = c._dives[4]
     assert c.edit(4, _form(c, max_depth="7.5", buddy="Kim", location="Jetty", dive_number="105", water_type="fresh", duration="25",
                            weight="2", visibility="8", gf_low="30", gf_high="70", computer_vendor="Shearwater")) == ""
@@ -3171,14 +3195,14 @@ def test_dive_edit_shifts_the_profile_with_the_start_time(qapp, scratch_data_dir
     assert c.edit(0, _form(c, date="2025-07-02", time="09:42:30", utc_offset="+07:00")) == ""
     dive = c._dives[0]
     delta = timedelta(days=1, hours=1, minutes=30)
-    assert dive.date_time == datetime(2025, 7, 2, 9, 42, 30) and dive.timezone == "Etc/GMT-7"
+    assert dive.date_time == datetime(2025, 7, 2, 9, 42, 30) and dive.timezone == "UTC+07:00"
     assert dive.date_time_utc == datetime(2025, 7, 2, 2, 42, 30) and dive.duration == before.duration
     assert [s["time"] for s in c.selected["samples"]] == offsets                       # the chart's offsets: unchanged
     assert [dive.date_time + timedelta(seconds=t) for t in offsets] == [t + delta for t in instants]
     assert [dive.date_time + timedelta(seconds=e.time) for e in dive.events] == [t + delta for t in events]
     assert c.dives[0]["date"] == "2025-07-02" and c.dives[0]["time"] == "09:42" and c.selected["title"].startswith("2025-07-02 09:42")
     assert {k: c.selected["form"][k] for k in ("date", "time", "utc_offset")} == {"date": "2025-07-02", "time": "09:42:30", "utc_offset": "+07:00"}
-    assert c.selected["date_time"] == "2025-07-02 09:42:30" and c.selected["timezone"] == "Etc/GMT-7"
+    assert c.selected["date_time"] == "2025-07-02 09:42:30" and c.selected["timezone"] == "UTC+07:00"
     # the zone alone: the wall clock stays, the UTC instant moves
     assert c.edit(0, _form(c, utc_offset="+08:00")) == ""
     assert c._dives[0].date_time == datetime(2025, 7, 2, 9, 42, 30) and c._dives[0].date_time_utc == datetime(2025, 7, 2, 1, 42, 30)
@@ -3342,9 +3366,15 @@ def test_dive_edit_on_a_garmin_fit(qapp, scratch_data_dir, fake_keyring):
     before = c._dives[0]
     assert c.edit(0, _form(c, utc_offset="+08:00", dive_number="39", tanks=[dict(sel["form"]["tanks"][0], end_pressure="160"), sel["form"]["tanks"][1]])) == ""
     dive = c._dives[0]
-    assert dive.date_time == before.date_time and dive.date_time_utc == datetime(2026, 8, 29, 1, 56, 11) and dive.timezone == "Etc/GMT-8"
+    assert dive.date_time == before.date_time and dive.date_time_utc == datetime(2026, 8, 29, 1, 56, 11) and dive.timezone == "UTC+08:00"
     assert dive.dive_number == 39 and dive.gas_mixtures[0].end_pressure == 160.0 and dive.gas_mixtures[1] == before.gas_mixtures[1]
     assert len(dive.samples) == len(before.samples) and dive.samples[-1].time == before.samples[-1].time and dive.events == before.events
+    # a half-hour zone typed on the page is kept as such (R7): shown back as +05:30, the UTC clock 5.5 h behind
+    assert c.edit(0, _form(c, utc_offset="+05:30")) == ""
+    india = c._dives[0]
+    assert india.timezone == "UTC+05:30" and india.date_time == before.date_time and india.date_time_utc == datetime(2026, 8, 29, 4, 26, 11)
+    assert c.selected["form"]["utc_offset"] == "+05:30"
+    assert c.edit(0, _form(c, utc_offset="+08:00")) == "" and c._dives[0].timezone == "UTC+08:00"
     # Save as .fit: offered for this dive, named beside the original, the drops list of what no FIT holds
     assert [t["id"] for t in c.targets] == ["uddf", "ssrf", "fit"] and c.targets[2]["title"] == "Save as .fit…" and c.targets[2]["patch"] is True
     assert c.fitSaveTip == "" and c.fitDrops == []
@@ -3359,7 +3389,7 @@ def test_dive_edit_on_a_garmin_fit(qapp, scratch_data_dir, fake_keyring):
     c.saveAs("fit", _file_url(target))
     assert c.message == f"Wrote {target}" and c.saveWarnings == [formats.FIT_DROPS_PREFIX + "site, buddy, weight"]
     back = formats.read_file(target).dives[0]
-    assert back.dive_number == 39 and back.gas_mixtures[0].end_pressure == 160.0 and back.timezone == "Etc/GMT-8"
+    assert back.dive_number == 39 and back.gas_mixtures[0].end_pressure == 160.0 and back.timezone == "UTC+08:00"
     assert back.date_time == before.date_time and back.date_time_utc == datetime(2026, 8, 29, 1, 56, 11) and back.buddy is None
     assert back.samples == before.samples and len(back.events) == len(before.events)
     assert open(path, "rb").read() == original_bytes
@@ -3458,9 +3488,9 @@ def test_dive_edit_save_as_fit_from_an_ssrf(qapp, scratch_data_dir, fake_keyring
     assert c.selection == [0] and c.diveCount == 1
     assert [t["id"] for t in c.targets] == ["uddf", "ssrf", "fit"] and c.targets[2]["patch"] is True and c.targets[2]["title"] == "Save as .fit…"
     assert c.fitSaveTip == "" and c.fitEncodes is True
-    assert c.fitDrops == ["site", "buddy", "notes", "weight", "computer maker", "computer model", "tank role", "setpoint channel",
+    assert c.fitDrops == ["site", "buddy", "notes", "weight", "suit", "computer maker", "computer model", "tank role", "setpoint channel",
                           "alerts outside Garmin's list", "bookmark events", "mode change events", "setpoint change events",
-                          "service ids", "suit", "divemaster", "rating", "visibility stars", "tags"]
+                          "service ids", "divemaster", "rating", "visibility stars", "tags"]
     assert c.targetDrops("fit") == [formats.FIT_DROPS_PREFIX + ", ".join(c.fitDrops)]
     assert c.suggestedFileName("fit") == "2026-03-14 0930 dive 42.fit"
     folder = preferences.get_convert_folder(tmp_path)
@@ -4667,6 +4697,18 @@ def test_myssi_dives_page_lists_profiles_and_deletes_through_the_fake(qapp, scra
     assert len(c.selected["samples"]) == 12 and c.sampleDetails(1)["lines"] == ["0:05", "2.0 m", "27.0 °C"]
     assert c.selected["location"] == "" and c.selected["duration"] == 50
     assert page.findChild(QObject, "field-max-depth").property("text") == "20.00"
+    # the CCR-untested note (R18b) on a dives page: the row's ccr_note, "" for this open-circuit dive; a row that
+    # holds one shows it under the edit-lock note
+    from src.core.models import CCR_NOTE
+    ccr_note = page.findChild(QObject, "ccrNote")
+    assert c.selected["ccr_note"] == "" and ccr_note.property("visible") is False
+    c._selected = dict(c._selected, ccr_note=CCR_NOTE)
+    c.selectedChanged.emit()
+    wait(qapp, 100)
+    assert ccr_note.property("visible") is True and ccr_note.property("text") == CCR_NOTE
+    c.select(c.rowOf("102.json"))
+    wait(qapp, 100)
+    assert ccr_note.property("visible") is False
     # the other account's page is empty: its own folder
     c.setAccount("other@example.com")
     assert c.diveCount == 0 and c.account == "other@example.com"
@@ -5014,7 +5056,7 @@ def test_dives_page_chart_hovers_with_depth_and_temperature_only(qapp, scratch_d
     c.select(0)
     assert c.selected["markers"] == [] and c.selected["ceiling"] == [] and len(c.selected["samples"]) == 3
     assert c.sampleDetails(1) == {"time": "10:00", "depth": "12.5 m", "temp": "19.0 °C", "lines": ["10:00", "12.5 m", "19.0 °C"]}
-    assert c.sampleDetails(2)["lines"] == ["20:00", "0.0 m"] and c.sampleDetails(3) == {}
+    assert c.sampleDetails(2)["lines"] == ["20:00", "0.0 m", "19.0 °C"] and c.sampleDetails(3) == {}   # the last temperature
     units.setUnits("imperial")
     assert c.sampleDetails(1)["lines"] == ["10:00", "41 ft", "66 °F"]
     units.setUnits("metric")
@@ -5071,6 +5113,166 @@ def test_dive_edit_page_chart_is_wired_to_the_controller(qapp, scratch_data_dir,
     wait(qapp, 50)
     assert _lines(chart)[1] == "98 ft"
     controllers["units"].setUnits("metric")
+    assert warnings == [], warnings
+    engine.deleteLater()
+    wait(qapp, 50)
+
+
+def test_convert_page_shows_the_sac_and_where_it_comes_from(qapp, scratch_data_dir, fake_keyring):
+    """R9: the Dive edit form's SAC field holds the computer's own value
+    (L/min, cuft/min in imperial) and, when it logged none, a placeholder
+    with the SAC computed from the tanks; the details say which; RMV and
+    OTU are shown read-only. An untouched field never stores the computed
+    value, a typed one is stored at full precision."""
+    from desktop.controllers import convert as module
+    from desktop.controllers.convert import ConvertController
+    from desktop.controllers.units import UnitsController
+    from src.core.convert.formats import ReadResult
+    from src.core.models import GasMixture, UnifiedDive
+    tanks = [GasMixture(oxygen=21.0, tank_volume=12.0, start_pressure=200.0, end_pressure=50.0)]
+    logged = UnifiedDive(date_time=datetime(2026, 5, 1, 10, 0), duration=3600, max_depth=25.0, avg_depth=20.0,
+                         gas_mixtures=tanks, sac=14.26, rmv=28.5, otu=12.0)
+    computed = logged.model_copy(update={"sac": None, "rmv": None, "otu": None})
+    bare = computed.model_copy(update={"gas_mixtures": []})
+    assert module.form_values(logged)["sac"] == "14.26" and module.form_values(logged)["sac_hint"] == ""
+    assert module.form_values(computed)["sac"] == "" and module.form_values(computed)["sac_hint"] == "computed from the tanks: 10.0"
+    assert module.form_values(bare)["sac"] == "" and module.form_values(bare)["sac_hint"] == ""
+    assert module.form_values(computed, "imperial")["sac_hint"] == "computed from the tanks: 0.4"
+    assert module.form_values(logged, "imperial")["sac"] == "0.5"
+    details = module.dive_details(logged)
+    assert (details["sac"], details["sac_source"], details["rmv"], details["otu"]) == ("14.3 L/min (from the dive computer)", "logged", "28.5 L/min", "12")
+    details = module.dive_details(computed)
+    assert (details["sac"], details["sac_source"], details["rmv"], details["otu"]) == ("10 L/min (computed from the tanks)", "computed", "", "")
+    assert module.dive_details(bare)["sac"] == "" and module.dive_details(bare)["sac_source"] == ""
+    assert module.dive_details(logged, system="imperial")["sac"] == "0.5 cuft/min (from the dive computer)"
+    # the edit path: the form sent back as shown changes nothing; a typed SAC is stored
+    assert module.si_changes(computed, module.form_values(computed)) == {}
+    assert module.si_changes(computed, dict(module.form_values(computed), sac="12.5")) == {"sac": "12.5"}
+    units = UnitsController()
+    units.setUnits("imperial")
+    assert module.si_changes(logged, dict(module.form_values(logged, "imperial"), sac="0.6"), "imperial") == {"sac": pytest.approx(16.99, abs=0.01)}
+    c = ConvertController(units=units)
+    c._apply_read(ReadResult(dives=[computed], files=[("/x/a.uddf", "uddf")]))
+    assert c.selected["form"]["sac_hint"] == "computed from the tanks: 0.4" and c.selected["sac_source"] == "computed"
+    assert c.edit(0, dict(c.selected["form"], sac="0.4")) == ""
+    assert c._dives[0].sac == pytest.approx(11.33, abs=0.01) and c.selected["sac_source"] == "logged"
+    units.setUnits("metric")
+
+
+def test_dive_details_say_ccr_is_untested_on_a_rebreather_dive():
+    """R18b: ``dive_details`` carries `models.CCR_NOTE` as ``ccr_note`` for a
+    dive with rebreather data (`has_ccr_data`: the mode, a diluent tank, a
+    setpoint or cells in the samples) and "" for any other, so the Dive
+    edit page shows the line only there."""
+    from desktop.controllers import convert as module
+    from src.core.models import CCR_NOTE, GasMixture, SampleChannels, UnifiedDive, UnifiedSample
+    oc = UnifiedDive(date_time=datetime(2026, 5, 1, 10, 0), duration=3600, max_depth=25.0, dive_mode="oc_single_gas",
+                     gas_mixtures=[GasMixture(oxygen=32.0)],
+                     samples=[UnifiedSample(depth=10.0, time=60, channels=SampleChannels(ppo2=0.64, ndl=1500))])
+    assert module.dive_details(oc)["ccr_note"] == ""
+    assert module.dive_details(oc.model_copy(update={"dive_mode": "ccr"}))["ccr_note"] == CCR_NOTE
+    assert module.dive_details(oc.model_copy(update={"gas_mixtures": [GasMixture(oxygen=21.0, tank_role="diluent")]}))["ccr_note"] == CCR_NOTE
+    cells = [UnifiedSample(depth=10.0, time=60, channels=SampleChannels(ppo2=1.2, setpoint=1.2, o2_cells={0: 1.21, 1: 1.19, 2: 1.2}))]
+    assert module.dive_details(oc.model_copy(update={"samples": cells}))["ccr_note"] == CCR_NOTE
+
+
+def test_dives_pages_show_air_temperature_water_type_and_suit(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """R10: the three columns are offered (off by default) on the services
+    cached as UnifiedDive, the air temperature converted like the water
+    temperature in imperial; Garmin and Divelogs, whose raw caches have no
+    slot for them, do not offer them."""
+    from desktop.controllers import dives as module
+    from desktop.controllers.dives import DivesController, DEFAULT_VISIBLE_COLUMNS
+    from desktop.controllers.units import UnitsController
+    from src.core import dive_cache
+    rows = [{"date": "2026-06-22", "time": "10:00:00", "date_time": "2026-06-22 10:00:00", "filename": "a.json",
+             "location": "Blue Hole", "has_profile": True, "air_temp": "31.5", "water_type": "salt", "suit": "5 mm"},
+            {"date": "1993-10-10", "time": "11:30:00", "date_time": "1993-10-10 11:30:00", "filename": "b.json",
+             "location": "Kullen", "has_profile": False, "air_temp": "", "water_type": "", "suit": ""}]
+    monkeypatch.setattr(dive_cache, "list_dives", lambda service, *a, **k: [dict(r) for r in rows])
+    units = UnitsController()
+    units.setUnits("metric")
+    for service in ("subsurface", "uddf", "shearwater", "ssi"):
+        keys = [c["key"] for c in DivesController(service).allColumns]
+        assert {"air_temp", "water_type", "suit"} <= set(keys), service
+    assert not {"air_temp", "water_type", "suit"} & {c["key"] for c in DivesController("garmin").allColumns}
+    # Divelogs: its airtemp only (R10b), still off by default
+    divelogs_keys = {c["key"] for c in DivesController("divelogs").allColumns}
+    assert "air_temp" in divelogs_keys and not {"water_type", "suit"} & divelogs_keys
+    assert not {"air_temp", "water_type", "suit"} & set(DEFAULT_VISIBLE_COLUMNS)
+    c = DivesController("subsurface", units=units)
+    c.load()
+    c.setVisibleColumns(["date", "air_temp", "water_type", "suit"])
+    cell = lambda name, key: c.model.data(c.model.index(c.rowOf(name), c.visibleColumns.index(key)), Qt.DisplayRole)
+    assert (cell("a.json", "air_temp"), cell("a.json", "water_type"), cell("a.json", "suit")) == ("31.5", "salt", "5 mm")
+    assert (cell("b.json", "air_temp"), cell("b.json", "water_type"), cell("b.json", "suit")) == ("", "", "")
+    units.setUnits("imperial")
+    assert cell("a.json", "air_temp") == "89" and cell("b.json", "air_temp") == ""
+    assert module.display_value({"air_temp": "20"}, "air_temp", "imperial") == "68" and module.display_value({"air_temp": "20"}, "air_temp", "metric") == "20"
+    units.setUnits("metric")
+
+
+def test_convert_page_edits_air_temperature_and_suit(qapp, scratch_data_dir, fake_keyring):
+    """R10: the Dive edit form has an air temperature (in the shown unit
+    system, converted back at full precision) and a suit; the details
+    show both."""
+    from desktop.controllers import convert as module
+    from desktop.controllers.units import UnitsController
+    from src.core.models import UnifiedDive
+    dive = UnifiedDive(date_time=datetime(2026, 5, 1, 10, 0), duration=3600, max_depth=25.0, air_temp=30.0, suit="5 mm")
+    assert module.form_values(dive)["air_temp"] == "30" and module.form_values(dive)["suit"] == "5 mm"
+    assert module.form_values(dive, "imperial")["air_temp"] == "86"
+    assert (module.dive_details(dive)["air_temp"], module.dive_details(dive)["suit"]) == ("30 °C", "5 mm")
+    assert module.dive_details(dive, system="imperial")["air_temp"] == "86 °F"
+    assert module.si_changes(dive, module.form_values(dive, "imperial"), "imperial") == {}
+    changes = module.si_changes(dive, dict(module.form_values(dive, "imperial"), air_temp="68", suit="drysuit"), "imperial")
+    assert changes["air_temp"] == pytest.approx(20.0) and changes["suit"] == "drysuit"
+    assert module.si_changes(dive, dict(module.form_values(dive), air_temp="", suit="")) == {"air_temp": "", "suit": ""}
+    units = UnitsController()
+    assert units.units == "metric"
+
+
+def test_sync_page_offers_new_garmin_dives_as_fit_when_garmin_is_the_target(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """R13 (beta): the Sync page shows "New Garmin dives as .fit (beta)" only
+    when the run writes Garmin, unticked by default; ticked, the run carries
+    garmin_fit_upload, unticked it leaves the pair's setting alone."""
+    from PySide6.QtCore import QObject
+    from desktop import app as desktop_app, logging_bridge
+    from desktop import credentials as creds_store
+    from desktop.controllers.sync import SyncController
+    from src.core import dive_cache, scheduler
+    from src.core.config import CredentialsModel, DivelogsCredentials, GarminCredentials
+    monkeypatch.setattr(dive_cache, "list_garmin_dives", lambda *a, **k: [])
+    monkeypatch.setattr(dive_cache, "list_divelogs_dives", lambda *a, **k: [])
+    creds_store.save_credentials_model(CredentialsModel(
+        garmin=[GarminCredentials(username="g@x", password="pw")],
+        divelogs=[DivelogsCredentials(username="d", password="pw")]))
+    c = SyncController(logging_bridge.install())
+    assert c.offersGarminFit("garmin")
+    assert not c.offersGarminFit("divelogs") and not c.offersGarminFit("") and not c.offersGarminFit("nope:")
+    seen = {}
+    monkeypatch.setattr(scheduler, "run_sync_thread", lambda dry_run, custom_settings=None: seen.update(custom=custom_settings))
+    monkeypatch.setattr(scheduler, "is_sync_running", False)
+    c.runSyncBetween(True, "divelogs", "garmin", True, True, "", "", True, False, True)
+    assert wait_until(qapp, lambda: not c.running)
+    assert seen["custom"]["garmin_fit_upload"] is True and seen["custom"]["directionality"] == "to_garmin"
+    c.runSyncBetween(True, "divelogs", "garmin", True, True)
+    assert wait_until(qapp, lambda: not c.running)
+    assert "garmin_fit_upload" not in seen["custom"]
+
+    warnings = []
+    controllers = desktop_app.build_controllers(logging_bridge.install())
+    engine = desktop_app.create_engine(controllers, "Sync",
+                                       on_warnings=lambda errs: warnings.extend(str(e.toString()) for e in errs))
+    root = engine.rootObjects()[0]
+    wait(qapp, 300)
+    box, source, target = (root.findChild(QObject, name) for name in ("garminFitCheck", "sourceBox", "targetBox"))
+    assert target.property("currentValue") == "divelogs" and box.property("visible") is False
+    source.setProperty("currentIndex", 1)                                     # Divelogs -> Garmin
+    wait(qapp, 100)
+    assert target.property("currentValue") == "garmin"
+    assert box.property("visible") is True and box.property("checked") is False
+    assert box.property("text") == "New Garmin dives as .fit (beta)"
     assert warnings == [], warnings
     engine.deleteLater()
     wait(qapp, 50)

@@ -67,6 +67,10 @@ Rules of the road:
     *   `src/web/` (the Docker-facing status page) no longer has any dive-editing or deletion UI — that's being rebuilt as a native desktop app (see [rework.md](rework.md)). If/when dive deletion is reintroduced anywhere, ensure that BOTH the local JSON file is removed and the corresponding API delete request is sent in a background thread to the remote service (Garmin or Divelogs), as the old web implementation did.
 *   **Scheduler vs. web coupling**:
     *   `src/core/scheduler.py` (the background schedule watcher and sync runner) must stay free of FastAPI imports — `src/web/app.py` only wires its `lifespan` to `scheduler.scheduler_loop()`. Keep it this way so non-web entry points can reuse it.
+*   **Licences of third-party code and data** (this project is MIT):
+    *   Never copy, port or translate code from GPL or LGPL projects (Subsurface GPL-2, Submersion GPL-3, libdivecomputer LGPL-2.1). A file format may be implemented from its facts (byte offsets, field meanings, enum values) and checked against such a project, with the project credited in `src/core/about.py` / README; its source code, comments and tests are not reproduced.
+    *   Never commit or quote third-party test data: not Subsurface's or Submersion's sample dives, not other people's logs, and not their bytes or sample records rebuilt inside a test. They stay in the git-ignored `test_data/` (e.g. `test_data/misc_test_files/`); a test that reads them skips when the file is missing and may assert what DiveSync reads from them (counts, a few values). Committed fixtures under `tests/data/` are the owner's own anonymised dives or synthetic data.
+    *   A new dependency must not be GPL-only; LGPL is acceptable when it is used as a separate library (as PySide6 is).
 *   **File Paths & Local Storage**:
     *   Save all temporary files, scratch scripts, or data back-ups in the `.gemini/` app directory or [data/](file:///Users/mikael/development/dive_sync/data/) directory. Do not clutter the workspace root.
 

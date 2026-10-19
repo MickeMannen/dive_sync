@@ -30,7 +30,9 @@ Read, from a file Subsurface itself wrote or one of ours:
   computer's own name and value); samples with time, depth, temperature,
   ``pressureN`` (legacy ``pressure`` and ``o2pressure`` too, and a plain
   ``sensorN='k'`` remapping slot N to cylinder k), ndl, tts, rbt, in_deco /
-  stoptime / stopdepth, cns, po2, dc_supplied_ppo2 and heartbeat.
+  stoptime / stopdepth, cns, po2, dc_supplied_ppo2, a rebreather's O2 cells
+  (``sensorN='x bar'``, sensor 1 as cell 0, sticky like po2; R18) and
+  heartbeat.
 
 Subsurface's sticky rule applies: a sample's temperature, deco, CNS, PO2 and
 heart-rate values persist until the next written one (the file holds them
@@ -43,8 +45,8 @@ open-circuit import. Imperial unit strings (``ft``, ``psi``, ``F``, ``lbs``,
 is the first tank's pressure comes back as the Subsurface adapter produces
 it: ``pressure`` set, ``channels`` None.
 
-Not read (no `UnifiedDive` slot): the O2 sensor readings (``sensor1..3``
-in bar), ``otu``, ``sac``, the surface pressure, air temperature, pictures,
+Not read (no `UnifiedDive` slot): ``no_o2sensors`` (the cells themselves
+give the count), ``otu``, ``sac``, the surface pressure, air temperature, pictures,
 the filter presets, a trip's own name and notes. No ``subsurface`` external
 id is set: a dive in a file has no stable identity outside Subsurface.
 """
@@ -54,7 +56,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 from xml.etree import ElementTree as ET
 
 from src.core.convert.ssrf_writer import (
@@ -76,10 +78,8 @@ from src.core.convert.ssrf_writer import (
     EXTRA_FIRMWARE,
     EXTRA_SERIAL,
     EXTRA_WATER_TYPE,
-    SALINITY_BY_WATER_TYPE,
     SF_DIVEMASTER,
     SF_RATING,
-    SF_SUIT,
     SF_TAGS,
     SF_VISIBILITY,
 )
@@ -96,12 +96,14 @@ from src.core.models import (
     UnifiedDive,
     UnifiedSample,
     recorded_water_temp,
+    water_type_of_salinity,
 )
 from src.core.services.subsurface import (
     EXTERNAL_ID_PREFIX,
     MANUAL_DC_MODEL,
     USE_TO_TANK_ROLE,
     parse_duration,
+    parse_gps,
     parse_number,
 )
 
@@ -118,11 +120,9 @@ SAMPLE_ATTR_DC_PPO2 = "dc_supplied_ppo2"
 DIVEMODE_FROM_TEXT: Dict[str, str] = {v: k for k, v in DIVEMODE_TEXT.items()}
 REBREATHER_MODES = ("ccr", "scr")
 
-# Salinity (g/l) back to a water type: Subsurface's three values and Garmin's
-# seawater (1025, what Subsurface's Garmin import and the I6 writer store for
-# a FIT's "salt"). Anything else is a density without a type.
-WATER_TYPE_BY_SALINITY: Dict[int, str] = {v: k for k, v in SALINITY_BY_WATER_TYPE.items()}
-WATER_TYPE_BY_SALINITY[1025] = "salt"
+# Salinity (g/l) back to a water type: models.WATER_TYPE_BY_SALINITY (Subsurface's
+# three values and Garmin's seawater, 1025). Anything else is a density without a type.
+from src.core.models import WATER_TYPE_BY_SALINITY  # noqa: E402  (re-exported for the tests)
 
 # Makers whose name libdivecomputer writes as two words in front of the model.
 TWO_WORD_VENDORS = ("Heinrichs Weikamp", "Deep Six", "Dive Rite", "Sea & Sea", "Scubapro Galileo")
@@ -137,7 +137,6 @@ _DECO_GF_RE = re.compile(r"(?:\bGF\s*)?(\d{1,3}|\?)\s*/\s*(\d{1,3}|\?)")
 _ZHL_RE = re.compile(r"zhl[-_ ]?16\s*([a-c])\b", re.IGNORECASE)
 _PRESSURE_ATTR_RE = re.compile(r"^pressure(\d*)$")
 _SENSOR_ATTR_RE = re.compile(r"^sensor(\d+)$")
-_GPS_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$")
 
 
 class SsrfReadError(ValueError):
@@ -234,12 +233,7 @@ def seconds(text: Optional[str]) -> Optional[int]:
     return parse_duration(text)
 
 
-def parse_gps(text: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
-    """``"lat lng"`` (a site's ``gps``) or ``"lat, lng"`` (the GPS extradata)."""
-    m = _GPS_RE.match(text or "")
-    if not m:
-        return None, None
-    return float(m.group(1)), float(m.group(2))
+# parse_gps ("lat lng" / "lat, lng") is services/subsurface.py's since R8, re-exported here.
 
 
 def parse_deco_model(text: Optional[str]) -> Tuple[Optional[str], Optional[int], Optional[int]]:
@@ -424,6 +418,45 @@ class _RawSample:
         self.values: Dict[str, object] = {}
 
 
+def read_sample_values(raw: _RawSample, attrs: Mapping[str, str], slot_to_cylinder: Dict[int, int],
+                       o2_slot: int) -> None:
+    """A sample's attributes beyond time, depth and temperature into ``raw``:
+    the pressure-slot remap and the O2 cells (``sensorN``), the ``o2pressure``
+    of a legacy rebreather log, and the values Subsurface keeps sticky (ndl,
+    tts, rbt, in_deco, stoptime, stopdepth, cns, po2, dc_supplied_ppo2,
+    heartbeat). Shared by the ``.ssrf`` reader (attribute values such as
+    ``'1.2 bar'``) and the git-storage adapter (plans/gap-roadmap.md R12,
+    ``key=value`` tokens such as ``po2=1.2bar``): the unit parsers take both."""
+    # the sensor mapping first: it applies to this sample's pressures whatever the attribute order;
+    # a sensorN with a unit is an O2 cell's reading in bar (Subsurface's o2sensor[N-1]), 0 meaning none
+    for name, value in attrs.items():
+        m = _SENSOR_ATTR_RE.match(name)
+        if m and value.strip().isdigit():
+            slot_to_cylinder[int(m.group(1))] = int(value)
+        elif m and int(m.group(1)) >= 1:
+            raw.values[f"cell{int(m.group(1)) - 1}"] = pressure_bar(value)
+    if "o2pressure" in attrs:
+        bar = pressure_bar(attrs["o2pressure"])
+        if bar:
+            raw.pressures[slot_to_cylinder.get(o2_slot, o2_slot)] = bar
+    for name in ("ndl", "tts", "rbt", "stoptime"):
+        if name in attrs:
+            raw.values[name] = seconds(attrs[name])
+    if "in_deco" in attrs:
+        raw.values["in_deco"] = (attrs["in_deco"] or "").strip() not in ("0", "", "false")
+    if "stopdepth" in attrs:
+        raw.values["stopdepth"] = depth_m(attrs["stopdepth"])
+    if "cns" in attrs:
+        raw.values["cns"] = percent(attrs["cns"])
+    if "po2" in attrs:
+        raw.values["po2"] = pressure_bar(attrs["po2"])
+    if SAMPLE_ATTR_DC_PPO2 in attrs:
+        raw.values["dc_ppo2"] = pressure_bar(attrs[SAMPLE_ATTR_DC_PPO2])
+    if "heartbeat" in attrs:
+        hr = parse_number(attrs["heartbeat"] or "")
+        raw.values["heartbeat"] = int(hr) if hr is not None else None
+
+
 def _raw_samples(dc: ET.Element, cylinders: Sequence[GasMixture]) -> List[_RawSample]:
     """Every ``sample`` with a depth, in file order; the pressure slots mapped
     to cylinders through Subsurface's ``sensorN='k'`` (sticky, identity by default)."""
@@ -438,45 +471,26 @@ def _raw_samples(dc: ET.Element, cylinders: Sequence[GasMixture]) -> List[_RawSa
         raw.time = seconds(el.get("time")) or 0
         raw.depth = depth
         raw.temp = temperature_c(el.get("temp"))
-        # the sensor mapping first: it applies to this sample's pressures whatever the attribute order
-        for name, value in el.attrib.items():
-            m = _SENSOR_ATTR_RE.match(name)
-            if m and value.strip().isdigit():
-                slot_to_cylinder[int(m.group(1))] = int(value)
+        read_sample_values(raw, el.attrib, slot_to_cylinder, o2_slot)
         for name, value in el.attrib.items():
             m = _PRESSURE_ATTR_RE.match(name)
-            if m:
-                slot = int(m.group(1) or 0)
-            elif name == "o2pressure":
-                slot = o2_slot
-            else:
+            if not m:
                 continue
+            slot = int(m.group(1) or 0)
             bar = pressure_bar(value)
             if bar:
                 raw.pressures[slot_to_cylinder.get(slot, slot)] = bar
-        for name in ("ndl", "tts", "rbt", "stoptime"):
-            if name in el.attrib:
-                raw.values[name] = seconds(el.get(name))
-        if "in_deco" in el.attrib:
-            raw.values["in_deco"] = (el.get("in_deco") or "").strip() not in ("0", "", "false")
-        if "stopdepth" in el.attrib:
-            raw.values["stopdepth"] = depth_m(el.get("stopdepth"))
-        if "cns" in el.attrib:
-            raw.values["cns"] = percent(el.get("cns"))
-        if "po2" in el.attrib:
-            raw.values["po2"] = pressure_bar(el.get("po2"))
-        if SAMPLE_ATTR_DC_PPO2 in el.attrib:
-            raw.values["dc_ppo2"] = pressure_bar(el.get(SAMPLE_ATTR_DC_PPO2))
-        if "heartbeat" in el.attrib:
-            hr = parse_number(el.get("heartbeat") or "")
-            raw.values["heartbeat"] = int(hr) if hr is not None else None
         out.append(raw)
     return out
 
 
-def _samples(raws: Sequence[_RawSample], mode_changes: Sequence[Tuple[int, str]], initial_mode: str) -> List[UnifiedSample]:
+def _samples(raws: Sequence[_RawSample], mode_changes: Sequence[Tuple[int, str]], initial_mode: str,
+             sticky_temp: bool = True) -> List[UnifiedSample]:
     """The `UnifiedSample`s with Subsurface's sticky rule applied, ``po2``
-    read as the setpoint while the dive is on a rebreather."""
+    read as the setpoint while the dive is on a rebreather. ``sticky_temp``
+    False keeps a sample without a temperature without one (the git-storage
+    adapter's samples, read that way since before R12, so a sync compares
+    the same profile as before)."""
     sensors = {sensor for raw in raws for sensor in raw.pressures}
     primary = min(sensors) if sensors else None
     # a computer that reports its own PO2 separately (Subsurface's dc_supplied_ppo2) is a rebreather
@@ -490,7 +504,7 @@ def _samples(raws: Sequence[_RawSample], mode_changes: Sequence[Tuple[int, str]]
         while change_at < len(mode_changes) and mode_changes[change_at][0] <= raw.time:
             mode = mode_changes[change_at][1]
             change_at += 1
-        if raw.temp is not None:
+        if raw.temp is not None or not sticky_temp:
             last_temp = raw.temp
         last.update(raw.values)
         rebreather = mode in REBREATHER_MODES or has_dc_ppo2
@@ -507,6 +521,7 @@ def _samples(raws: Sequence[_RawSample], mode_changes: Sequence[Tuple[int, str]]
             cns=last.get("cns"),
             ppo2=last.get("dc_ppo2") if last.get("dc_ppo2") is not None else (None if rebreather else po2),
             setpoint=po2 if rebreather else None,
+            o2_cells={int(k[4:]): v for k, v in last.items() if k.startswith("cell") and v},
             gas_time=last.get("rbt"),
             heart_rate=last.get("heartbeat"),
         )
@@ -516,6 +531,15 @@ def _samples(raws: Sequence[_RawSample], mode_changes: Sequence[Tuple[int, str]]
             channels = None
         out.append(UnifiedSample(depth=raw.depth, temp=last_temp, time=raw.time, pressure=pressure, channels=channels))
     return out
+
+
+# The names the Subsurface git-storage adapter reuses (plans/gap-roadmap.md R12).
+RawSample = _RawSample
+resolve_samples = _samples
+oxygen_slot = _oxygen_slot
+dive_mode_of = _dive_mode
+mode_from_text = _mode_from_text
+oc_mode_of = _oc_mode
 
 
 def _find_cylinder(cylinders: Sequence[GasMixture], o2: Optional[float], he: Optional[float]) -> Optional[int]:
@@ -661,6 +685,11 @@ def _read_dive(dive: ET.Element, sites: Dict[str, _Site], computers: Dict[str, T
         max_depth = max(s.depth for s in samples)
     avg_depth = depth_m(depth_el.get("mean")) if depth_el is not None else None
     water = recorded_water_temp(temperature_c(temp_el.get("water"))) if temp_el is not None else None
+    # the air temperature: the computer's, else the dive's own <divetemperature> (R10)
+    air = temperature_c(temp_el.get("air")) if temp_el is not None else None
+    if air is None:
+        dive_temp = dive.find("divetemperature")
+        air = temperature_c(dive_temp.get("air")) if dive_temp is not None else None
     if water is None:
         temps = [s.temp for s in samples if s.temp is not None]
         water = recorded_water_temp(min(temps)) if temps else None
@@ -671,7 +700,7 @@ def _read_dive(dive: ET.Element, sites: Dict[str, _Site], computers: Dict[str, T
         lat, lng = parse_gps(extradata.get(EXTRA_ENTRY_GPS))
     water_type = (extradata.get(EXTRA_WATER_TYPE) or "").strip() or None
     if water_type is None and salinity is not None:
-        water_type = WATER_TYPE_BY_SALINITY.get(int(round(salinity)))
+        water_type = water_type_of_salinity(salinity)
     cns_end = percent(extradata.get(EXTRA_CNS_END))
     if cns_end is None:
         cns_end = percent(dive.get("cns"))
@@ -707,8 +736,9 @@ def _read_dive(dive: ET.Element, sites: Dict[str, _Site], computers: Dict[str, T
         lng=lng,
         samples=samples,
         device_logged=device_logged,
+        air_temp=air,
+        suit=_child_text(dive, "suit"),
         service_fields={
-            SF_SUIT: _child_text(dive, "suit"),
             SF_DIVEMASTER: _child_text(dive, "divemaster"),
             SF_RATING: int(rating) if rating is not None else None,
             SF_VISIBILITY: int(visibility) if visibility is not None else None,

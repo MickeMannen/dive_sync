@@ -23,7 +23,9 @@ What is written, in file order:
   firmware as ``software_version`` when it is a number) and one per
   tank transmitter the file names;
 - ``dive_settings``: deco model (``zhl_16c`` when the dive says ZHL-16C),
-  gradient factors, water type and density;
+  gradient factors, water type and density, and a rebreather's low and
+  high setpoint with their switch modes as the dive's setpoint switches
+  name them (check.md B17);
 - one ``dive_gas`` per `gas_mixtures` entry, in order, enabled - the
   reader (`fit_reader`) pairs transmitter i with gas i, as Garmin Connect
   does, so the entries keep their index rather than being merged by mix;
@@ -42,7 +44,8 @@ What is written, in file order:
   elapsed and timer time, sport diving with the dive mode as sub-sport,
   entry and exit position, water temperatures, depths) and ``activity``
   with ``local_timestamp`` = start + the dive's UTC offset, from which
-  the reader recovers the zone as ``Etc/GMT∓N``.
+  the reader recovers the zone as a fixed offset (``UTC+07:00``,
+  ``UTC+05:30``; R7).
 
 Tanks: when any entry of `gas_mixtures` has tank data (a pressure, a
 volume, a name or readings in the samples), every entry gets a transmitter
@@ -54,8 +57,12 @@ What no FIT holds is reported by `fit_drops`, not written: site, buddy,
 notes, weight, visibility, a deco model other than ZHL-16C, the computer
 maker and model as text when they are not Garmin's own, a serial that is
 no number, a firmware that is no number, a water type or dive mode outside
-Garmin's, a tank's role, the GF99 and setpoint channels, the events with
-no FIT equivalent (mode change, setpoint change, bookmark), a gas switch
+Garmin's, a tank's role other than a rebreather's diluent (``dive_gas.mode``
+holds that one, R6), the GF99 channel, a setpoint channel other than what
+the dive's Garmin setpoint switches give (the reader rebuilds the channel
+from those, B17) and a rebreather's O2 cell readings (a FIT record has one
+``po2``, no per-cell field), the events with no FIT equivalent (mode change,
+a setpoint change not named by a Garmin setpoint switch alert, bookmark), a gas switch
 whose gas cannot be told, the other services' ids and the service-specific
 fields (a Subsurface rating, tags, suit, divemaster).
 """
@@ -73,7 +80,15 @@ from garmin_fit_sdk import Encoder, Profile
 from src.core import garmin_files
 from src.core.convert.edit import utc_offset_of
 from src.core.convert.fit_patch import recompute_crcs
-from src.core.convert.fit_reader import SENSOR_PROFILE, SENSOR_PROFILE_ID, SENSOR_PROFILE_NAME, SENSOR_PROFILE_VOLUME
+from src.core.convert.fit_reader import (
+    SENSOR_PROFILE,
+    SENSOR_PROFILE_ID,
+    SENSOR_PROFILE_NAME,
+    SENSOR_PROFILE_VOLUME,
+    SETPOINT_ALERTS,
+    sample_setpoints,
+    setpoint_switches,
+)
 from src.core.models import (
     EVENT_ALERT,
     EVENT_BOOKMARK,
@@ -116,6 +131,8 @@ SUB_SPORTS: Dict[str, str] = {
 }
 WATER_TYPES = ("fresh", "salt", "en13319", "custom")
 ZHL_16C = "zhl_16c"
+# The one tank role a FIT holds: dive_gas.mode closed_circuit_diluent (the reader's GAS_ROLES).
+DILUENT_ROLE = "diluent"
 # The dive events a FIT has a message for; the others are named by fit_drops.
 EVENT_TANK_POD = {"tank_pod_connected", "tank_pod_disconnected"}
 EVENT_LABELS = {EVENT_MODE_CHANGE: "mode change", EVENT_SETPOINT_CHANGE: "setpoint change", EVENT_BOOKMARK: "bookmark"}
@@ -145,6 +162,16 @@ def _round(value: Optional[float], digits: int = 0) -> Optional[Any]:
     if value is None:
         return None
     return int(round(value)) if digits == 0 else round(float(value), digits)
+
+
+def _pressure_sac(dive: UnifiedDive) -> Optional[float]:
+    """``dive_summary.avg_pressure_sac`` in bar/min: the volume SAC divided
+    by the first tank's size, when the dive has both (what Garmin's own
+    files hold; a pressure SAC is meaningless without a tank size)."""
+    volume = dive.gas_mixtures[0].tank_volume if dive.gas_mixtures else None
+    if dive.sac is None or not volume or volume <= 0:
+        return None
+    return round(dive.sac / volume, 2)
 
 
 def _text(value: Optional[str]) -> Optional[str]:
@@ -232,6 +259,29 @@ def _alert_data(event: DiveEvent) -> Optional[int]:
     return int(name) if name.isdigit() else None
 
 
+def setpoint_settings(dive: UnifiedDive) -> Dict[str, Any]:
+    """dive_settings' rebreather setpoints (check.md B17) from the dive's
+    setpoint switches (`fit_reader.setpoint_switches`): the low and high
+    setpoint each switch names and the switch mode of each (automatic when
+    the dive's switches to it are Garmin's auto ones, else manual); {} when
+    the dive has no such switch."""
+    out: Dict[str, Any] = {}
+    for event in setpoint_switches(dive.events):
+        side = SETPOINT_ALERTS[event.name]
+        out.setdefault(f"ccr_{side}_setpoint", _round(event.value, 2))
+        out.setdefault(f"ccr_{side}_setpoint_switch_mode", "automatic" if "_auto_" in event.name else "manual")
+    return out
+
+
+def _setpoint_channel_kept(dive: UnifiedDive) -> bool:
+    """Whether the file carries the dive's setpoint channel: the reader
+    rebuilds it from the setpoint switches the file holds, so it is kept
+    when it is exactly what those switches give at every sample."""
+    derived = sample_setpoints([s.time for s in dive.samples], dive.events)
+    return all((s.channels.setpoint if s.channels is not None else None) == value
+               for s, value in zip(dive.samples, derived))
+
+
 def fit_drops(dive: UnifiedDive) -> List[str]:
     """What `write_fit` leaves out of ``dive``, as the bare names the Dive
     edit page lists ("site", "buddy", …), in a fixed order; [] when the
@@ -244,6 +294,10 @@ def fit_drops(dive: UnifiedDive) -> List[str]:
         out.append("weight")
     if dive.visibility is not None:
         out.append("visibility")
+    if dive.air_temp is not None:
+        out.append("air temperature")
+    if _text(dive.suit):
+        out.append("suit")
     if _text(dive.deco_model) and deco_model_of(dive) is None:
         out.append("deco model")
     vendor = _text(dive.computer_vendor)
@@ -259,18 +313,23 @@ def fit_drops(dive: UnifiedDive) -> List[str]:
         out.append("water type")
     if dive.dive_mode is not None and dive.dive_mode not in SUB_SPORTS:
         out.append("dive mode")
-    if any(_text(g.tank_role) for g in dive.gas_mixtures):
+    if any(_text(g.tank_role) and g.tank_role != DILUENT_ROLE for g in dive.gas_mixtures):
         out.append("tank role")
     if any(s.channels is not None and s.channels.gf99 is not None for s in dive.samples):
         out.append("GF99 channel")
-    if any(s.channels is not None and s.channels.setpoint is not None for s in dive.samples):
+    if any(s.channels is not None and s.channels.setpoint is not None for s in dive.samples) \
+            and not _setpoint_channel_kept(dive):
         out.append("setpoint channel")
+    if any(s.channels is not None and s.channels.o2_cells for s in dive.samples):
+        out.append("O2 cell readings")
     kinds: List[str] = []
     for event in dive.events:
         if event.type == EVENT_GAS_SWITCH:
             label = "gas switch events without a gas" if _gas_index_of(event, dive.gas_mixtures) is None else None
         elif event.type == EVENT_ALERT:
             label = "alerts outside Garmin's list" if _alert_data(event) is None else None
+        elif event.type == EVENT_SETPOINT_CHANGE and event in setpoint_switches([event]):
+            label = None
         elif event.type in EVENT_TANK_POD:
             label = None if has_tank_data(dive) and event.tank is not None and 0 <= event.tank < len(dive.gas_mixtures) else "transmitter events without a tank"
         else:
@@ -373,10 +432,11 @@ class _Writer:
         water_type = dive.water_type if dive.water_type in WATER_TYPES else None
         fields = dict(model=deco_model_of(dive), gf_low=_round(dive.gf_low), gf_high=_round(dive.gf_high),
                       water_type=water_type, water_density=dive.water_density)
+        fields.update(setpoint_settings(dive))
         if any(v is not None for v in fields.values()):
             self.write("dive_settings", message_index=0, **fields)
         for i, gas in enumerate(self.gases):
-            mode = "closed_circuit_diluent" if (gas.tank_role or "") == "diluent" else None
+            mode = "closed_circuit_diluent" if (gas.tank_role or "") == DILUENT_ROLE else None
             self.write("dive_gas", message_index=i, helium_content=_round(gas.helium or 0.0),
                        oxygen_content=_round(gas.oxygen), status="enabled", mode=mode)
 
@@ -386,7 +446,7 @@ class _Writer:
             index = _gas_index_of(event, self.gases)
             if index is not None:
                 self.write("event", timestamp=stamp, event="dive_gas_switched", event_type="marker", data=index)
-        elif event.type == EVENT_ALERT:
+        elif event.type == EVENT_ALERT or event.type == EVENT_SETPOINT_CHANGE and event in setpoint_switches([event]):
             data = _alert_data(event)
             if data is not None:
                 self.write("event", timestamp=stamp, event="dive_alert", event_type="marker", data=data)
@@ -443,7 +503,12 @@ class _Writer:
                    avg_depth=_round(dive.avg_depth, 3), max_depth=_round(dive.max_depth, 3),
                    surface_interval=_round(dive.surface_interval), start_cns=_round(dive.cns_start),
                    end_cns=_round(dive.cns_end), dive_number=_round(dive.dive_number),
-                   bottom_time=_round(dive.bottom_time, 3))
+                   bottom_time=_round(dive.bottom_time, 3),
+                   # the air consumption and OTU as the dive holds them (R6); the
+                   # pressure SAC Connect shows is the volume SAC over the first
+                   # tank's size, as the watch computes it
+                   avg_volume_sac=_round(dive.sac, 2), avg_rmv=_round(dive.rmv, 2), o2_toxicity=_round(dive.otu),
+                   avg_pressure_sac=_pressure_sac(dive))
         common = dict(start_time=self.start, total_elapsed_time=float(self.duration), total_timer_time=float(self.duration),
                       sport="diving", sub_sport=self.sub_sport,
                       start_position_lat=_semicircles(dive.lat), start_position_long=_semicircles(dive.lng),

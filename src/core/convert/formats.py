@@ -379,7 +379,6 @@ def _uddf_drops(dives: Sequence[UnifiedDive]) -> List[str]:
         dropped.append(f"the {', '.join(k.replace('_', ' ') for k in kinds)} events are not written")
     fields = [
         ("water type", lambda d: d.water_type is not None), ("water density", lambda d: d.water_density is not None),
-        ("exit position", lambda d: d.exit_lat is not None or d.exit_lng is not None),
         ("bottom time", lambda d: d.bottom_time is not None),
         ("start and end CNS", lambda d: d.cns_start is not None or d.cns_end is not None),
         ("gauge dive mode", lambda d: d.dive_mode is not None and d.dive_mode not in UDDF_DIVE_MODES),

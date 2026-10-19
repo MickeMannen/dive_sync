@@ -862,3 +862,81 @@ def test_garmin_login_does_not_list_every_dive(monkeypatch, tmp_path):
     monkeypatch.setattr(adapter.client, "login", lambda *a, **k: None)
     monkeypatch.setattr(adapter.client, "get_activities", lambda *a, **k: listed.append(a) or [])
     assert adapter.login() and listed == []
+
+
+def test_format_sac_prefers_the_computers_own_value(cache_dirs):
+    """R9: a cached dive that holds the computer's SAC (``UnifiedDive.sac``,
+    a Garmin .fit's avg_volume_sac) shows it, tanks or not; without one the
+    row's SAC is computed from the tanks as before, and ``sac_source`` says
+    which. Garmin's and Divelogs' raw caches hold no logged SAC, so their
+    rows stay computed."""
+    full = [{"volume": 12.0, "start_pressure": 200.0, "end_pressure": 50.0}]
+    assert dive_cache._format_sac(full, 20.0, 3600, logged=14.26) == "14.3"
+    assert dive_cache._format_sac(full, 20.0, 3600, logged=14.26, units="imperial") == "0.5"
+    assert dive_cache._format_sac([], None, None, logged="11.2") == "11.2"          # the cache's text, no tanks needed
+    assert dive_cache._format_sac(full, 20.0, 3600, logged="") == "10.0"            # blank is none: computed
+    assert dive_cache._format_sac(full, 20.0, 3600, logged="x") == "10.0"
+    assert dive_cache._sac_of(full, 20.0, 3600, 14.26) == (14.26, "logged")
+    assert dive_cache._sac_of(full, 20.0, 3600) == (pytest.approx(10.0), "computed")
+    assert dive_cache._sac_of([], 20.0, 3600) == (None, "")
+    # a unified cache row: the stored SAC, else the computed one
+    base = {"date_time": "2026-05-01T10:00:00", "duration": 3600, "max_depth": 25.0, "avg_depth": 20.0,
+            "gas_mixtures": [{"oxygen": 21.0, "tank_volume": 12.0, "start_pressure": 200.0, "end_pressure": 50.0}],
+            "external_ids": {"uddf": "d1"}}
+    row = dive_cache._unified_row(dict(base, sac=13.9), "uddf", "1.json")
+    assert row["sac"] == "13.9" and row["sac_source"] == "logged"
+    row = dive_cache._unified_row(base, "uddf", "1.json")
+    assert row["sac"] == "10.0" and row["sac_source"] == "computed"
+    row = dive_cache._unified_row(dict(base, gas_mixtures=[]), "uddf", "1.json")
+    assert row["sac"] == "" and row["sac_source"] == ""
+
+
+def test_unified_rows_say_ccr_is_untested_on_a_rebreather_dive():
+    """R18b: a cached UnifiedDive row carries `models.CCR_NOTE` as
+    ``ccr_note`` when the dive holds rebreather data - a closed or
+    semi-closed dive mode, a diluent or oxygen tank, a sample with a
+    setpoint or O2 cells - and "" otherwise, the same rule as
+    `models.has_ccr_data` on the dive's JSON; the dives pages show it on
+    such a dive only."""
+    from src.core.models import CCR_NOTE
+    base = {"date_time": "2026-05-01T10:00:00", "duration": 3600, "max_depth": 25.0, "dive_mode": "oc_multi_gas",
+            "gas_mixtures": [{"oxygen": 21.0, "tank_role": "backGas"}, {"oxygen": 50.0, "tank_role": "deco"}],
+            "samples": [{"depth": 10.0, "time": 60, "channels": {"ppo2": 0.42, "ndl": 1500}}, {"depth": 12.0, "time": 120}],
+            "external_ids": {"subsurface": "d1"}}
+    assert dive_cache._unified_row(base, "subsurface", "1.json")["ccr_note"] == ""
+    assert dive_cache._ccr_note(dict(base, dive_mode="ccr")) == CCR_NOTE
+    assert dive_cache._ccr_note(dict(base, dive_mode="scr")) == CCR_NOTE
+    assert dive_cache._ccr_note(dict(base, gas_mixtures=[{"oxygen": 21.0, "tank_role": "diluent"}])) == CCR_NOTE
+    assert dive_cache._ccr_note(dict(base, gas_mixtures=[{"oxygen": 100.0, "tank_role": "oxygen"}])) == CCR_NOTE
+    assert dive_cache._ccr_note(dict(base, samples=base["samples"] + [{"depth": 12.0, "time": 180, "channels": {"setpoint": 1.2}}])) == CCR_NOTE
+    cells = {"depth": 12.0, "time": 180, "channels": {"o2_cells": {"0": 1.21, "1": 1.19}}}
+    row = dive_cache._unified_row(dict(base, samples=base["samples"] + [cells]), "subsurface", "1.json")
+    assert row["ccr_note"] == CCR_NOTE
+    # an older cache without samples, channels or roles: nothing to say
+    assert dive_cache._ccr_note({"date_time": "2026-05-01T10:00:00"}) == ""
+    assert dive_cache._ccr_note({"gas_mixtures": [None], "samples": [None, {"channels": None}]}) == ""
+
+
+def test_unified_rows_carry_the_air_temperature_water_type_and_suit(cache_dirs):
+    """R10: the three columns of the services cached as UnifiedDive; blank
+    for a dive without them (and for every cache written before R10)."""
+    base = {"date_time": "2026-05-01T10:00:00", "duration": 3600, "max_depth": 25.0, "external_ids": {"uddf": "d1"}}
+    row = dive_cache._unified_row(dict(base, air_temp=31.5, water_type="salt", suit="5 mm"), "uddf", "1.json")
+    assert (row["air_temp"], row["water_type"], row["suit"]) == ("31.5", "salt", "5 mm")
+    row = dive_cache._unified_row(base, "uddf", "1.json")
+    assert (row["air_temp"], row["water_type"], row["suit"]) == ("", "", "")
+    assert dive_cache._unified_row(dict(base, air_temp=0.0), "uddf", "1.json")["air_temp"] == "0"
+
+
+def test_divelogs_rows_carry_the_air_temperature(tmp_path):
+    """R10b: Divelogs' ``airtemp`` is the row's air temperature, blank for
+    the 0 Divelogs holds when none is set (or no key: a cache from before
+    R10b reads the same); a frosty negative one is kept."""
+    folder = tmp_path / "divelogs" / "default" / "data"
+    folder.mkdir(parents=True)
+    base = {"date": "2026-06-22", "time": "10:00:00", "duration": 2700, "maxdepth": 18.0}
+    for name, extra in (("1.json", {"airtemp": 24.5}), ("2.json", {"airtemp": 0}), ("3.json", {}),
+                        ("4.json", {"airtemp": -3}), ("5.json", {"airtemp": "warm"})):
+        (folder / name).write_text(json.dumps(dict(base, id=name[0], **extra)))
+    rows = {r["filename"]: r for r in dive_cache.list_divelogs_dives(base_dir=str(tmp_path))}
+    assert [rows[n]["air_temp"] for n in ("1.json", "2.json", "3.json", "4.json", "5.json")] == ["24.5", "", "", "-3", ""]

@@ -115,7 +115,8 @@ from src.core import layout
 from src.core import units as core_units
 from desktop.controllers.editing import display_number, js_number, optional_float, si_number
 from src.core.convert import debug_report, edit, enrich, fit_merge, formats, profile
-from src.core.models import KNOWN_DIVE_MODES, KNOWN_WATER_TYPES, UnifiedDive
+from src.core.models import (CCR_NOTE, KNOWN_DIVE_MODES, KNOWN_WATER_TYPES, SAC_COMPUTED, SAC_LOGGED, UnifiedDive, dive_sac,
+                             has_ccr_data)
 
 logger = logging.getLogger("dive_sync.desktop.convert")
 
@@ -202,7 +203,8 @@ def _minutes(seconds: Optional[int]) -> str:
 # through src/core/units.py: in metric every value is shown exactly as before
 # (`_num`'s trimmed decimals), in imperial converted and rounded per the
 # display rule. The profile samples stay SI; ProfileChart.qml labels its axis.
-_METRIC_TEXT = {"depth": ("m", 1), "pressure": ("bar", 0), "temperature": ("°C", 1), "volume": ("l", 1), "weight": ("kg", 1)}
+_METRIC_TEXT = {"depth": ("m", 1), "pressure": ("bar", 0), "temperature": ("°C", 1), "volume": ("l", 1), "weight": ("kg", 1),
+                "sac": ("L/min", 1)}
 
 
 def _quantity(kind: str, value: Optional[float], system: str = core_units.METRIC, own: str = core_units.METRIC) -> str:
@@ -248,7 +250,7 @@ def mix_name(oxygen: Optional[float], helium: Optional[float]) -> str:
 # zone; `ConvertController.edit` compares the form sent back against these
 # to find the fields that were touched.
 FORM_KINDS = {"max_depth": "depth", "avg_depth": "depth", "temp_min": "temperature", "temp_max": "temperature",
-              "temp_avg": "temperature"}
+              "temp_avg": "temperature", "air_temp": "temperature", "sac": "sac"}
 OWN_UNIT_KINDS = {"weight": ("weight", "weight_unit", "pound"), "visibility": ("depth", "visibility_unit", "f")}
 MINUTE_FIELDS = {"duration": "Duration", "surface_interval": "Surface interval", "bottom_time": "Bottom time"}
 PLAIN_NUMBER_FIELDS = ("dive_number", "water_density", "gf_low", "gf_high", "cns_start", "cns_end")
@@ -304,6 +306,7 @@ def form_values(dive: UnifiedDive, system: str = core_units.METRIC) -> Dict[str,
         out[key] = _own_value_text(kind, getattr(dive, key), _own_system(getattr(dive, unit_attr), prefix), system)
     for key in TEXT_FORM_FIELDS:
         out[key] = getattr(dive, key) or ""
+    out["sac_hint"] = sac_hint(dive, system)
     out["tanks"] = [{
         "tank_name": gm.tank_name or "",
         "oxygen": js_number(gm.oxygen), "helium": js_number(gm.helium),
@@ -313,6 +316,27 @@ def form_values(dive: UnifiedDive, system: str = core_units.METRIC) -> Dict[str,
         "role": gm.tank_role or "",
     } for gm in dive.gas_mixtures]
     return out
+
+
+def sac_hint(dive: UnifiedDive, system: str = core_units.METRIC) -> str:
+    """The SAC field's placeholder when the computer logged none: the value
+    computed from the tanks, average depth and duration (R9), in ``system``
+    - ``"computed from the tanks: 14.2"``; ``""`` when the dive holds a
+    logged SAC (the field shows it) or nothing can be computed."""
+    value, source = dive_sac(dive)
+    if source != SAC_COMPUTED or value is None:
+        return ""
+    return f"computed from the tanks: {core_units.format_value('sac', value, system)}"
+
+
+def sac_text(dive: UnifiedDive, system: str = core_units.METRIC) -> str:
+    """The SAC line of the details: ``"14.2 L/min (from the dive computer)"``
+    or ``"14.2 L/min (computed from the tanks)"``; ``""`` for neither."""
+    value, source = dive_sac(dive)
+    if value is None:
+        return ""
+    note = "from the dive computer" if source == SAC_LOGGED else "computed from the tanks"
+    return f"{_quantity('sac', value, system)} ({note})"
 
 
 def form_choices(dive: UnifiedDive) -> Dict[str, List[str]]:
@@ -473,6 +497,7 @@ def dive_details(dive: UnifiedDive, source: str = "", enriched: str = "", system
         "max_depth": _quantity("depth", dive.max_depth, system), "avg_depth": _quantity("depth", dive.avg_depth, system),
         "temp_min": _quantity("temperature", dive.temp_min, system), "temp_max": _quantity("temperature", dive.temp_max, system),
         "temp_avg": _quantity("temperature", dive.temp_avg, system),
+        "air_temp": _quantity("temperature", dive.air_temp, system), "suit": dive.suit or "",
         "location": dive.location or "", "buddy": dive.buddy or "", "notes": dive.notes or "",
         "weight": weight, "visibility": visibility,
         "lat": _num(dive.lat, "", 6), "lng": _num(dive.lng, "", 6),
@@ -482,6 +507,11 @@ def dive_details(dive: UnifiedDive, source: str = "", enriched: str = "", system
         "water_density": _num(dive.water_density, "kg/m³", 0),
         "cns": (f"{_num(dive.cns_start, '%', 0)} → {_num(dive.cns_end, '%', 0)}"
                 if dive.cns_start is not None or dive.cns_end is not None else ""),
+        # the SAC the page shows and where it comes from (R9); RMV and OTU as the computer logged them
+        "sac": sac_text(dive, system), "sac_source": dive_sac(dive)[1],
+        "rmv": _quantity("sac", dive.rmv, system), "otu": _num(dive.otu, "", 1),
+        # CCR is untested (R18b): the page says so on a dive with rebreather data
+        "ccr_note": CCR_NOTE if has_ccr_data(dive) else "",
         "external_ids": ids,
         "source": source,
         "enriched": enriched,

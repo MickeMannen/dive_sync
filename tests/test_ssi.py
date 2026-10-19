@@ -1028,10 +1028,10 @@ def test_adapter_is_an_add_only_base_dive_adapter():
     assert ssi.SsiAdapter.as_stored("tanks", named)[0].tank_name is None and BaseDiveAdapter.as_stored("tanks", named) is named
     catalog = ssi.SsiAdapter.field_catalog()          # callable without a login
     assert catalog and all(spec.key.startswith("ssi.") for spec in catalog)
-    assert {spec.unified for spec in catalog if not spec.writable} == {"dive_number", "location"}
+    assert {spec.unified for spec in catalog if not spec.writable} == {"dive_number", "location", "air_temp"}
     assert {spec.unified for spec in catalog if spec.writable} == {
         "date_time", "duration", "max_depth", "avg_depth", "temp_min", "temp_max", "notes", "weight", "visibility",
-        "gps", "tanks", "samples"}
+        "gps", "tanks", "samples", "water_type"}       # the water type goes out with a new dive (build_payload)
     assert "not registered" not in ssi.__doc__ and "SsiAdapter" in ssi.__doc__
 
 
@@ -1239,6 +1239,49 @@ def test_sync_garmin_to_myssi_through_the_fake(tmp_path, caplog):
     assert fake.whats().count("save_divelog") == 1                        # the one upload of the first run; no delete
 
 
+def test_no_sync_run_deletes_a_linked_dive_on_myssi(tmp_path, caplog):
+    """check.md B1 (owner 2026-10-19, plans/myssi-sync.md answer 5): a dive
+    DiveSync sent to MySSI and then deleted on Garmin is not deleted on
+    MySSI by the propagate-deletes path either - not by a pair with
+    propagate_deletes on, not by Mirror (which turns it on). No delete
+    request reaches the fake, the link is kept, the dive is counted as
+    skipped and not re-uploaded."""
+    from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncPairModel
+    from src.core.pairs import default_links_for
+    from src.core.sync_engine import SyncEngine
+    from tests.test_link_engine import FakeGarmin
+    settings_path = str(tmp_path / "settings.json")
+    pair = SyncPairModel(id="garmin_ssi", source="garmin", target="ssi", directionality="to_ssi",
+                         field_links=default_links_for("garmin", "ssi"))
+    ConfigManager.save_settings(SettingsModel(api_cooldown_seconds=0.0, propagate_deletes=True,
+                                              sync_filters=SyncFilters(only_new=False), sync_pairs=[pair]),
+                                settings_path)
+    fake = FakeSsi(dives=[logbook_dive(11, "2026-06-20", "09:30", ref="garmin:1")], sites=SITES)
+
+    def engine(garmin):
+        return SyncEngine(settings_path=settings_path, credentials_path=str(tmp_path / "c.json"),
+                          source_adapter=FakeGarmin(garmin), target_adapter=adapter_for(fake))
+
+    # first run links the pair (found by the computer reference), nothing is sent
+    res = engine([make_dive(start="2026-06-20 09:30", activity="1")]).run_sync(dry_run=False)
+    state_file = tmp_path / "sync" / "sync_state_garmin_ssi.json"
+    assert res["matched_count"] == 1 and json.loads(state_file.read_text())["links"] == {"1": "111"}
+    fake.calls.clear()
+
+    # the Garmin original is deleted: propagate_deletes on, then Mirror on top
+    for overrides in ({}, {"mirror_override": True}):
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            res = engine([]).run_sync(dry_run=False, **overrides)
+        assert res["deleted_on_ssi"] == [] and res["uploaded_to_ssi"] == [] and res["matched_count"] == 0
+        assert res["skipped"] == [{"reason": "sync_never_deletes_here", "id": "111", "time": "2026-06-20 09:30:00",
+                                   "gone_from": "garmin"}]
+        assert "save_divelog" not in fake.whats() and [d["odin_user_log_id"] for d in fake.live()] == ["111"]
+        assert "Dive 1 is gone from Garmin Connect; propagate_deletes is on, but MySSI ID 111 is not deleted (a sync never deletes on MySSI)" in caplog.text
+        assert "deleting" not in caplog.text and "Failed to delete" not in caplog.text
+        assert json.loads(state_file.read_text())["links"] == {"1": "111"}       # the link is kept
+
+
 def test_adapter_login_paths():
     fake = FakeSsi()
     assert adapter_for(fake).login() is True and fake.whats() == ["authenticate"]
@@ -1247,6 +1290,48 @@ def test_adapter_login_paths():
     assert adapter_for(fake, token="kept").login() is True and fake.whats() == ["get_divelog"]
     assert adapter_for(FakeSsi(password="other")).login() is False       # no raise, like the other adapters
     assert ssi.SsiAdapter("", "", transport=fake, sleep=lambda s: None).login() is False
+
+
+def test_adapter_add_dive_marks_a_duplicate_as_skipped_and_a_failure_as_not(tmp_path):
+    """check.md B4: `add_dive` returns None both for a dive the logbook
+    already has (left out on purpose: ``add_skipped_reason`` says why) and
+    for an upload that failed (no reason); the engine counts the first as
+    skipped and the second as failed, so a lost upload never looks done."""
+    from src.core.config import ConfigManager, SettingsModel, SyncFilters, SyncPairModel
+    from src.core.pairs import default_links_for
+    from src.core.sync_engine import SyncEngine
+    from tests.test_link_engine import FakeGarmin
+    fake = FakeSsi(dives=[logbook_dive(11, "2026-06-20", "09:30", ref="garmin:1")], sites=SITES)
+    adapter = adapter_for(fake)
+    assert adapter.add_dive(make_dive(start="2026-06-20 09:30", activity="1")) is None
+    assert adapter.add_skipped_reason and "already" in adapter.add_skipped_reason
+    two = [GasMixture(oxygen=32.0, start_pressure=200.0, end_pressure=70.0, tank_volume=12.0),
+           GasMixture(oxygen=50.0, start_pressure=200.0, end_pressure=80.0, tank_volume=7.0)]
+    assert adapter.add_dive(make_dive(start="2026-06-21 09:30", activity="5", tanks=two)) is None
+    assert adapter.add_skipped_reason.startswith("it has 2 tanks")
+    fake.drop_saves = True
+    assert adapter.add_dive(make_dive(start="2026-06-22 10:00", activity="2")) is None
+    assert adapter.add_skipped_reason is None                             # tried and lost: a failure
+    fake.drop_saves = False
+    assert adapter.add_dive(make_dive(start="2026-06-23 10:00", activity="3")) == "901"   # 900 was the dropped one
+    assert adapter.add_skipped_reason is None
+
+    # through the engine: the lost upload is under failed, not uploaded, and gets no link
+    pair = SyncPairModel(id="garmin_ssi", source="garmin", target="ssi", directionality="to_ssi",
+                         field_links=default_links_for("garmin", "ssi"))
+    settings_path = str(tmp_path / "settings.json")
+    ConfigManager.save_settings(SettingsModel(api_cooldown_seconds=0.0, sync_filters=SyncFilters(only_new=False),
+                                              sync_pairs=[pair]), settings_path)
+    fake = FakeSsi(sites=SITES)
+    fake.drop_saves = True
+    engine = SyncEngine(settings_path=settings_path, credentials_path=str(tmp_path / "c.json"),
+                        source_adapter=FakeGarmin([make_dive(start="2026-06-25 10:00", activity="2")]),
+                        target_adapter=adapter_for(fake))
+    res = engine.run_sync(dry_run=False)
+    assert res["uploaded_to_ssi"] == [] and res["skipped"] == []
+    assert res["failed"] == [{"action": "add", "service": "ssi", "time": "2026-06-25 10:00:00", "source_id": "2",
+                              "reason": "MySSI did not add the dive"}]
+    assert json.loads((tmp_path / "sync" / "sync_state_garmin_ssi.json").read_text())["links"] == {}
 
 
 def test_adapter_add_dive_then_fetch_dives_round_trip():
@@ -1414,3 +1499,19 @@ def test_as_stored_makes_a_sent_profile_and_tank_equal_to_what_comes_back():
     assert not values_equal("tanks", sent.gas_mixtures, got.gas_mixtures)  # "Tank 1" did not come back
     assert values_equal("tanks", ssi.SsiAdapter.as_stored("tanks", sent.gas_mixtures), got.gas_mixtures)
     assert ssi.SsiAdapter.as_stored("text", "x") == "x" and ssi.SsiAdapter.as_stored("samples", []) == []
+
+
+def test_air_temperature_is_read_and_the_water_type_is_in_the_catalogue():
+    """R10: ``airtemp_c`` reads into ``air_temp`` (read only: the add
+    payload keeps sending none, MySSI's writes are untouched); the water
+    type was already read and sent, so it is now a catalogue field a rule
+    can use."""
+    raw = logbook_dive(1, "2026-01-02", "08:15", **{"odin_user_log_airtemp_c": "29.5", "odin_user_log_var_watertype_id": "4"})
+    dive = ssi.logbook_dive_to_unified(ssi.SsiLogbookDive.from_raw(raw))
+    assert dive.air_temp == 29.5 and dive.water_type == "fresh"
+    assert ssi.logbook_dive_to_unified(ssi.SsiLogbookDive.from_raw(logbook_dive(1, "2026-01-02", "08:15"))).air_temp is None
+    payload = ssi.build_payload(make_dive(water_type="salt").model_copy(update={"air_temp": 29.5, "suit": "3 mm"}), 1)
+    assert payload["odin_user_log_airtemp_c"] is None and payload["odin_user_log_var_watertype_id"] == 5
+    specs = {f.name: f for f in ssi.SsiAdapter.field_catalog()}
+    assert specs["water_type"].writable and not specs["air_temp"].writable and specs["air_temp"].unit == "°C"
+    assert "suit" not in specs

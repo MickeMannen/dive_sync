@@ -227,6 +227,7 @@ FIELD_SLOTS: Dict[str, Tuple[str, Tuple[Slot, ...]]] = {
     "surface_interval": ("surface interval", (Slot(DIVE_SUMMARY, 4),)),
     "cns_start": ("CNS start", (Slot(DIVE_SUMMARY, 5),)),
     "cns_end": ("CNS end", (Slot(DIVE_SUMMARY, 6),)),
+    "sac": ("SAC", (Slot(DIVE_SUMMARY, 13, 100),)),          # avg_volume_sac, L/min (R9; the pressure SAC is left as logged)
     "max_depth": ("max depth", (Slot(DIVE_SUMMARY, 3, 1000), Slot(SESSION, 141, 1000), Slot(LAP, 123, 1000))),
     "avg_depth": ("avg depth", (Slot(DIVE_SUMMARY, 2, 1000), Slot(SESSION, 140, 1000), Slot(LAP, 122, 1000))),
     "duration": ("duration", (Slot(SESSION, 8, 1000), Slot(LAP, 8, 1000), Slot(ACTIVITY, 0, 1000))),
@@ -257,7 +258,7 @@ TANK_TEXTS = {"tank_name": "name", "tank_role": "role"}
 # What no FIT holds: attribute -> label.
 NOT_IN_A_FIT: Dict[str, str] = {
     "location": "site", "buddy": "buddy", "notes": "notes", "weight": "weight", "visibility": "visibility",
-    "deco_model": "deco model", "computer_vendor": "computer maker", "computer_model": "computer model",
+    "air_temp": "air temperature", "suit": "suit", "deco_model": "deco model", "computer_vendor": "computer maker", "computer_model": "computer model",
     "computer_serial": "computer serial", "computer_firmware": "computer firmware", "events": "events",
     "samples": "profile samples",
 }

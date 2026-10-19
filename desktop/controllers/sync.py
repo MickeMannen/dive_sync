@@ -129,20 +129,21 @@ class SyncController(QObject):
         # a saved pair (its own board and options) before the plain combination
         return next((p for p in matches if not p.get("builtin")), matches[0] if matches else None)
 
-    @Slot(bool, str, str, bool, bool, str, str, bool, bool)
+    @Slot(bool, str, str, bool, bool, str, str, bool, bool, bool)
     def runSyncBetween(self, dry_run: bool, source_spec: str, target_spec: str, only_new: bool, sync_gases: bool,
                        garmin_username: str = "", divelogs_username: str = "", use_garmin_cache: bool = True,
-                       mirror: bool = False) -> None:
+                       mirror: bool = False, garmin_fit_upload: bool = False) -> None:
         """Sync from ``source_spec`` into ``target_spec``: the run writes the
         target only (rework.md G0). A blank username means the account
-        picked on this page (selectedAccount)."""
+        picked on this page (selectedAccount). ``garmin_fit_upload``: the
+        page's "New Garmin dives as .fit (beta)" box (R13)."""
         from src.core.pairs import service_id_of
         pair = self._pair_between(source_spec, target_spec)
         if not pair or source_spec == target_spec:
             self._set_status("Pick two different services to sync.")
             return
         self.runSync(dry_run, f"to_{service_id_of(target_spec)}", only_new, sync_gases, pair["id"],
-                     garmin_username, divelogs_username, use_garmin_cache, mirror)
+                     garmin_username, divelogs_username, use_garmin_cache, mirror, garmin_fit_upload)
 
     @Property("QVariantList", notify=accountsChanged)
     def garminAccounts(self):
@@ -164,6 +165,16 @@ class SyncController(QObject):
     def ssiAccounts(self):
         """The MySSI accounts (emails), plans/myssi-sync.md K3."""
         return accounts.names("ssi")
+
+    @Slot(str, result=bool)
+    def offersGarminFit(self, target_spec: str) -> bool:
+        """Whether the page shows "New Garmin dives as .fit (beta)": only
+        when the run writes Garmin (R13)."""
+        from src.core.pairs import service_id_of
+        try:
+            return service_id_of(target_spec) == "garmin"
+        except ValueError:
+            return False
 
     @Slot(str, str, result=str)
     def pairNote(self, source_spec: str, target_spec: str) -> str:
@@ -235,10 +246,10 @@ class SyncController(QObject):
 
     # -- actions ----------------------------------------------------------
 
-    @Slot(bool, str, bool, bool, str, str, str, bool, bool)
+    @Slot(bool, str, bool, bool, str, str, str, bool, bool, bool)
     def runSync(self, dry_run: bool, direction: str, only_new: bool, sync_gases: bool, pair_id: str,
                 garmin_username: str = "", divelogs_username: str = "", use_garmin_cache: bool = True,
-                mirror: bool = False) -> None:
+                mirror: bool = False, garmin_fit_upload: bool = False) -> None:
         if self._busy():
             self._set_status("A sync or download is already running.")
             return
@@ -248,6 +259,10 @@ class SyncController(QObject):
                   "use_garmin_cache": use_garmin_cache, "propagate_deletes": False}
         if mirror:
             custom["mirror"] = True
+        # plans/gap-roadmap.md R13 (beta): ticked sends this run's new Garmin
+        # dives as .fit; unticked leaves it to the pair's setting (off by default)
+        if garmin_fit_upload:
+            custom["garmin_fit_upload"] = True
         selected = next((p for p in self.pairs if p["id"] == pair_id), None)
         if selected and selected.get("builtin"):
             # Built-in combinations have no entry in settings.json, so they
@@ -317,6 +332,14 @@ class SyncController(QObject):
                 self.finished.emit(False)
             elif result is not None and result.get("success") is False:
                 self._set_status("Finished with errors — check the log.")
+                self.finished.emit(False)
+            elif result is not None and result.get("failed"):
+                # a run whose receiver refused or broke on some writes
+                # (SyncEngine run results "failed", check.md B3/B4): done,
+                # but not everything it tried was taken
+                failed = result["failed"]
+                self._set_status(f"{done_text()} {len(failed)} dive{'s' if len(failed) != 1 else ''} failed "
+                                 "— check the log.")
                 self.finished.emit(False)
             else:
                 self._set_status(done_text())

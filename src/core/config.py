@@ -2,9 +2,9 @@ import os
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import urlparse
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from src.core.fields import FieldLink, SyncRule, default_field_links, links_to_rules, rules_to_links
 
@@ -144,6 +144,7 @@ class CronJobModel(BaseModel):
     source: Optional[str] = Field(None, description="Source service spec (with target, instead of pair)")
     target: Optional[str] = Field(None, description="Target service spec, the side the job writes")
     use_garmin_cache: Optional[bool] = Field(None, description="None = the saved default (sync_filters.use_garmin_cache)")
+    garmin_fit_upload: Optional[bool] = Field(None, description="Beta (plans/gap-roadmap.md R13): True uploads the new dives this job creates on Garmin as .fit files; None = the pair's setting (garmin_fit_upload)")
     garmin_username: Optional[str] = Field(None, description="Which configured Garmin account to use; None picks the only one, or errors if several are configured")
     divelogs_username: Optional[str] = Field(None, description="Which configured Divelogs account to use; None picks the only one, or errors if several are configured")
     # plans/myssi-sync.md K5: a scheduled job with MySSI as a side picks its
@@ -178,6 +179,7 @@ class SyncPairModel(BaseModel):
     propagate_deletes: Optional[bool] = Field(None, description="Per-pair override of whether a dive deleted on one side is deleted on the other (rework.md C13); None = the global default")
     create_on_garmin: Optional[bool] = Field(None, description="Per-pair override of whether a new dive found only on the other side is created on Garmin (rework.md C16); None = the global default. Matched-dive updates are never affected")
     create_device_dives_on_submersion: Optional[bool] = Field(None, description="Per-pair override of whether a dive a dive computer recorded is created on Submersion (rework.md F17); None = the global default. Hand-logged dives are created either way")
+    garmin_fit_upload: Optional[bool] = Field(None, description="Per-pair override of how a new dive is created on Garmin (plans/gap-roadmap.md R13, beta): True uploads it as a .fit file (profile, tanks and gases arrive), False posts the manual activity; None = the global default. Whether a dive is created on Garmin at all is still create_on_garmin's call")
 
     @model_validator(mode="before")
     @classmethod
@@ -237,6 +239,10 @@ def default_pair_model(links: Optional[List[FieldLink]] = None, directionality: 
     return pair
 
 
+# When notify_url is POSTed to (plans/gap-roadmap.md R24): SettingsModel.notify_on
+NOTIFY_ON_CHOICES = ("failure", "changes", "always")
+
+
 class SettingsModel(BaseModel):
     settings_version: int = Field(SETTINGS_VERSION, description="File format version; 2 = receiver rules on pairs (rework.md G1)")
     sync_filters: SyncFilters = Field(default_factory=SyncFilters)
@@ -262,6 +268,13 @@ class SettingsModel(BaseModel):
         None,
         description="Webhook (ntfy / Gotify / generic) POSTed a short plain-text message when a scheduled or manual sync run fails; empty disables alerts (rework.md A11)",
     )
+    notify_on: Literal["failure", "changes", "always"] = Field(
+        "failure",
+        description="When notify_url is sent a message (plans/gap-roadmap.md R24): 'failure' only when a run fails "
+                    "(the default, as before), 'changes' also after a run that added, updated or deleted dives, "
+                    "raised conflicts or had failed writes (a dry run writes nothing, so it never counts), "
+                    "'always' after every run that finished, dry runs included, with a summary of its counts",
+    )
     propagate_deletes: bool = Field(
         False,
         description="Default for the implicit Garmin<->Divelogs pair, and the fallback for any pair without its own override: delete the linked dive on the other side when one is deleted here (rework.md C13). Only checked during a full (non-incremental) sync - an incremental run's date-limited fetch cannot tell 'deleted' apart from 'outside this run's window', so deletion detection is skipped there entirely, on or off",
@@ -274,10 +287,26 @@ class SettingsModel(BaseModel):
         False,
         description="Default for the implicit Garmin<->Divelogs pair, and the fallback for any pair without its own override: a new dive found only on the other side is uploaded to create a matching Garmin dive (rework.md C16). Off by default - Garmin dive creation from another source is opt-in. Matched-dive field updates are never affected by this switch",
     )
+    garmin_fit_upload: bool = Field(
+        False,
+        description="Beta, off by default (plans/gap-roadmap.md R13): a new dive created on Garmin is uploaded as a .fit file written from the dive (profile, tanks, gases and the computer's channels arrive in Connect; what a .fit cannot hold is set through the activity afterwards or named in the log) instead of posted as a manual activity with the summary only. A dive without a profile is still posted as a manual activity. Only changes how a dive is created; create_on_garmin decides whether it is",
+    )
     create_device_dives_on_submersion: bool = Field(
         False,
         description="Whether a dive only the other side has is created on Submersion when a dive computer recorded it (rework.md F17). Off by default: the diver imports each device dive's .fit in the Submersion app, which derives the profile, cylinders, tank pressures and gas switches from the file, and dive_sync then syncs the soft fields onto the dive that import created - creating it here first would only produce a second, emptier copy. A hand-logged dive (nothing to import) is created regardless of this switch, and matched-dive field updates are never affected by it",
     )
+
+    @field_validator("notify_on", mode="before")
+    @classmethod
+    def _known_notify_on(cls, value: Any) -> Any:
+        """A missing, empty or unknown ``notify_on`` (a hand-edited
+        settings.json, a profile from a newer build) falls back to 'failure'
+        rather than making the whole settings file unreadable."""
+        if value in NOTIFY_ON_CHOICES:
+            return value
+        if value not in (None, ""):
+            logger.warning("Unknown notify_on %r in the settings; alerts are sent on failure only.", value)
+        return "failure"
 
     @model_validator(mode="before")
     @classmethod
@@ -711,10 +740,12 @@ PROFILE_SECTIONS = (
     "schedule",
     "cron_jobs",
     "notify_url",
+    "notify_on",
     "propagate_deletes",
     "backup_retention_count",
     "create_on_garmin",
     "create_device_dives_on_submersion",
+    "garmin_fit_upload",
 )
 LEGACY_PROFILE_SECTIONS = ("directionality", "field_links")
 
@@ -791,7 +822,8 @@ def _describe_pairs(old: List[SyncPairModel], new: List[SyncPairModel]) -> List[
         if before.match_keys != pair.match_keys:
             lines.append(f"match_keys[{pair_id}]: {before.match_keys} -> {pair.match_keys}")
         for attr in ("source", "target", "directionality", "enabled", "grace_window_minutes",
-                     "propagate_deletes", "create_on_garmin", "create_device_dives_on_submersion"):
+                     "propagate_deletes", "create_on_garmin", "create_device_dives_on_submersion",
+                     "garmin_fit_upload"):
             if getattr(before, attr) != getattr(pair, attr):
                 lines.append(f"sync_pairs[{pair_id}].{attr}: {getattr(before, attr)!r} -> {getattr(pair, attr)!r}")
     return lines

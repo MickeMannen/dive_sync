@@ -54,9 +54,14 @@ Units in the file: depth and duration metric/SI as text, tank pressures
 **PSI** as text, temperatures °C. The profile samples live only inside the
 computer's native log (``log_data.data_bytes_1``, gzip after a 4-byte
 prefix), decoded by ``shearwater_log.py`` (rework.md H5): every sample the
-computer logged, with depth, temperature, time and the first transmitter's
-pressure; a log that cannot be decoded gives a dive without a profile and
-one warning, never a failed load.
+computer logged, with depth, temperature, time, the first transmitter's
+pressure and, as carried channels (plans/gap-roadmap.md R5), every
+transmitter's pressure keyed by its tank (slot T<n> -> its ``gas_mixtures``
+entry), NDL, TTS, deco stop, CNS, ppO2, setpoint and GF99; the gas switches
+and circuit changes as events; the computer, gradient factors, dive mode and
+water setting from the log's header. A log that cannot be decoded gives a
+dive without a profile and one warning, never a failed load. Nothing of the
+profile is ever written back: the log is the computer's.
 """
 from __future__ import annotations
 
@@ -70,12 +75,12 @@ import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.core.adapter import BaseDiveAdapter
 from src.core.fields import FieldSpec
-from src.core.models import GasMixture, UnifiedDive, UnifiedSample
-from src.core.services.shearwater_log import ShearwaterLogError, decode_profile
+from src.core.models import GasMixture, UnifiedDive
+from src.core.services.shearwater_log import DecodedLog, ShearwaterLogError, decode_log
 
 logger = logging.getLogger("dive_sync.shearwater")
 
@@ -119,6 +124,7 @@ DROPDOWN_OPTIONS: Dict[str, List[str]] = {
                            "Ground transportation"],
 }
 NUMBER_COLUMNS = ("AirTemperature",)
+AIR_TEMPERATURE_COLUMN = "AirTemperature"   # UnifiedDive.air_temp since R10, not a service field
 SERVICE_COLUMNS: Tuple[str, ...] = tuple(COLUMNS.values())
 _LABELS = {"environment_notes": "Environment notes", "gas_notes": "Gas notes", "tank_size": "Tank size",
            "gear_notes": "Gear notes", "thermal_comfort": "Thermal comfort", "exposure_to_altitude": "Exposure to altitude",
@@ -251,17 +257,15 @@ def parse_local(text: Any) -> Optional[datetime]:
 # Row -> UnifiedDive
 # ---------------------------------------------------------------------------
 
-def parse_tanks(row: Dict[str, Any]) -> List[GasMixture]:
-    """Gases from ``TankProfileData`` (the app's JSON of gas profiles and the
-    four transmitter slots) plus the editable ``Tank<n>PressureStart/End``
-    columns, which win over the JSON's pressures when filled in. Slots that
-    are switched off and carry no pressure are dropped; without any slot the
-    gas profiles alone give the mixes."""
+def tank_slots(row: Dict[str, Any]) -> List[Tuple[int, GasMixture]]:
+    """The ``TankProfileData`` slots a dive keeps, as (slot index, gas):
+    the four transmitter slots T1-T4 come first (slot 0 = T1), then the
+    app's unnamed extra slots. See ``parse_tanks`` for what is kept."""
     try:
         data = json.loads(row.get("TankProfileData") or "{}")
     except ValueError:
         data = {}
-    out: List[GasMixture] = []
+    out: List[Tuple[int, GasMixture]] = []
     for i, slot in enumerate(data.get("TankData") or []):
         if not isinstance(slot, dict):
             continue
@@ -276,12 +280,35 @@ def parse_tanks(row: Dict[str, Any]) -> List[GasMixture]:
             end = psi_to_bar(slot.get("EndPressurePSI"))
         if not transmitter.get("IsOn") and start is None and end is None:
             continue
-        out.append(GasMixture(oxygen=float(profile.get("O2Percent", 21) or 21),
-                              helium=float(profile.get("HePercent", 0) or 0),
-                              start_pressure=start, end_pressure=end,
-                              tank_name=transmitter.get("Name") or None))
-    if out:
-        return out
+        out.append((i, GasMixture(oxygen=float(profile.get("O2Percent", 21) or 21),
+                                  helium=float(profile.get("HePercent", 0) or 0),
+                                  start_pressure=start, end_pressure=end,
+                                  tank_name=transmitter.get("Name") or None)))
+    return out
+
+
+def transmitter_tanks(row: Dict[str, Any]) -> Dict[int, int]:
+    """Transmitter slot (0 = T1 .. 3 = T4) -> the index of its tank in
+    ``parse_tanks``'s list, for the profile's per-tank pressures and gas
+    switch events: a dive with T1 and T4 on has ``gas_mixtures`` [T1, T4],
+    so transmitter 3's readings are tank 1's (plans/gap-roadmap.md R5)."""
+    return {slot: position for position, (slot, _) in enumerate(tank_slots(row)) if slot < 4}
+
+
+def parse_tanks(row: Dict[str, Any]) -> List[GasMixture]:
+    """Gases from ``TankProfileData`` (the app's JSON of gas profiles and the
+    four transmitter slots) plus the editable ``Tank<n>PressureStart/End``
+    columns, which win over the JSON's pressures when filled in. Slots that
+    are switched off and carry no pressure are dropped; without any slot the
+    gas profiles alone give the mixes."""
+    slots = tank_slots(row)
+    if slots:
+        return [gas for _, gas in slots]
+    try:
+        data = json.loads(row.get("TankProfileData") or "{}")
+    except ValueError:
+        data = {}
+    out: List[GasMixture] = []
     seen = set()
     for profile in data.get("GasProfiles") or []:
         mix = (float(profile.get("O2Percent", 21) or 21), float(profile.get("HePercent", 0) or 0))
@@ -295,29 +322,33 @@ def parse_tanks(row: Dict[str, Any]) -> List[GasMixture]:
 LOG_FORMAT = "sw-pnf"
 
 
-def profile_of(dive_id: Any, log_format: Optional[str], blob: Optional[bytes]) -> List[UnifiedSample]:
-    """The dive's profile from its ``log_data`` row, or ``[]`` with one
-    warning: another log format, a missing log, a blob the decoder rejects
-    (legacy layout, bad gzip, missing records, a freedive log, samples that
-    disagree with the header) or any other error. A profile never makes
-    loading a dive fail (decision 2026-09-30)."""
+def log_of(dive_id: Any, log_format: Optional[str], blob: Optional[bytes],
+           tank_of_transmitter: Optional[Dict[int, int]] = None, gases: Sequence[GasMixture] = ()) -> DecodedLog:
+    """The dive's profile, events and carried header fields from its
+    ``log_data`` row (``shearwater_log.decode_log``), or an empty
+    ``DecodedLog`` with one warning: another log format, a missing log, a
+    blob the decoder rejects (legacy layout, bad gzip, missing records, a
+    freedive log, samples that disagree with the header) or any other
+    error. A profile never makes loading a dive fail (decision 2026-09-30)."""
     if blob is None:
         logger.warning("Shearwater: dive %s has no log in log_data; no profile", dive_id)
-        return []
+        return DecodedLog()
     if log_format != LOG_FORMAT:
         logger.warning("Shearwater: dive %s: log format %r is not %s; no profile", dive_id, log_format, LOG_FORMAT)
-        return []
+        return DecodedLog()
     try:
-        return decode_profile(blob)
+        return decode_log(blob, tank_of_transmitter, gases)
     except ShearwaterLogError as e:
         logger.warning("Shearwater: dive %s: no profile - %s", dive_id, e)
     except Exception as e:  # noqa: BLE001 - a profile must never make loading a dive fail
         logger.warning("Shearwater: dive %s: no profile - unexpected %s: %s", dive_id, type(e).__name__, e)
-    return []
+    return DecodedLog()
 
 
 def row_to_unified(row: Dict[str, Any], calculated: Optional[Dict[str, Any]] = None,
-                   samples: Optional[List[UnifiedSample]] = None) -> Optional[UnifiedDive]:
+                   decoded: Optional[DecodedLog] = None) -> Optional[UnifiedDive]:
+    """A ``dive_details`` row (plus ``log_data``'s calculated JSON and the
+    decoded log) as a ``UnifiedDive``; None when the row has no date."""
     when = parse_local(row.get("DiveDate"))
     if when is None:
         logger.warning("Shearwater: dive %s has no readable DiveDate; skipped", row.get("DiveId"))
@@ -332,12 +363,14 @@ def row_to_unified(row: Dict[str, Any], calculated: Optional[Dict[str, Any]] = N
 
     lat, lng = parse_gnss(row.get("GnssEntryLocation"))
     weight = parse_number(row.get("Weight"))
+    decoded = decoded or DecodedLog()
     service_fields: Dict[str, Any] = {}
     for name, column in COLUMNS.items():
         value = row.get(column)
-        if value is None or value == "":
+        if value is None or value == "" or column == AIR_TEMPERATURE_COLUMN:
             continue
         service_fields[name] = parse_number(value) if column in NUMBER_COLUMNS else str(value)
+    air_text = row.get(AIR_TEMPERATURE_COLUMN)
     return UnifiedDive(
         date_time=when,
         duration=int(parse_number(row.get("DiveLengthTime")) or 0),
@@ -347,7 +380,7 @@ def row_to_unified(row: Dict[str, Any], calculated: Optional[Dict[str, Any]] = N
         temp_max=calc_or_column("MaxTemp"),
         temp_avg=calc_or_column("AverageTemp"),
         external_ids={SERVICE_ID: str(row["DiveId"])},
-        gas_mixtures=parse_tanks(row),
+        gas_mixtures=decoded.gas_mixtures if decoded.gas_mixtures is not None else parse_tanks(row),
         location=row.get("Site") or None,
         notes=row.get("Notes") or None,
         dive_number=int(parse_number(row.get("DiveNumber"))) if parse_number(row.get("DiveNumber")) else None,
@@ -357,9 +390,12 @@ def row_to_unified(row: Dict[str, Any], calculated: Optional[Dict[str, Any]] = N
         weight_unit="kilogram" if weight is not None else None,
         buddy=row.get("Buddy") or None,
         lat=lat, lng=lng,
-        samples=list(samples or []),
+        samples=list(decoded.samples),
+        events=list(decoded.events),
         device_logged=True,
         service_fields=service_fields,
+        air_temp=parse_number(air_text) if air_text not in (None, "") else None,
+        **decoded.fields,
     )
 
 
@@ -444,6 +480,10 @@ class ShearwaterAdapter(BaseDiveAdapter):
     display_name = "Shearwater app"
     stores_external_ids = False
     accepts_new_dives = False      # only the app's computer download adds a dive
+    # delete_dive always refuses (check.md B2): a Mirror run, or a pair with
+    # propagate deletes on, logs what it would have deleted instead of
+    # trying and warning "Failed to delete" per dive.
+    accepts_mirror_deletes = False
 
     @classmethod
     def field_catalog(cls) -> List[FieldSpec]:
@@ -474,9 +514,14 @@ class ShearwaterAdapter(BaseDiveAdapter):
             FieldSpec(key="shearwater.gps", label="Entry position", type="gps", unified="gps"),
         ]
         for name, column in COLUMNS.items():
+            # the air temperature is the dive's own field since R10 (the key stays, so saved rules keep working)
             editable.append(FieldSpec(key=f"shearwater.{name}", label=_LABELS.get(name, column),
                                       type="number" if column in NUMBER_COLUMNS else "text",
-                                      unit="°C" if column == "AirTemperature" else None))
+                                      unified="air_temp" if column == AIR_TEMPERATURE_COLUMN else None,
+                                      unit="°C" if column == AIR_TEMPERATURE_COLUMN else None))
+        # the computer's water setting, decoded from the log (R5): read, never written
+        computer.append(FieldSpec(key="shearwater.water_type", label="Water type (the computer's setting)", type="text",
+                                  unified="water_type", writable=False))
         return computer + editable
 
     def __init__(self, path: str):
@@ -523,7 +568,8 @@ class ShearwaterAdapter(BaseDiveAdapter):
                 calculated = json.loads(raw)
             except ValueError:
                 calculated = None
-        return row_to_unified(data, calculated, profile_of(data.get("DiveId"), log_format, blob))
+        decoded = log_of(data.get("DiveId"), log_format, blob, transmitter_tanks(data), parse_tanks(data))
+        return row_to_unified(data, calculated, decoded)
 
     def fetch_dives(self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None) -> List[UnifiedDive]:
         out: List[UnifiedDive] = []
@@ -635,8 +681,12 @@ class ShearwaterAdapter(BaseDiveAdapter):
             "Weight": _weight_text(dive.weight, dive.weight_unit),
             "GnssEntryLocation": _gnss_text(dive.lat, dive.lng),
         }
+        # the air temperature: the dive's own field, or the service field a dive cached before R10 carries
+        air = dive.air_temp if dive.air_temp is not None else dive.service_fields.get(NAME_OF_COLUMN[AIR_TEMPERATURE_COLUMN])
+        air = parse_number(air) if air not in (None, "") else None
+        wanted[AIR_TEMPERATURE_COLUMN] = _number_text(air) if air is not None else None
         for name, column in COLUMNS.items():
-            if name not in dive.service_fields:
+            if name not in dive.service_fields or column == AIR_TEMPERATURE_COLUMN:
                 continue
             value = dive.service_fields[name]
             if value is None or value == "":

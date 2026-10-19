@@ -33,6 +33,14 @@ class LocalMockGarminAdapter(BaseDiveAdapter):
             self.mock_dir = layout.dives_dir("garmin", None, mock_data_dir)
         # Dummy adapter to reuse parsing & mapping logic
         self.helper = GarminAdapter("dummy", "dummy", token_dir="/tmp")
+        # set by the engine like the real adapter's (R13); the offline add
+        # still writes JSON, but a dry run says what would go as a .fit
+        self.fit_upload = False
+
+    def upload_details(self, dive: UnifiedDive) -> dict:
+        """GarminAdapter.upload_details with this run's switch (R13)."""
+        self.helper.fit_upload = self.fit_upload
+        return self.helper.upload_details(dive)
 
     def login(self) -> bool:
         logger.info("[MOCK] Garmin Connect login bypassed (authenticated locally).")

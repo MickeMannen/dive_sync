@@ -1,6 +1,7 @@
 """The unified models (src/core/models.py) and the fields that are carried,
 not synced (plans/convert.md I1): per-sample channels, dive events, the dive
-computer and its settings.
+computer and its settings - plus the three sparse fields a catalogue may
+name (water type, air temperature, suit; plans/gap-roadmap.md R10).
 
 Two promises are pinned here. A dive without the carried data serialises
 byte for byte as it did before those fields existed (the caches, the pre-sync
@@ -14,6 +15,8 @@ import pytest
 from src.core import models
 from src.core.models import (
     CARRIED_DIVE_FIELDS,
+    SPARSE_DIVE_FIELDS,
+    SYNCED_SPARSE_FIELDS,
     EVENT_ALERT,
     EVENT_GAS_SWITCH,
     EVENT_SETPOINT_CHANGE,
@@ -160,6 +163,8 @@ def computer_dive() -> UnifiedDive:
         gf_low=45, gf_high=85, deco_model="ZHL-16C",
         water_type="salt", water_density=1025.0, dive_mode="oc_multi_gas",
         exit_lat=7.601, exit_lng=98.371, surface_interval=5400, bottom_time=3900, cns_start=2.0, cns_end=11.0,
+        sac=11.2, rmv=22.53, otu=19.0,
+        air_temp=31.5, suit="3 mm shorty",
     )
 
 
@@ -181,18 +186,22 @@ def test_json_written_before_the_carried_fields_loads_and_writes_back_unchanged(
     dive = UnifiedDive(**json.loads(LEGACY_DIVE_JSON))
     assert dive == legacy_dive()
     assert dive.events == [] and all(s.channels is None for s in dive.samples)
-    assert all(getattr(dive, name) in (None, []) for name in CARRIED_DIVE_FIELDS)
+    assert all(getattr(dive, name) in (None, []) for name in SPARSE_DIVE_FIELDS)
     assert json.dumps(dive.model_dump(mode="json"), indent=2) == LEGACY_DIVE_JSON
     assert UnifiedDive.model_validate_json(BARE_DIVE_JSON).model_dump_json() == BARE_DIVE_JSON
 
 
-def test_every_field_is_either_as_before_or_carried():
-    """A new UnifiedDive field has to choose: it is listed as carried (and so
-    left out of the JSON when unset), or it changes what every cache file
-    holds and this list is edited on purpose."""
-    assert list(UnifiedDive.model_fields) == LEGACY_DIVE_KEYS + list(CARRIED_DIVE_FIELDS)
+def test_every_field_is_either_as_before_or_sparse():
+    """A new UnifiedDive field has to choose: it is listed as sparse (and so
+    left out of the JSON when unset) - carried, or one of the few a
+    catalogue may name - or it changes what every cache file holds and
+    this list is edited on purpose."""
+    assert list(UnifiedDive.model_fields) == LEGACY_DIVE_KEYS + list(SPARSE_DIVE_FIELDS)
+    assert set(SYNCED_SPARSE_FIELDS) <= set(SPARSE_DIVE_FIELDS)
+    assert set(CARRIED_DIVE_FIELDS) == set(SPARSE_DIVE_FIELDS) - set(SYNCED_SPARSE_FIELDS)
+    assert SYNCED_SPARSE_FIELDS == ("water_type", "air_temp", "suit", "exit_lat", "exit_lng")
     assert list(UnifiedSample.model_fields) == LEGACY_SAMPLE_KEYS + ["channels"]
-    for name in CARRIED_DIVE_FIELDS:
+    for name in SPARSE_DIVE_FIELDS:
         assert not UnifiedDive.model_fields[name].is_required(), name
     assert not any(f.is_required() for f in SampleChannels.model_fields.values())
     assert [n for n, f in DiveEvent.model_fields.items() if f.is_required()] == ["time", "type"]
@@ -216,7 +225,8 @@ def test_carried_data_round_trips_through_json():
     assert UnifiedDive.model_validate_json(dive.model_dump_json()) == dive
 
     data = json.loads(text)
-    assert list(data) == LEGACY_DIVE_KEYS + list(CARRIED_DIVE_FIELDS)        # after the keys a dive always had
+    assert list(data) == LEGACY_DIVE_KEYS + list(SPARSE_DIVE_FIELDS)         # after the keys a dive always had
+    assert data["air_temp"] == 31.5 and data["suit"] == "3 mm shorty"
     assert {k: data[k] for k in LEGACY_DIVE_KEYS if k != "samples"} == \
         {k: v for k, v in json.loads(LEGACY_DIVE_JSON).items() if k != "samples"}
 
@@ -241,6 +251,48 @@ def test_only_the_channels_and_event_keys_that_hold_something_are_written():
     ]
 
 
+def test_has_ccr_data_names_what_the_ccr_note_is_shown_for():
+    """R18b: a dive holds rebreather data when its mode is closed or
+    semi-closed circuit, a tank is the diluent or the oxygen, or a sample
+    carries a setpoint or O2 cells; an open-circuit dive, cells or not,
+    does not. The note itself says CCR is untested."""
+    from src.core.models import CCR_NOTE, has_ccr_data
+    base = UnifiedDive(date_time=datetime(2026, 5, 1, 10, 0), duration=3600, max_depth=25.0)
+    assert has_ccr_data(base) is False
+    assert has_ccr_data(base.model_copy(update={"dive_mode": "ccr"})) is True
+    assert has_ccr_data(base.model_copy(update={"dive_mode": "scr"})) is True
+    assert has_ccr_data(base.model_copy(update={"dive_mode": "oc_multi_gas"})) is False
+    assert has_ccr_data(base.model_copy(update={"gas_mixtures": [GasMixture(oxygen=21.0, tank_role="diluent")]})) is True
+    assert has_ccr_data(base.model_copy(update={"gas_mixtures": [GasMixture(oxygen=100.0, tank_role="oxygen")]})) is True
+    assert has_ccr_data(base.model_copy(update={"gas_mixtures": [GasMixture(oxygen=50.0, tank_role="deco")]})) is False
+    plain = [UnifiedSample(depth=10.0, time=60), UnifiedSample(depth=12.0, time=120, channels=SampleChannels(ppo2=0.42, ndl=1200))]
+    assert has_ccr_data(base.model_copy(update={"samples": plain})) is False
+    assert has_ccr_data(base.model_copy(update={"samples": plain + [UnifiedSample(depth=12.0, time=180, channels=SampleChannels(setpoint=1.2))]})) is True
+    assert has_ccr_data(base.model_copy(update={"samples": plain + [UnifiedSample(depth=12.0, time=180, channels=SampleChannels(o2_cells={0: 1.2}))]})) is True
+    assert "not yet tested with a real CCR dive" in CCR_NOTE
+
+
+def test_o2_cells_are_a_channel_of_their_own_next_to_the_computers_po2():
+    """A rebreather's cells (plans/gap-roadmap.md R18): one reading per
+    cell by its 0-based index, written only when a sample has any, JSON
+    keys coming back as numbers; the computer's own PO2 and the setpoint
+    stay what they were."""
+    channels = SampleChannels(ppo2=1.21, setpoint=1.2, o2_cells={0: 1.22, 1: 1.19, 2: 1.21})
+    assert channels.model_dump() == {"ppo2": 1.21, "setpoint": 1.2, "o2_cells": {0: 1.22, 1: 1.19, 2: 1.21}}
+    sample = UnifiedSample(depth=20.0, time=60, channels=channels)
+    data = sample.model_dump(mode="json")
+    assert data["channels"]["o2_cells"] == {"0": 1.22, "1": 1.19, "2": 1.21}
+    back = UnifiedSample(**json.loads(json.dumps(data)))
+    assert back == sample and back.channels.o2_cells == {0: 1.22, 1: 1.19, 2: 1.21}
+    # a cell the computer skipped leaves a gap, not a 0; no cells is no key
+    assert SampleChannels(o2_cells={0: 1.2, 2: 1.21}).model_dump() == {"o2_cells": {0: 1.2, 2: 1.21}}
+    assert SampleChannels(ppo2=1.2, o2_cells={}).model_dump() == {"ppo2": 1.2}
+    # a dive written before R18 reads and writes back unchanged
+    before = computer_dive().model_dump(mode="json")
+    assert "o2_cells" not in json.dumps(before)
+    assert UnifiedDive(**before).model_dump(mode="json") == before
+
+
 def test_zero_is_a_value_not_unset():
     """NDL 0, CNS 0 %, 'no stop' and tank 0 are things a computer logs."""
     channels = SampleChannels(ndl=0, cns=0.0, deco_stop_depth=0.0, deco_stop_time=0, heart_rate=0)
@@ -249,8 +301,8 @@ def test_zero_is_a_value_not_unset():
         {"time": 0, "type": "gas_switch", "tank": 0, "helium": 0.0, "value": 0.0}
     dive = legacy_dive(gf_low=0, surface_interval=0, cns_start=0.0, exit_lat=0.0, exit_lng=0.0, bottom_time=0)
     data = dive.model_dump()
-    assert [k for k in data if k in CARRIED_DIVE_FIELDS] == ["gf_low", "exit_lat", "exit_lng", "surface_interval",
-                                                             "bottom_time", "cns_start"]
+    assert [k for k in data if k in CARRIED_DIVE_FIELDS] == ["gf_low", "surface_interval", "bottom_time", "cns_start"]
+    assert (data["exit_lat"], data["exit_lng"]) == (0.0, 0.0)      # the equator is a position (synced since R8)
 
 
 def test_one_carried_field_adds_one_key():
@@ -260,14 +312,17 @@ def test_one_carried_field_adds_one_key():
 
 def test_carried_fields_default_to_unset_and_validate_their_types():
     channels = SampleChannels()
-    assert channels.pressures == {} and channels.model_dump() == {}
-    assert all(getattr(channels, n) is None for n in SampleChannels.model_fields if n != "pressures")
+    assert channels.pressures == {} and channels.o2_cells == {} and channels.model_dump() == {}
+    assert all(getattr(channels, n) is None for n in SampleChannels.model_fields if n not in ("pressures", "o2_cells"))
     assert SampleChannels().pressures is not SampleChannels().pressures         # no shared default dict
+    assert SampleChannels().o2_cells is not SampleChannels().o2_cells
     assert legacy_dive().events is not legacy_dive().events
     with pytest.raises(ValueError):
         SampleChannels(ndl="soon")
     with pytest.raises(ValueError):
         SampleChannels(pressures={"left": 200.0})                                # a tank is an index into gas_mixtures
+    with pytest.raises(ValueError):
+        SampleChannels(o2_cells={"left": 1.2})                                   # a cell is its 0-based index
     with pytest.raises(ValueError):
         DiveEvent(type=EVENT_ALERT)                                              # an event needs its time
     # a reader's own word for a kind, a mode or a water type is carried as it is
@@ -312,11 +367,93 @@ def test_without_unset_keeps_named_keys_and_real_values():
 
 # ---------------------------------------------------------------- carried, not synced
 
-@pytest.mark.parametrize("service_id", ["garmin", "divelogs", "subsurface", "uddf", "submersion", "shearwater"])
+@pytest.mark.parametrize("service_id", ["garmin", "divelogs", "subsurface", "uddf", "submersion", "shearwater", "ssi"])
 def test_no_field_catalogue_names_a_carried_field(service_id):
     """What the boards, the engine and conflicts can see is the catalogue;
-    the carried fields are in none of them."""
+    the carried fields are in none of them (the three synced sparse fields
+    may be, under their own name - R10)."""
     carried = set(CARRIED_DIVE_FIELDS) | {"channels"} | set(SampleChannels.model_fields)
     for spec in field_catalog_of(service_id):
         assert spec.unified not in carried, spec.key
         assert spec.name not in carried, spec.key
+
+
+# ---------------------------------------------------------------- surface air consumption (R9)
+
+def test_surface_air_consumption_sums_every_cylinder():
+    """SAC = litres breathed / (minutes x atmospheres at the average depth):
+    a twinset dive, 2 x 11.1 L, 162.57->78.04 and 160.69->106.38 bar over
+    4129 s at 8.196 m, is 1541 L in 68.8 min at 1.82 ata = 12.3 L/min; one
+    cylinder of it alone is the smaller half."""
+    tanks = [(11.1, 162.57, 78.04), (11.1, 160.69, 106.38)]
+    assert models.surface_air_consumption(tanks, 8.196, 4129.51) == pytest.approx(12.31, abs=0.01)
+    assert models.surface_air_consumption(tanks[:1], 8.196, 4129.51) == pytest.approx(7.5, abs=0.05)
+    # 150 bar x 12 L = 1800 L, over 60 min at 20 m (3 ata) = 10.0 L/min
+    assert models.surface_air_consumption([(12.0, 200.0, 50.0)], 20.0, 3600) == pytest.approx(10.0)
+
+
+def test_surface_air_consumption_needs_a_volume_a_drop_a_depth_and_a_time():
+    full = (12.0, 200.0, 50.0)
+    assert models.surface_air_consumption([(0, 200.0, 50.0)], 20.0, 3600) is None       # Divelogs' 0 = size never entered
+    assert models.surface_air_consumption([(None, 200.0, 50.0)], 20.0, 3600) is None
+    assert models.surface_air_consumption([(12.0, 200.0, 200.0)], 20.0, 3600) is None   # no drop
+    assert models.surface_air_consumption([(12.0, 50.0, 200.0)], 20.0, 3600) is None    # a rise is no drop
+    assert models.surface_air_consumption([], 20.0, 3600) is None
+    assert models.surface_air_consumption([full], 0, 3600) is None                      # no average depth
+    assert models.surface_air_consumption([full], 20.0, 0) is None                      # no duration
+    assert models.surface_air_consumption([full], None, None) is None
+    assert models.surface_air_consumption([("x", "y", "z")], 20.0, 3600) is None
+    assert models.surface_air_consumption([("12", "200", "50")], "20", "3600") == pytest.approx(10.0)   # texts, as a cache holds them
+
+
+def test_dive_sac_is_the_computers_else_computed_from_the_tanks():
+    """`dive_sac`: the logged SAC wins whenever the dive holds one (even
+    with tanks to compute from), else the computed one, else nothing; the
+    source word says which. Nothing is written back into the dive."""
+    logged = computer_dive()                                   # sac=11.2 with tanks to compute from
+    assert models.dive_sac(logged) == (11.2, models.SAC_LOGGED)
+    computed = legacy_dive(gas_mixtures=[GasMixture(tank_volume=12.0, start_pressure=200.0, end_pressure=50.0)],
+                           avg_depth=20.0, duration=3600)
+    value, source = models.dive_sac(computed)
+    assert value == pytest.approx(10.0) and source == models.SAC_COMPUTED
+    assert computed.sac is None and models.computed_sac(computed) == pytest.approx(10.0)
+    assert models.dive_sac(legacy_dive(gas_mixtures=[])) == (None, "")
+    assert models.dive_sac(legacy_dive(avg_depth=None)) == (None, "")
+    assert models.computed_sac(legacy_dive()) == pytest.approx((162.57 - 78.04) * 11.1 / (4129 / 60.0 * 1.8196), abs=0.01)
+    assert (models.SAC_LOGGED, models.SAC_COMPUTED) == ("logged", "computed")
+
+
+# ---------------------------------------------------------------- the synced sparse fields (R10)
+
+def test_air_temperature_and_suit_are_sparse_but_syncable():
+    """``air_temp`` and ``suit`` (and ``water_type``) are left out of the
+    JSON when unset like the carried fields, so every cache written before
+    R10 reads and writes back unchanged, and come back from JSON as they
+    went in; unlike the carried fields a catalogue may name them."""
+    assert legacy_dive().model_dump() == {k: v for k, v in legacy_dive().model_dump().items() if k in LEGACY_DIVE_KEYS}
+    dive = legacy_dive(air_temp=31.5, suit="drysuit", water_type="fresh")
+    data = dive.model_dump(mode="json")
+    assert list(data) == LEGACY_DIVE_KEYS + ["water_type", "air_temp", "suit"]
+    assert UnifiedDive(**json.loads(json.dumps(data))) == dive
+    assert legacy_dive(air_temp=0.0).model_dump()["air_temp"] == 0.0          # 0 °C is a value
+    assert "suit" not in legacy_dive(suit=None).model_dump()
+    assert UnifiedDive(**json.loads(LEGACY_DIVE_JSON)).air_temp is None
+    with pytest.raises(ValueError):
+        legacy_dive(air_temp="warm")
+    for name in SYNCED_SPARSE_FIELDS:
+        assert name not in CARRIED_DIVE_FIELDS
+    named = {spec.unified for service in ("subsurface", "uddf", "shearwater", "ssi", "garmin") for spec in field_catalog_of(service)}
+    assert {"water_type", "air_temp", "suit", "exit_gps"} <= named          # each named by at least one catalogue
+    # the exit position is one catalogue field (a pair, like gps), never two
+    assert not any(spec.unified in ("exit_lat", "exit_lng") for service in ("subsurface", "uddf", "garmin")
+                   for spec in field_catalog_of(service))
+
+
+def test_salinity_and_water_type_tables():
+    assert models.SALINITY_BY_WATER_TYPE == {"fresh": 1000, "salt": 1030, "en13319": 1020}
+    assert models.water_type_of_salinity(1030) == "salt" and models.water_type_of_salinity("1025 g/l".split()[0]) == "salt"
+    assert models.water_type_of_salinity(1000.4) == "fresh" and models.water_type_of_salinity(1020) == "en13319"
+    assert models.water_type_of_salinity(1015) is None and models.water_type_of_salinity(None) is None
+    assert models.water_type_of_salinity("x") is None
+    assert models.salinity_of("salt") == 1030 and models.salinity_of("salt", 1025.0) == 1025
+    assert models.salinity_of("custom") is None and models.salinity_of(None, 1012.6) == 1013 and models.salinity_of(None) is None

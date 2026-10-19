@@ -330,11 +330,12 @@ def test_write_uddf_says_what_it_drops(tmp_path):
     assert warnings == [
         "UDDF: the time to surface is not written",
         "UDDF: the tank pod connected, tank pod disconnected events are not written",
-        "UDDF: the water type, water density, exit position, bottom time, start and end CNS, gauge dive mode are not written",
+        "UDDF: the water type, water density, bottom time, start and end CNS, gauge dive mode are not written",
     ]
-    # the file holds what the writer carries since I5
+    # the file holds what the writer carries since I5 (and the exit position since R8)
     _root, back = read_uddf(str(tmp_path / "rich.uddf"))
     assert back[0].weight == 4.0 and back[0].computer_model == "Descent" and back[0].samples[0].channels.pressures == {0: 200.0}
+    assert (back[0].exit_lat, back[0].exit_lng) == (1.0, 2.0)
     assert back[0].samples[0].channels.ndl == 99 and [e.type for e in back[0].events] == ["gas_switch"]
     # one missing field reads in the singular; a dive with a slot for everything gives no warning
     assert write_file([_dive(bottom_time=100)], "uddf", tmp_path / "one.uddf") == ["UDDF: the bottom time is not written"]
@@ -408,10 +409,12 @@ def test_fit_to_uddf_round_trip():
     assert warnings == [
         "UDDF: the time to surface is not written",
         "UDDF: the tank pod connected, tank pod disconnected events are not written",
-        "UDDF: the water type, water density, exit position, bottom time, start and end CNS are not written",
+        "UDDF: the water type, water density, bottom time, start and end CNS are not written",
     ]
     assert len(back) == 1
     again = back[0]
+    assert dive.exit_lat is not None and again.exit_lat == pytest.approx(dive.exit_lat, abs=1e-6) \
+        and again.exit_lng == pytest.approx(dive.exit_lng, abs=1e-6)      # R8: six decimals in the file
     assert again.date_time == dive.date_time == datetime(2026, 8, 29, 9, 56, 11)
     assert again.duration == dive.duration == 2780
     assert again.max_depth == pytest.approx(dive.max_depth, abs=0.001)

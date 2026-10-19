@@ -19,6 +19,15 @@ with ``model "dive_sync"``; the other services' ids are stored as
 is what makes tier-1 matching work on re-runs. Existing files are edited
 line by line so everything we do not understand is preserved verbatim.
 
+A sample line is ``  m:ss <depth>m [<temp>°C] [<p>bar:<cylinder> ...]
+[key=value ...]``: each pressure names its cylinder after the colon, and
+the other channels (ndl, tts, in_deco, stoptime, stopdepth, cns, rbt,
+sensor1.., po2, heartbeat) are written only when they change. Since R12
+(plans/gap-roadmap.md) they are all read into `SampleChannels` and written
+for our own computer, with the ``.ssrf`` reader's and writer's code
+(`unified_samples`, `git_sample_tail`); the exit position is the computer's
+``GPS2`` extradata (R8).
+
 The adapter works on a directory (a checked-out clone). Pull/commit/push for
 Subsurface Cloud is step F6.
 """
@@ -35,7 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.adapter import BaseDiveAdapter
 from src.core.fields import FieldSpec, are_gas_mixtures_different
-from src.core.models import GasMixture, UnifiedDive, UnifiedSample, recorded_water_temp
+from src.core.models import GasMixture, UnifiedDive, UnifiedSample, recorded_water_temp, salinity_of, water_type_of_salinity
 from src.core.site_matcher import find_site
 
 logger = logging.getLogger("dive_sync.subsurface")
@@ -53,7 +62,16 @@ def canonical_dive_id(dive_id: str) -> str:
     the dive's start time and never changes when the dive is renumbered."""
     return re.sub(r"/Dive(-\d+)?$", "", str(dive_id).strip())
 EXTERNAL_ID_PREFIX = "dive_sync:"
+# The exit position (where the diver surfaced, plans/gap-roadmap.md R8) as
+# the extradata key Subsurface's own Garmin import writes it under - "GPS2"
+# beside "GPS1" for the entry - with the value as libdivecomputer formats it,
+# "lat, lng" in decimal degrees; the .ssrf writer (convert/ssrf_writer.py)
+# uses the same key, so a Subsurface log holds one spelling whichever way
+# the dive came in. Subsurface itself has no field for an exit position:
+# a dive site holds one GPS, and it shows this under Extra data.
+EXTRA_EXIT_GPS = "GPS2"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")  # datetime.weekday() order
+_GPS_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$")
 
 DIVE_DIR_RE = re.compile(r"^(?:(\d{4})-)?(?:(\d{2})-)?(\d{2})-[A-Za-z]{3}-(\d{2})[=:](\d{2})[=:](\d{2})(?:~[0-9a-f]+)?$")
 TRIP_DIR_RE = re.compile(r"^(\d{2})-[^\d].*$")
@@ -95,6 +113,30 @@ def parse_duration(text: str) -> int:
 def parse_number(text: str) -> Optional[float]:
     m = re.match(r"\s*(-?\d+(?:\.\d+)?)", text)
     return float(m.group(1)) if m else None
+
+
+def fmt_degrees(value: float) -> str:
+    """Subsurface's `put_degrees`: micro-degrees as a signed number with six decimals."""
+    udeg = int(round(value * 1_000_000))
+    sign = "-" if udeg < 0 else ""
+    udeg = abs(udeg)
+    return f"{sign}{udeg // 1_000_000}.{udeg % 1_000_000:06d}"
+
+
+def parse_gps(text: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
+    """``"lat lng"`` (a site's ``gps``) or ``"lat, lng"`` (the GPS1/GPS2
+    extradata) -> the two coordinates; ``(None, None)`` for anything else."""
+    m = _GPS_RE.match(text or "")
+    if not m:
+        return None, None
+    return float(m.group(1)), float(m.group(2))
+
+
+def exit_position_text(lat: Optional[float], lng: Optional[float]) -> Optional[str]:
+    """The GPS2 extradata value for an exit position, None when it is incomplete."""
+    if lat is None or lng is None:
+        return None
+    return f"{fmt_degrees(lat)}, {fmt_degrees(lng)}"
 
 
 def quote(text: str) -> str:
@@ -238,6 +280,9 @@ class DiveComputer:
     meandepth_m: Optional[float] = None
     airtemp_c: Optional[float] = None
     watertemp_c: Optional[float] = None
+    salinity_gl: Optional[float] = None           # the computer's water density (``salinity``), g/l
+    dctype: str = ""                              # "CCR", "PSCR", "Freedive"... ("" = open circuit)
+    mode_changes: List[Tuple[int, str]] = field(default_factory=list)   # modechange events: (time s, divemode text)
     extradata: List[Tuple[str, str]] = field(default_factory=list)
     samples: List[Sample] = field(default_factory=list)
     lines: List[str] = field(default_factory=list)   # logical lines as read, for minimal-diff rewrites
@@ -262,6 +307,7 @@ class Dive:
     weights_kg: List[float] = field(default_factory=list)
     airtemp_c: Optional[float] = None
     watertemp_c: Optional[float] = None
+    watersalinity_gl: Optional[float] = None      # the diver's own salinity (``watersalinity``), g/l
     computers: List[DiveComputer] = field(default_factory=list)
     lines: List[str] = field(default_factory=list)
 
@@ -276,6 +322,17 @@ class Dive:
                 if key.startswith(EXTERNAL_ID_PREFIX) and value:
                     out[key[len(EXTERNAL_ID_PREFIX):]] = value
         return out
+
+    def exit_position(self) -> Tuple[Optional[float], Optional[float]]:
+        """The exit position from the first computer that holds a ``GPS2``
+        extradata (Subsurface's Garmin import, or one written here)."""
+        for dc in self.computers:
+            for key, value in dc.extradata:
+                if key == EXTRA_EXIT_GPS:
+                    lat, lng = parse_gps(value)
+                    if lat is not None and lng is not None:
+                        return lat, lng
+        return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +417,8 @@ def parse_dive_file(dive: Dive, text: str) -> None:
             dive.airtemp_c = parse_number(tail)
         elif key == "watertemp":
             dive.watertemp_c = parse_number(tail)
+        elif key == "watersalinity":
+            dive.watersalinity_gl = parse_number(tail)
 
 
 def parse_sample_line(line: str) -> Sample:
@@ -409,6 +468,15 @@ def parse_divecomputer_file(filename: str, text: str) -> DiveComputer:
             dc.airtemp_c = parse_number(tail)
         elif key == "watertemp":
             dc.watertemp_c = parse_number(tail)
+        elif key == "salinity":
+            dc.salinity_gl = parse_number(tail)
+        elif key == "dctype":
+            dc.dctype = tail.strip()
+        elif key == "event":
+            # only the dive-mode changes are read (R12: they say when ``po2`` is a setpoint)
+            pairs = dict(parse_keyvalues(tail.split(" ", 1)[1] if " " in tail else "", strings))
+            if pairs.get("name") == "modechange":
+                dc.mode_changes.append((parse_duration(tail), pairs.get("divemode", "")))
         elif key == "keyvalue" and len(strings) >= 2:
             dc.extradata.append((strings[0], strings[1]))
     return dc
@@ -587,7 +655,7 @@ def render_cylinder(cyl: Cylinder) -> str:
     return " ".join(parts)
 
 
-_OWNED_DIVE_KEYS = ("duration", "rating", "visibility", "tags", "divesiteid", "divemaster", "buddy",
+_OWNED_DIVE_KEYS = ("duration", "rating", "visibility", "watersalinity", "tags", "divesiteid", "divemaster", "buddy",
                     "suit", "notes", "cylinder", "weightsystem", "airtemp", "watertemp")
 _DIVE_ORDER = ("duration", "rating", "visibility", "wavesize", "current", "surge", "chill", "watersalinity",
                "airpressure", "notrip", "invalid", "tags", "divesiteid", "divemaster", "buddy", "suit", "notes",
@@ -602,6 +670,8 @@ def _dive_field_lines(dive: Dive) -> Dict[str, List[str]]:
         out["rating"] = [f"rating {dive.rating}"]
     if dive.visibility:
         out["visibility"] = [f"visibility {dive.visibility}"]
+    if dive.watersalinity_gl:
+        out["watersalinity"] = [f"watersalinity {int(round(dive.watersalinity_gl))} g/l"]
     if dive.tags:
         out["tags"] = ["tags " + ", ".join(quote(t) for t in dive.tags)]
     if dive.site_uuid:
@@ -661,22 +731,35 @@ def render_dc_lines(dc: DiveComputer) -> List[str]:
     disk keeps its lines and only gets its ``dive_sync:`` extradata lines
     refreshed (inserted before the first event/sample)."""
     ours = [f'keyvalue {quote(k)} {quote(v)}' for k, v in dc.extradata if k.startswith(EXTERNAL_ID_PREFIX)]
+    exit_line = next((f'keyvalue {quote(k)} {quote(v)}' for k, v in dc.extradata if k == EXTRA_EXIT_GPS), None)
     if dc.lines and dc.model != OUR_MODEL:
         out: List[str] = []
-        inserted = False
+        inserted = exit_done = False
         for line in dc.lines:
             if line.startswith("keyvalue "):
                 _s, strings = split_line(line)
                 if strings and strings[0].startswith(EXTERNAL_ID_PREFIX):
                     continue
+                if strings and strings[0] == EXTRA_EXIT_GPS and exit_line is not None:
+                    # the exit position (R8) is refreshed where the log keeps it
+                    out.append(exit_line)
+                    exit_done = True
+                    continue
             if not inserted and (line.startswith("event ") or line[:1] == " " or re.match(r"^\d+:\d+", line)):
                 out.extend(ours)
+                if exit_line is not None and not exit_done:
+                    out.append(exit_line)
+                    exit_done = True
                 inserted = True
             out.append(line)
         if not inserted:
             out.extend(ours)
+            if exit_line is not None and not exit_done:
+                out.append(exit_line)
         return out
     out = [f"model {quote(dc.model or OUR_MODEL)}"]
+    if dc.dctype:
+        out.append(f"dctype {dc.dctype}")
     if dc.duration_s:
         out.append(f"duration {fmt_duration(dc.duration_s)} min")
     if dc.maxdepth_m is not None:
@@ -687,6 +770,8 @@ def render_dc_lines(dc: DiveComputer) -> List[str]:
         out.append(f"airtemp {fmt_milli(dc.airtemp_c)}°C")
     if dc.watertemp_c is not None:
         out.append(f"watertemp {fmt_milli(dc.watertemp_c)}°C")
+    if dc.salinity_gl:
+        out.append(f"salinity {int(round(dc.salinity_gl))} g/l")
     out.extend(f'keyvalue {quote(k)} {quote(v)}' for k, v in dc.extradata)
     out.extend(render_sample(s) for s in dc.samples)
     return out
@@ -700,22 +785,53 @@ def _primary_dc(dive: Dive) -> Optional[DiveComputer]:
     return dive.computers[0] if dive.computers else None
 
 
+def unified_samples(dc: DiveComputer, tanks: List[GasMixture]) -> List[UnifiedSample]:
+    """The computer's samples (those with a depth) as `UnifiedSample`s with
+    every channel the git format holds (plans/gap-roadmap.md R12), read by
+    the ``.ssrf`` reader's own code (`ssrf_reader.read_sample_values` /
+    `resolve_samples`): each ``<bar>:<n>`` pressure under tank ``n`` (the
+    git format names the cylinder on the pressure itself; a bare ``bar`` is
+    tank 0, a legacy ``o2pressure=`` the oxygen tank), ndl, tts, rbt,
+    in_deco / stoptime / stopdepth, cns, po2 (the setpoint while the computer
+    is on a rebreather - ``dctype`` and its modechange events -, else the
+    computer's PO2), the O2 cells ``sensor1``.. and heartbeat, the sticky
+    ones held until the next written value. ``UnifiedSample.pressure`` stays
+    the lowest-numbered tank with readings, as before R12, and a sample whose
+    only extra is tank 0's pressure keeps ``channels`` None; the temperature
+    is not held (a sample without one has none, as before), so a sync
+    compares the same profile as before."""
+    from src.core.convert import ssrf_reader as ssrf   # imported here: ssrf_reader imports this module
+    o2_slot = ssrf.oxygen_slot(tanks)
+    slot_to_cylinder: Dict[int, int] = {}
+    raws = []
+    for s in dc.samples:
+        if s.depth_m is None:
+            continue
+        raw = ssrf.RawSample()
+        raw.time, raw.depth, raw.temp = s.time_s, s.depth_m, s.temp_c
+        raw.pressures = dict(s.pressures)
+        if s.raw_tail:
+            attrs = {k: v for k, v in parse_keyvalues(s.raw_tail, []) if v}
+            if attrs:
+                ssrf.read_sample_values(raw, attrs, slot_to_cylinder, o2_slot)
+        raws.append(raw)
+    oc_mode = ssrf.oc_mode_of(tanks)
+    initial = ssrf.dive_mode_of(dc.dctype or None, dict(dc.extradata), tanks)
+    changes = [(t, ssrf.mode_from_text(text, oc_mode)) for t, text in dc.mode_changes]
+    return ssrf.resolve_samples(raws, changes, initial, sticky_temp=False)
+
+
+def git_sample_tail(values: List[Tuple[str, str, str]]) -> str:
+    """`ssrf_writer.sample_channel_values`' ``(name, value, unit)`` triples
+    as the git format's tokens: ``ndl=10:00 cns=3% po2=1.2bar sensor1=1.19bar
+    heartbeat=72`` (no space before a unit, durations without "min")."""
+    return " ".join(f"{name}={value}{'' if unit == 'min' else unit}" for name, value, unit in values)
+
+
 def dive_to_unified(dive: Dive, sites: Dict[str, Site]) -> UnifiedDive:
     dc = _primary_dc(dive)
     site = sites.get(dive.site_uuid or "")
-    samples = []
     max_depth = dc.maxdepth_m if dc and dc.maxdepth_m is not None else None
-    if dc:
-        # UnifiedSample carries one pressure: the lowest-numbered sensor
-        # (cylinder index) that has readings in this computer's samples
-        sensors = {sensor for s in dc.samples for sensor in s.pressures}
-        primary = min(sensors) if sensors else None
-        for s in dc.samples:
-            if s.depth_m is not None:
-                samples.append(UnifiedSample(depth=s.depth_m, temp=s.temp_c, time=s.time_s,
-                                             pressure=s.pressures.get(primary) if primary is not None else None))
-        if max_depth is None and samples:
-            max_depth = max(s.depth for s in samples)
     # Computer-downloaded dives keep pressures only in the samples (one
     # sensor per cylinder index); derive start/end from those when the
     # cylinder line has none.
@@ -739,13 +855,21 @@ def dive_to_unified(dive: Dive, sites: Dict[str, Site]) -> UnifiedDive:
             tank_name=cyl.description or None,
             tank_role=USE_TO_TANK_ROLE.get(cyl.use),
         ))
+    samples = unified_samples(dc, tanks) if dc else []
+    if max_depth is None and samples:
+        max_depth = max(s.depth for s in samples)
     duration = dive.duration_s if dive.duration_s is not None else (dc.duration_s if dc and dc.duration_s else 0)
     # a 0 °C written by earlier versions (from Garmin's "never entered") counts as none
     water = recorded_water_temp(dive.watertemp_c)
     if water is None and dc:
         water = recorded_water_temp(dc.watertemp_c)
+    # R10: the diver's own air temperature and salinity first, the computer's otherwise
+    air = dive.airtemp_c if dive.airtemp_c is not None else (dc.airtemp_c if dc else None)
+    salinity = dive.watersalinity_gl or (dc.salinity_gl if dc else None)
+    water_type = water_type_of_salinity(salinity)
     external_ids = {SERVICE_ID: dive.id}
     external_ids.update(dive.external_ids())
+    exit_lat, exit_lng = dive.exit_position()
     return UnifiedDive(
         date_time=dive.when,
         duration=duration or 0,
@@ -764,12 +888,17 @@ def dive_to_unified(dive: Dive, sites: Dict[str, Site]) -> UnifiedDive:
         lng=site.lng if site else None,
         samples=samples,
         service_fields={
-            "suit": dive.suit,
             "divemaster": dive.divemaster,
             "rating": dive.rating,
             "visibility_stars": dive.visibility,
             "tags": list(dive.tags),
         },
+        air_temp=air,
+        suit=dive.suit,
+        water_type=water_type if salinity else None,
+        water_density=float(salinity) if salinity and water_type is None else None,
+        exit_lat=exit_lat,
+        exit_lng=exit_lng,
     )
 
 
@@ -860,8 +989,10 @@ def apply_unified(dive: Dive, unified: UnifiedDive, repo: SubsurfaceRepo, write_
     dive.buddy = unified.buddy if unified.buddy is not None else dive.buddy
     dive.notes = unified.notes if unified.notes is not None else dive.notes
     sf = unified.service_fields
-    if "suit" in sf and sf["suit"] is not None:
-        dive.suit = sf["suit"]
+    # the suit is the dive's own field since R10; a dive cached before carries it as a service field
+    suit = unified.suit if unified.suit is not None else sf.get("suit")
+    if suit is not None:
+        dive.suit = suit
     if "divemaster" in sf and sf["divemaster"] is not None:
         dive.divemaster = sf["divemaster"]
     if sf.get("rating") is not None:
@@ -883,6 +1014,12 @@ def apply_unified(dive: Dive, unified: UnifiedDive, repo: SubsurfaceRepo, write_
     if unified.temp_min is not None and not (dc0 and dc0.watertemp_c is not None and abs(dc0.watertemp_c - unified.temp_min) < 0.05):
         # Subsurface writes a dive-level water temperature only when it differs from the computer's
         dive.watertemp_c = unified.temp_min
+    # the air temperature and the salinity the same way: dive-level only where the computer's differs (R10)
+    if unified.air_temp is not None and not (dc0 and dc0.airtemp_c is not None and abs(dc0.airtemp_c - unified.air_temp) < 0.05):
+        dive.airtemp_c = unified.air_temp
+    salinity = salinity_of(unified.water_type, unified.water_density)
+    if salinity is not None and not (dc0 and dc0.salinity_gl and abs(dc0.salinity_gl - salinity) < 0.5):
+        dive.watersalinity_gl = float(salinity)
     if unified.gas_mixtures:
         current = dive_to_unified(dive, repo.sites).gas_mixtures if dive.lines else []
         if are_gas_mixtures_different(unified.gas_mixtures, current):
@@ -915,14 +1052,27 @@ def apply_unified(dive: Dive, unified: UnifiedDive, repo: SubsurfaceRepo, write_
             ours.meandepth_m = unified.avg_depth
             ours.watertemp_c = unified.temp_min
             ours.duration_s = int(unified.duration) if unified.duration else None
-            # a per-sample tank pressure goes on sensor 0 (the first cylinder), as Subsurface stores a transmitter's
+            # every tank's pressure as <bar>:<tank index> (a sample without per-tank channels: its one pressure on
+            # the first cylinder, as before R12) and the other channels as the .ssrf writer derives them (R12)
+            from src.core.convert.ssrf_writer import DIVEMODE_TEXT, sample_channel_values, sample_pressures
+            extras = sample_channel_values(unified.samples)
             ours.samples = [Sample(time_s=int(s.time or 0), depth_m=s.depth, temp_c=s.temp,
-                                   pressures={0: s.pressure} if s.pressure is not None else {})
-                            for s in unified.samples]
+                                   pressures={int(k): v for k, v in sample_pressures(s).items() if v},
+                                   raw_tail=git_sample_tail(values))
+                            for s, values in zip(unified.samples, extras)]
+            ours.dctype = DIVEMODE_TEXT.get(unified.dive_mode or "", "") if unified.samples else ""
     target_dc = ours or dive.computers[0]
     foreign = {k: v for k, v in unified.external_ids.items() if k != SERVICE_ID and v}
     target_dc.extradata = [(k, v) for k, v in target_dc.extradata if not k.startswith(EXTERNAL_ID_PREFIX)]
     target_dc.extradata.extend((EXTERNAL_ID_PREFIX + k, str(v)) for k, v in sorted(foreign.items()))
+    # the exit position as the GPS2 extradata (R8), on the computer that holds one, else on the target computer;
+    # an incomplete or missing position leaves what the log has
+    exit_text = exit_position_text(unified.exit_lat, unified.exit_lng)
+    if exit_text is not None:
+        holder = next((dc for dc in dive.computers if any(k == EXTRA_EXIT_GPS for k, _v in dc.extradata)), target_dc)
+        holder.extradata = [(k, exit_text if k == EXTRA_EXIT_GPS else v) for k, v in holder.extradata]
+        if not any(k == EXTRA_EXIT_GPS for k, _v in holder.extradata):
+            holder.extradata.append((EXTRA_EXIT_GPS, exit_text))
 
 
 # ---------------------------------------------------------------------------
@@ -955,9 +1105,13 @@ class SubsurfaceAdapter(BaseDiveAdapter):
             FieldSpec(key="subsurface.buddy", label="Buddy", type="text", unified="buddy"),
             FieldSpec(key="subsurface.weight", label="Weight", type="number", unified="weight"),
             FieldSpec(key="subsurface.gps", label="Site position", type="gps", unified="gps"),
+            # the GPS2 extradata of the dive computer (R8): what Subsurface's Garmin import writes for the exit
+            FieldSpec(key="subsurface.exit_gps", label="Exit position (extra data GPS2)", type="gps", unified="exit_gps"),
             FieldSpec(key="subsurface.tanks", label="Cylinders", type="tanks", unified="tanks"),
             FieldSpec(key="subsurface.samples", label="Dive profile", type="samples", unified="samples"),
-            FieldSpec(key="subsurface.suit", label="Suit", type="text"),
+            FieldSpec(key="subsurface.suit", label="Suit", type="text", unified="suit"),
+            FieldSpec(key="subsurface.air_temp", label="Air temperature", type="number", unified="air_temp", unit="°C"),
+            FieldSpec(key="subsurface.water_type", label="Water type (salinity)", type="text", unified="water_type"),
             FieldSpec(key="subsurface.divemaster", label="Dive guide", type="text"),
             FieldSpec(key="subsurface.rating", label="Rating (0-5)", type="number"),
             FieldSpec(key="subsurface.visibility_stars", label="Visibility (0-5)", type="number"),

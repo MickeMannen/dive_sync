@@ -35,6 +35,7 @@ from src.core.convert.ssrf_writer import (
     write_ssrf,
     xml_quote,
 )
+from src.core.convert.ssrf_reader import read_ssrf
 from src.core.models import DiveEvent, GasMixture, SampleChannels, UnifiedDive, UnifiedSample
 from src.core.services.subsurface import MANUAL_DC_MODEL
 
@@ -97,7 +98,8 @@ def synthetic_dive() -> UnifiedDive:
                           channels=_ch(pressures={1: 152.0}, ndl=5940, tts=30, deco_stop_depth=0.0, deco_stop_time=0, cns=12.0, ppo2=0.65)),
             UnifiedSample(depth=0.0, temp=26.0, time=2900, pressure=62.0),
         ],
-        service_fields={"rating": 4, "visibility_stars": 3, "tags": ["reef", "deco"], "suit": "5mm wet", "divemaster": "D. Master"},
+        service_fields={"rating": 4, "visibility_stars": 3, "tags": ["reef", "deco"], "divemaster": "D. Master"},
+        suit="5mm wet",
         events=[
             DiveEvent(time=0, type="gas_switch", tank=0, oxygen=32.0, helium=0.0),
             DiveEvent(time=610, type="alert", name="Ascent rate", value=3),
@@ -390,6 +392,29 @@ def test_po2_is_the_setpoint_when_there_is_one(tmp_path):
     assert ssrf_drops([dive]) == ["Subsurface: the computer's PO2 is not written where the dive has a setpoint (Subsurface's po2 is the setpoint)"]
 
 
+def test_o2_cells_are_written_as_sensors_when_they_change_and_read_back(tmp_path):
+    """A rebreather's cells (R18): ``no_o2sensors`` on the divecomputer,
+    ``sensorN`` (cell index + 1, bar) next to the setpoint's po2 only when
+    that cell's reading changes; the reader gives the same cells back."""
+    dive = _dive(dive_mode="ccr", gas_mixtures=[GasMixture(oxygen=21.0, helium=0.0, tank_role="diluent"), GasMixture(oxygen=100.0, tank_role="oxygen")],
+                 samples=[UnifiedSample(depth=0.0, time=0, channels=SampleChannels(setpoint=0.7, ppo2=0.7, o2_cells={0: 0.69, 1: 0.71, 2: 0.70})),
+                          UnifiedSample(depth=20.0, time=60, channels=SampleChannels(setpoint=1.2, ppo2=1.21, o2_cells={0: 1.22, 1: 0.71, 2: 1.19})),
+                          UnifiedSample(depth=20.0, time=120, channels=SampleChannels(setpoint=1.2, ppo2=1.2, o2_cells={0: 1.22, 2: 1.19})),
+                          UnifiedSample(depth=0.0, time=180, channels=SampleChannels(setpoint=0.7, ppo2=0.7))])
+    text = _write([dive], tmp_path / "ccr.ssrf")
+    el = _dive_elements(text)[0]
+    assert el.find("divecomputer").get("no_o2sensors") == "3" and el.find("divecomputer").get("dctype") == "CCR"
+    samples = [s.attrib for s in _samples(el)]
+    assert samples[0] == {"time": "0:00 min", "depth": "0.0 m", "po2": "0.7 bar", "sensor1": "0.69 bar", "sensor2": "0.71 bar", "sensor3": "0.7 bar"}
+    assert samples[1] == {"time": "1:00 min", "depth": "20.0 m", "po2": "1.2 bar", "sensor1": "1.22 bar", "sensor3": "1.19 bar"}
+    assert samples[2] == {"time": "2:00 min", "depth": "20.0 m"} and samples[3] == {"time": "3:00 min", "depth": "0.0 m", "po2": "0.7 bar"}
+    back = read_ssrf(tmp_path / "ccr.ssrf")[0][0]
+    # the cells are sticky in Subsurface: a sample that logs none keeps the last readings
+    assert [s.channels.o2_cells for s in back.samples] == [{0: 0.69, 1: 0.71, 2: 0.7}] + [{0: 1.22, 1: 0.71, 2: 1.19}] * 3
+    assert [s.channels.setpoint for s in back.samples] == [0.7, 1.2, 1.2, 0.7]
+    assert "no_o2sensors" not in _write([synthetic_dive()], tmp_path / "oc.ssrf")
+
+
 def test_po2_is_the_computers_ppo2_without_a_setpoint(tmp_path):
     dive = _dive(samples=[UnifiedSample(depth=10.0, time=0, channels=SampleChannels(ppo2=0.42)),
                           UnifiedSample(depth=10.0, time=10, channels=SampleChannels(ppo2=0.42)),
@@ -619,3 +644,45 @@ def test_fit_fixtures_one_file_each(tmp_path):
     with open(SINGLE_GAS, "rb") as f:
         named = read_fit(f.read(), name="2026-06-27_1124_dive-28_24449823352.fit")   # the cache's file name
     assert "<extradata key='dive_sync:garmin' value='24449823352' />" in _write([named], tmp_path / "named.ssrf")
+
+
+def test_air_temperature_is_written_beside_the_water_temperature(tmp_path):
+    """R10: ``<temperature air='..' water='..' />`` in the divecomputer,
+    either attribute alone when the dive has only one, no element with
+    neither; the suit comes from the dive's own field, or from the service
+    field of a dive cached before R10."""
+    from src.core.convert.ssrf_writer import SsrfDocument
+    base = dict(date_time=datetime(2026, 3, 14, 9, 30, 5), duration=600, max_depth=10.0)
+    def dc_lines(**kw):
+        return [line.strip() for line in SsrfDocument()._divecomputer(UnifiedDive(**base, **kw)) if "temperature" in line]
+    assert dc_lines(air_temp=28.5, temp_min=24.0) == ["<temperature air='28.5 C' water='24.0 C' />"]
+    assert dc_lines(air_temp=28.5) == ["<temperature air='28.5 C' />"]
+    assert dc_lines(temp_min=24.0) == ["<temperature water='24.0 C' />"]
+    assert dc_lines() == []
+    (dive,) = _dive_elements(_write([UnifiedDive(**base, suit="drysuit")], tmp_path / "a.ssrf"))
+    assert dive.find("suit").text == "drysuit"
+    (dive,) = _dive_elements(_write([UnifiedDive(**base, service_fields={"suit": "3 mm"})], tmp_path / "b.ssrf"))
+    assert dive.find("suit").text == "3 mm"
+
+
+def test_sample_channel_values_and_pressures_are_shared_with_the_git_adapter():
+    """plans/gap-roadmap.md R12: the sticky channel values and the per-tank
+    pressures are computed once, as ``(name, value, unit)`` triples, for the
+    ``.ssrf`` writer and the Subsurface git-storage adapter."""
+    from src.core.convert.ssrf_writer import sample_channel_values, sample_pressures
+    samples = [
+        UnifiedSample(time=0, depth=0.0, pressure=200.0),
+        UnifiedSample(time=10, depth=5.0, pressure=199.0,
+                      channels=SampleChannels(pressures={0: 199.0, 2: 150.0}, ndl=600, cns=3.0, ppo2=0.4, heart_rate=70)),
+        UnifiedSample(time=20, depth=6.0, channels=SampleChannels(ndl=600, cns=3.0, ppo2=0.45, o2_cells={1: 0.44})),
+    ]
+    assert [sample_pressures(s) for s in samples] == [{0: 200.0}, {0: 199.0, 2: 150.0}, {}]
+    assert sample_channel_values(samples) == [
+        [],
+        [("ndl", "10:00", "min"), ("cns", "3", "%"), ("po2", "0.4", "bar"), ("heartbeat", "70", "")],
+        [("po2", "0.45", "bar"), ("sensor2", "0.44", "bar")],          # the NDL and CNS held: not written again
+    ]
+    # the XML spelling of the same values
+    lines = SsrfDocument._samples(UnifiedDive(date_time=datetime(2026, 1, 1), duration=20, max_depth=6.0, samples=samples))
+    assert lines[1] == "  <sample time='0:10 min' depth='5.0 m' pressure0='199.0 bar' pressure2='150.0 bar' ndl='10:00 min' cns='3%' po2='0.4 bar' heartbeat='70' />"
+    assert lines[2] == "  <sample time='0:20 min' depth='6.0 m' po2='0.45 bar' sensor2='0.44 bar' />"

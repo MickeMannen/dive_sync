@@ -37,6 +37,83 @@ from src.core.templates import render, reverse_parse, take_part, validate_links
 logger = logging.getLogger("dive_sync.sync_engine")
 
 
+# --- matching across time zones (plans/gap-roadmap.md R11) -------------------
+#
+# Start times are compared as UTC instants when both dives know theirs (FIT,
+# Garmin, a UDDF datetime with an offset) and as naive local times otherwise
+# (Divelogs, MySSI, Subsurface, the Shearwater app, a UDDF without an offset).
+# A local time logged in another zone than its twin's is off by the
+# difference of the two zones - a whole number of quarter hours, 30 min to
+# 14 h. Such a pair is matched only when the dives' own numbers agree too:
+# both the max depth and the duration within the tolerances below, and the
+# pair unambiguous (see SyncEngine.match_dives).
+ZONE_SHIFT_STEP_MINUTES = 15        # every UTC offset is a multiple of 15 min (+05:45 Nepal, +08:45 Eucla)
+ZONE_SHIFT_MIN_MINUTES = 30         # a shorter "shift" is clock drift, not a zone
+ZONE_SHIFT_MAX_HOURS = 14           # UTC-12 .. UTC+14 as the owner diving across zones meets them
+ZONE_SHIFT_SLACK_SECONDS = 180      # how far off a whole quarter hour two clocks may still be
+DEPTH_TOLERANCE_M = 0.5             # two computers on one dive: their max depths within 0.5 m ...
+DEPTH_TOLERANCE_FRACTION = 0.03     # ... or 3 % of the deeper, whichever is larger
+DURATION_TOLERANCE_S = 90           # their durations within 90 s ...
+DURATION_TOLERANCE_FRACTION = 0.03  # ... or 3 % of the longer, whichever is larger
+SAME_DISTANCE_SECONDS = 60          # candidates whose start distances fall in the same minute are equally close
+
+
+def _depth_tolerance(a: float, b: float) -> float:
+    return max(DEPTH_TOLERANCE_M, DEPTH_TOLERANCE_FRACTION * max(a, b))
+
+
+def _duration_tolerance(a: float, b: float) -> float:
+    return max(DURATION_TOLERANCE_S, DURATION_TOLERANCE_FRACTION * max(a, b))
+
+
+def profiles_agree(a: UnifiedDive, b: UnifiedDive) -> bool:
+    """True when both dives know their max depth and duration and the two
+    agree within the tolerances above - the check a match across a time-zone
+    shift needs. A dive without a depth or a duration (0 / None) never
+    agrees: a pair the clocks cannot pair is not paired on a guess."""
+    da, db = a.max_depth or 0.0, b.max_depth or 0.0
+    ta, tb = float(a.duration or 0), float(b.duration or 0)
+    if da <= 0 or db <= 0 or ta <= 0 or tb <= 0:
+        return False
+    return abs(da - db) <= _depth_tolerance(da, db) and abs(ta - tb) <= _duration_tolerance(ta, tb)
+
+
+def profile_mismatch(a: UnifiedDive, b: UnifiedDive) -> float:
+    """How far apart two dives' max depth and duration are, each difference
+    in units of its tolerance and summed (0 = identical); a value a dive
+    lacks counts as one tolerance. Orders candidates that start equally
+    close (``SyncEngine.match_dives``), lower first."""
+    score = 0.0
+    da, db = a.max_depth or 0.0, b.max_depth or 0.0
+    score += abs(da - db) / _depth_tolerance(da, db) if da > 0 and db > 0 else 1.0
+    ta, tb = float(a.duration or 0), float(b.duration or 0)
+    score += abs(ta - tb) / _duration_tolerance(ta, tb) if ta > 0 and tb > 0 else 1.0
+    return score
+
+
+def zone_shift_minutes(delta_seconds: float, grace_seconds: float) -> Optional[int]:
+    """The time-zone difference (minutes, signed) a start-time difference of
+    ``delta_seconds`` can be: a multiple of 15 min between 30 min and 14 h,
+    within ZONE_SHIFT_SLACK_SECONDS, and beyond the grace window (closer
+    starts are an ordinary match). None when it cannot be one."""
+    if abs(delta_seconds) <= grace_seconds:
+        return None
+    step = ZONE_SHIFT_STEP_MINUTES * 60
+    steps = round(delta_seconds / step)
+    shift = steps * ZONE_SHIFT_STEP_MINUTES
+    if abs(delta_seconds - steps * step) > ZONE_SHIFT_SLACK_SECONDS:
+        return None
+    if not ZONE_SHIFT_MIN_MINUTES <= abs(shift) <= ZONE_SHIFT_MAX_HOURS * 60:
+        return None
+    return shift
+
+
+def format_shift(minutes: int) -> str:
+    """``+8:00`` / ``-3:30`` for a shift in minutes."""
+    sign = "-" if minutes < 0 else "+"
+    return f"{sign}{abs(minutes) // 60}:{abs(minutes) % 60:02d}"
+
+
 class LinkOutcome:
     """What one rule did on one matched pair (see ``SyncEngine._apply_rule``)."""
     __slots__ = ("modified", "conflict", "action", "source_value", "target_value", "warnings")
@@ -385,7 +462,10 @@ class SyncEngine:
             logger.error("Failed to save sync state: %s", e)
 
     def save_state(self, dt: Optional[datetime] = None, links: Optional[Dict[str, str]] = None,
-                   clear_full_compare: bool = False) -> None:
+                   clear_full_compare: bool = False, quiet: bool = False) -> None:
+        """Write what is given into the state file, leaving the rest as it
+        is; ``quiet`` says so at debug level only (the per-upload link
+        saves of a run, `_save_links_now`)."""
         state = self.load_state()
         if dt is not None:
             state["last_sync_time"] = dt.isoformat()
@@ -397,9 +477,20 @@ class SyncEngine:
             os.makedirs(os.path.dirname(self.state_file) or ".", exist_ok=True)
             with open(self.state_file, "w") as f:
                 json.dump(state, f, indent=2)
-            logger.info("Saved sync state (%s, %d known pairs)", state.get("last_sync_time"), len(state.get("links", {})))
+            (logger.debug if quiet else logger.info)("Saved sync state (%s, %d known pairs)",
+                                                     state.get("last_sync_time"), len(state.get("links", {})))
         except Exception as e:
             logger.error("Failed to save sync state: %s", e)
+
+    def _save_links_now(self, links: Dict[str, str]) -> None:
+        """The links as they stand, written at once (check.md B5): a run
+        that breaks off after this upload - an exception from the next
+        dive, a killed process - must not lose the pair just made, or the
+        next run creates the dive again on a service that stores no
+        foreign id (Garmin, Divelogs). The last sync time is not touched:
+        the dives not reached yet must still count as new next time. One
+        small JSON file, so this costs nothing next to the upload itself."""
+        self.save_state(links=links, quiet=True)
 
     def keep_stopped_run(self) -> None:
         """After progress.Stopped ended run_sync part way: keep what it wrote.
@@ -526,6 +617,8 @@ class SyncEngine:
             self.settings.create_on_garmin = self.pair.create_on_garmin
         if self.pair.create_device_dives_on_submersion is not None:
             self.settings.create_device_dives_on_submersion = self.pair.create_device_dives_on_submersion
+        if self.pair.garmin_fit_upload is not None:
+            self.settings.garmin_fit_upload = self.pair.garmin_fit_upload
 
     @property
     def field_links(self) -> List[FieldLink]:
@@ -584,6 +677,58 @@ class SyncEngine:
         logger.warning("  %s: dive %s skipped: %s", name, dive.date_time.strftime("%Y-%m-%d %H:%M"), reason)
         sync_results["skipped"].append({"reason": "receiver_cannot_add_dive", "detail": reason, "time": str(dive.date_time)})
         return True
+
+    @staticmethod
+    def _note_upload(adapter: BaseDiveAdapter, prepared: UnifiedDive, entry: Dict[str, Any]) -> None:
+        """What the receiver says about how it will send this dive
+        (BaseDiveAdapter.upload_details; Garmin's .fit upload, R13): its
+        note logged under the upload line - in a dry run too, so the run
+        lists what would be uploaded and how - and the other keys put on the
+        dive's results entry. An adapter without the hook says nothing."""
+        details_of = getattr(adapter, "upload_details", None)
+        details = details_of(prepared) if callable(details_of) else None
+        if not details:
+            return
+        details = dict(details)
+        note = details.pop("note", None)
+        if note:
+            logger.info("  %s", note)
+        entry.update(details)
+
+    def _fit_upload_aside(self) -> str:
+        """The tail of the create_on_garmin-off line when .fit upload is on
+        for the run: it changes how a dive is created, not whether."""
+        if self.settings.garmin_fit_upload:
+            return " (upload as .fit is on, but it only applies once create_on_garmin is on for the pair)"
+        return ""
+
+    @staticmethod
+    def _add_dive(adapter: BaseDiveAdapter, name: str, sid: str, dive: UnifiedDive, payload: UnifiedDive,
+                  entry: Dict[str, Any], sync_results: Dict[str, Any]) -> Optional[str]:
+        """``adapter.add_dive(payload)`` with the outcome counted (check.md
+        B4): the new id (``entry`` goes under uploaded_to_<sid>); None with
+        the adapter's ``add_skipped_reason`` set means the receiver left the
+        dive out on purpose (it already has it) - counted under ``skipped``
+        as ``receiver_already_has_dive``; None without one means the add was
+        tried and not taken - a warning and an entry under ``failed``."""
+        adapter.add_skipped_reason = None
+        new_id = adapter.add_dive(payload)
+        if new_id:
+            entry[f"new_{sid}_id"] = new_id
+            entry["new_id"] = new_id
+            sync_results[f"uploaded_to_{sid}"].append(entry)
+            return new_id
+        reason = getattr(adapter, "add_skipped_reason", None)
+        if reason:
+            logger.info("  %s: dive at %s not added, %s; counted as skipped", name, dive.date_time, reason)
+            sync_results["skipped"].append({"reason": "receiver_already_has_dive", "detail": reason,
+                                            "time": str(dive.date_time)})
+        else:
+            logger.warning("  Failed to add the dive at %s to %s; see the lines above for why", dive.date_time, name)
+            sync_results["failed"].append({"action": "add", "service": sid, "time": str(dive.date_time),
+                                           "source_id": entry.get("source_id"),
+                                           "reason": f"{name} did not add the dive"})
+        return None
 
     def _awaits_manual_import(self, receiver_id: str, dive: UnifiedDive) -> bool:
         """True when ``dive`` must not be created on ``receiver_id`` because
@@ -916,6 +1061,7 @@ class SyncEngine:
                  propagate_deletes_override: Optional[bool] = None,
                  create_on_garmin_override: Optional[bool] = None,
                  create_device_dives_on_submersion_override: Optional[bool] = None,
+                 garmin_fit_upload_override: Optional[bool] = None,
                  use_garmin_cache_override: Optional[bool] = None,
                  mirror_override: Optional[bool] = None) -> Dict[str, Any]:
         """Perform one directed synchronization run: read both sides, write
@@ -956,6 +1102,8 @@ class SyncEngine:
             self.settings.create_on_garmin = create_on_garmin_override
         if create_device_dives_on_submersion_override is not None:
             self.settings.create_device_dives_on_submersion = create_device_dives_on_submersion_override
+        if garmin_fit_upload_override is not None:
+            self.settings.garmin_fit_upload = garmin_fit_upload_override
         # Mirror (the Sync page's checkbox): the receiver becomes a copy of the
         # sender for this run - every dive compared (no incremental window),
         # missing dives created, every mapped field forced to the sender's
@@ -974,6 +1122,12 @@ class SyncEngine:
         for adapter in (self.source, self.target):
             if hasattr(adapter, "upload_timezone") and self.settings.garmin_timezone:
                 adapter.upload_timezone = self.settings.garmin_timezone
+            # plans/gap-roadmap.md R13 (beta): how Garmin creates a new dive
+            if hasattr(adapter, "fit_upload"):
+                adapter.fit_upload = bool(self.settings.garmin_fit_upload)
+                if adapter.fit_upload and self.receiver_id() == getattr(adapter, "service_id", None):
+                    logger.info("%s: new dives with a profile are uploaded as .fit files (beta)",
+                                getattr(adapter, "display_name", "") or adapter.service_id)
 
         # Login. Progress (src/core/progress.py, the web dashboard's bar): a
         # stage without a count is reported as text only; the Garmin fetch and
@@ -1055,6 +1209,10 @@ class SyncEngine:
         self._run_links = None if dry_run else known_links
         writable = self.writable_sides()
         deleted_entries: Dict[str, List[Dict[str, Any]]] = {f"deleted_on_{tgt}": [], f"deleted_on_{src}": []}
+        # Dives a delete would have removed on a receiver that never takes
+        # one from a sync (BaseDiveAdapter.accepts_mirror_deletes; MySSI,
+        # Shearwater): logged, counted under skipped, left as they are.
+        never_deleted: List[Dict[str, Any]] = []
         if not self.settings.sync_filters.only_new:
             fetched_source_ids = {self._canon(src, d.external_ids[src]) for d in source_dives if d.external_ids.get(src)}
             fetched_target_ids = {self._canon(tgt, d.external_ids[tgt]) for d in target_dives if d.external_ids.get(tgt)}
@@ -1084,6 +1242,23 @@ class SyncEngine:
                     logger.info("  Dive %s is gone from %s; propagate_deletes is off for this pair, so %s ID %s "
                                "will be treated as a new unmatched dive (likely re-uploaded to %s)",
                                stale_id, gone_name, surviving_side, stale_id, gone_name)
+                    continue
+                surviving_name = self.target_name if source_gone else self.source_name
+                if not getattr(surviving_adapter, "accepts_mirror_deletes", True):
+                    # A receiver no sync run may delete on (owner 2026-10-19:
+                    # MySSI, where a delete is permanent). Said, counted and
+                    # left; the link stays so the next full run says it again
+                    # instead of treating the dive as new.
+                    stale_dive = next((d for d in surviving_dives if d.external_ids.get(surviving_side)
+                                       and self._canon(surviving_side, d.external_ids[surviving_side]) == stale_id), None)
+                    logger.info("  Dive %s is gone from %s; propagate_deletes is on, but %s ID %s is not deleted "
+                               "(a sync never deletes on %s)", a_id if source_gone else b_id, gone_name,
+                               surviving_name, stale_id, surviving_name)
+                    never_deleted.append({"reason": "sync_never_deletes_here", "id": stale_id,
+                                          "time": str(stale_dive.date_time) if stale_dive else "",
+                                          "gone_from": gone_side})
+                    # out of this run's matching: not a new upload, not a mirror extra
+                    surviving_dives[:] = [d for d in surviving_dives if d is not stale_dive]
                     continue
                 logger.info("  Dive %s is gone from %s; propagate_deletes is on -> deleting %s ID %s",
                            stale_id, gone_name, surviving_side, stale_id)
@@ -1120,7 +1295,7 @@ class SyncEngine:
         # accepts_mirror_deletes; MySSI, where a delete is permanent): then
         # each dive it would have deleted is logged, counted as skipped and left.
         receiver = self.receiver_id()
-        mirror_kept: List[Dict[str, Any]] = []
+        mirror_kept: List[Dict[str, Any]] = never_deleted
         if getattr(self, "mirror", False) and receiver in writable:
             extras = unique_target if receiver == tgt else unique_source
             adapter, name = (self.target, self.target_name) if receiver == tgt else (self.source, self.source_name)
@@ -1161,6 +1336,10 @@ class SyncEngine:
             f"updated_on_{src}": [],
             **deleted_entries,
             "skipped": mirror_kept,
+            # writes the receiver refused or that broke (add_dive None without
+            # a skip reason, update_dive False): {"action", "service", "id",
+            # "time", "reason"} - said in the summaries, never counted as done
+            "failed": [],
         }
 
         # Filter out gas mixtures if disabled in settings
@@ -1189,8 +1368,8 @@ class SyncEngine:
         # creating a new dive on Garmin from another source is opt-in - a
         # matched dive's field updates below are never gated by this)
         if tgt in writable and tgt == "garmin" and not self.settings.create_on_garmin and unique_source:
-            logger.info("  %d new dive(s) found only on %s; create_on_garmin is off, not creating them on Garmin",
-                       len(unique_source), self.source_name)
+            logger.info("  %d new dive(s) found only on %s; create_on_garmin is off, not creating them on Garmin%s",
+                       len(unique_source), self.source_name, self._fit_upload_aside())
             sync_results["skipped"].extend(
                 {"reason": "create_on_garmin_off", "time": str(d.date_time)} for d in unique_source)
         elif tgt in writable and not getattr(self.target, "accepts_new_dives", True) and unique_source:
@@ -1217,22 +1396,21 @@ class SyncEngine:
                     f"{src}_id": dive.external_ids.get(src),
                     "source_id": dive.external_ids.get(src),
                 }
+                prepared = self.prepare_upload(dive, tgt, active)
+                self._note_upload(self.target, prepared, entry)
                 if not dry_run:
-                    new_id = self.target.add_dive(self.prepare_upload(dive, tgt, active))
-                    if new_id:
-                        entry[f"new_{tgt}_id"] = new_id
-                        entry["new_id"] = new_id
-                        sync_results[f"uploaded_to_{tgt}"].append(entry)
-                        if dive.external_ids.get(src):
-                            known_links[self._canon(src, dive.external_ids[src])] = self._canon(tgt, new_id)
+                    new_id = self._add_dive(self.target, self.target_name, tgt, dive, prepared, entry, sync_results)
+                    if new_id and dive.external_ids.get(src):
+                        known_links[self._canon(src, dive.external_ids[src])] = self._canon(tgt, new_id)
+                        self._save_links_now(known_links)
                 else:
                     entry["dry_run"] = True
                     sync_results[f"uploaded_to_{tgt}"].append(entry)
 
         # 2. Upload dives only the target has to the source (same C16 gate)
         if src in writable and src == "garmin" and not self.settings.create_on_garmin and unique_target:
-            logger.info("  %d new dive(s) found only on %s; create_on_garmin is off, not creating them on Garmin",
-                       len(unique_target), self.target_name)
+            logger.info("  %d new dive(s) found only on %s; create_on_garmin is off, not creating them on Garmin%s",
+                       len(unique_target), self.target_name, self._fit_upload_aside())
             sync_results["skipped"].extend(
                 {"reason": "create_on_garmin_off", "time": str(d.date_time)} for d in unique_target)
         elif src in writable and not getattr(self.source, "accepts_new_dives", True) and unique_target:
@@ -1259,14 +1437,13 @@ class SyncEngine:
                     f"{tgt}_id": dive.external_ids.get(tgt),
                     "source_id": dive.external_ids.get(tgt),
                 }
+                prepared = self.prepare_upload(dive, src, active)
+                self._note_upload(self.source, prepared, entry)
                 if not dry_run:
-                    new_id = self.source.add_dive(self.prepare_upload(dive, src, active))
-                    if new_id:
-                        entry[f"new_{src}_id"] = new_id
-                        entry["new_id"] = new_id
-                        sync_results[f"uploaded_to_{src}"].append(entry)
-                        if dive.external_ids.get(tgt):
-                            known_links[self._canon(src, new_id)] = self._canon(tgt, dive.external_ids[tgt])
+                    new_id = self._add_dive(self.source, self.source_name, src, dive, prepared, entry, sync_results)
+                    if new_id and dive.external_ids.get(tgt):
+                        known_links[self._canon(src, new_id)] = self._canon(tgt, dive.external_ids[tgt])
+                        self._save_links_now(known_links)
                 else:
                     entry["dry_run"] = True
                     sync_results[f"uploaded_to_{src}"].append(entry)
@@ -1335,8 +1512,16 @@ class SyncEngine:
 
                 entry = {"id": ext_id, f"linked_{other_sid}": other_id, "linked_id": other_id, "time": str(dive.date_time)}
                 if not dry_run:
-                    adapter.update_dive(ext_id, dive)
-                    sync_results[f"updated_on_{sid}"].append(entry)
+                    if adapter.update_dive(ext_id, dive):
+                        sync_results[f"updated_on_{sid}"].append(entry)
+                    else:
+                        # check.md B3: a refused or broken update is a failure
+                        # of the run, not an update (the adapter logged why)
+                        logger.warning("  Failed to update %s ID %s (dive at %s); see the lines above for why",
+                                       name, ext_id, dive.date_time)
+                        sync_results["failed"].append({"action": "update", "service": sid, "id": str(ext_id),
+                                                       "time": str(dive.date_time),
+                                                       "reason": f"{name} did not take the update"})
                 else:
                     entry["dry_run"] = True
                     sync_results[f"updated_on_{sid}"].append(entry)
@@ -1533,6 +1718,15 @@ class SyncEngine:
             return abs((a.date_time_utc - b.date_time_utc).total_seconds()) / 3600.0
         return abs((a.date_time - b.date_time).total_seconds()) / 3600.0
 
+    @staticmethod
+    def _start_delta(a: UnifiedDive, b: UnifiedDive) -> Tuple[float, str]:
+        """(seconds from ``a``'s start to ``b``'s, signed; the clock compared:
+        ``"UTC"`` when both dives carry a UTC instant, else ``"local"``) - the
+        same basis as ``_start_distance_hours``."""
+        if a.date_time_utc is not None and b.date_time_utc is not None:
+            return (b.date_time_utc - a.date_time_utc).total_seconds(), "UTC"
+        return (b.date_time - a.date_time).total_seconds(), "local"
+
     def match_dives(self, source_list: List[UnifiedDive], target_list: List[UnifiedDive],
                     known_links: Optional[Dict[str, str]] = None) -> Tuple[List[Tuple[UnifiedDive, UnifiedDive]], List[UnifiedDive], List[UnifiedDive]]:
         """Pair up dives from the two sides.
@@ -1542,15 +1736,29 @@ class SyncEngine:
                 source id -> target id; defaults to the stored table).
         Tier 2: the pair's ordered ``match_keys`` (the generic default board
                 for services that let the user number dives keys on the dive number).
-        Tier 3: start times within ``grace_window_minutes`` of each other.
+        Tier 3: start times within ``grace_window_minutes`` of each other -
+                as UTC instants when both dives carry one, else as local
+                times (C15, R11).
+        Tier 4: a time-zone shift (plans/gap-roadmap.md R11): what is left
+                whose start times differ by a whole number of quarter hours
+                (30 min to 14 h, ``zone_shift_minutes``) and whose max depth
+                and duration agree closely (``profiles_agree``) - the same
+                dive logged on two clocks in different zones. A pair is made
+                only when it is unambiguous: its shift is the one most
+                candidates of both its dives share (on a trip every dive is
+                off by the same hours), strictly; a tie leaves both dives
+                unmatched, as before R11. Each such match is logged.
 
         Each tier runs over every dive before the next one starts, and within
-        a tier the closest start times pair first. A start-time match (tier 3)
-        is tried before the match keys (tier 2): the same start time is the
-        same dive whatever its number says, while a number can go stale -
-        a renumbered log would otherwise pair dive "#4" with another day's
-        #4 and upload the real one again as new. Keys still pair dives whose
-        clocks disagree (a time-zone shift) within MATCH_KEY_MAX_HOURS."""
+        a tier the closest start times pair first; candidates whose start
+        distances fall within the same minute go by ``profile_mismatch``
+        (the dive whose depth and duration agree better) before list order.
+        A start-time match (tier 3) is tried before the match keys (tier 2):
+        the same start time is the same dive whatever its number says, while
+        a number can go stale - a renumbered log would otherwise pair dive
+        "#4" with another day's #4 and upload the real one again as new.
+        Keys still pair dives whose clocks disagree (a time-zone shift)
+        within MATCH_KEY_MAX_HOURS, before tier 4 guesses one."""
         grace_seconds = self.settings.grace_window_minutes * 60
         src, tgt = self.source_id, self.target_id
         match_keys = self.match_key_specs()
@@ -1586,8 +1794,10 @@ class SyncEngine:
                         continue
                     distance = self._start_distance_hours(a_dive, b_dive)
                     if accept(a_dive, b_dive, distance):
-                        candidates.append((distance, i, j))
-            for _distance, i, j in sorted(candidates):
+                        # equally close (same minute): the better depth/duration agreement first
+                        candidates.append((int(distance * 3600 // SAME_DISTANCE_SECONDS),
+                                           profile_mismatch(a_dive, b_dive), distance, i, j))
+            for _bucket, _mismatch, _distance, i, j in sorted(candidates):
                 if i not in pairs and j not in taken:
                     pairs[i] = j
                     taken.add(j)
@@ -1606,10 +1816,75 @@ class SyncEngine:
         if match_keys:
             pair_closest(key_match)
 
+        # Tier 4: a time-zone shift, only with the depth/duration check and
+        # only when unambiguous
+        self._pair_across_zone_shift(source_list, target_list, pairs, taken, grace_seconds)
+
         matched_pairs = [(source_list[i], target_list[pairs[i]]) for i in sorted(pairs)]
         unique_source = [a for i, a in enumerate(source_list) if i not in pairs]
         unique_target = [b for j, b in enumerate(target_list) if j not in taken]
         return matched_pairs, unique_source, unique_target
+
+    def _pair_across_zone_shift(self, source_list: List[UnifiedDive], target_list: List[UnifiedDive],
+                                pairs: Dict[int, int], taken: set, grace_seconds: float) -> None:
+        """Tier 4 of ``match_dives`` (R11): pair the dives still unmatched
+        whose start times differ by a possible time-zone shift and whose max
+        depth and duration agree. A candidate's weight is how many candidates
+        share its shift; it is paired when that weight is strictly the
+        highest among every candidate of its source dive and every candidate
+        of its target dive, and the round repeats on what is left. A dive
+        that still has candidates when no round pairs anything stays
+        unmatched, with one log line. Every pair made is logged with its
+        shift. ``pairs`` / ``taken`` are updated in place."""
+        src, tgt = self.source_id, self.target_id
+
+        def label(service: str, dive: UnifiedDive) -> str:
+            ident = dive.external_ids.get(service)
+            when = dive.date_time.strftime("%Y-%m-%d %H:%M")
+            return f"{service} dive {ident} ({when})" if ident else f"{service} dive at {when}"
+
+        while True:
+            candidates = []   # (i, j, shift minutes, delta seconds, clock)
+            for i, a_dive in enumerate(source_list):
+                if i in pairs:
+                    continue
+                for j, b_dive in enumerate(target_list):
+                    if j in taken:
+                        continue
+                    delta, clock = self._start_delta(a_dive, b_dive)
+                    shift = zone_shift_minutes(delta, grace_seconds)
+                    if shift is not None and profiles_agree(a_dive, b_dive):
+                        candidates.append((i, j, shift, delta, clock))
+            if not candidates:
+                return
+            support: Dict[int, int] = {}
+            by_source: Dict[int, list] = {}
+            by_target: Dict[int, list] = {}
+            for c in candidates:
+                support[c[2]] = support.get(c[2], 0) + 1
+                by_source.setdefault(c[0], []).append(c)
+                by_target.setdefault(c[1], []).append(c)
+            made = False
+            for c in candidates:
+                i, j, shift, delta, clock = c
+                rivals = [o for o in by_source[i] + by_target[j] if o is not c]
+                if any(support[o[2]] >= support[shift] for o in rivals):
+                    continue
+                pairs[i] = j
+                taken.add(j)
+                made = True
+                a_dive, b_dive = source_list[i], target_list[j]
+                logger.info("Matched %s with %s across a time-zone shift of %s h: their %s start times "
+                            "differ by %s, and max depth (%.1f / %.1f m) and duration (%d / %d min) agree",
+                            label(src, a_dive), label(tgt, b_dive), format_shift(shift), clock,
+                            format_shift(int(round(delta / 60.0))), a_dive.max_depth, b_dive.max_depth,
+                            round((a_dive.duration or 0) / 60), round((b_dive.duration or 0) / 60))
+            if not made:
+                for i in sorted({c[0] for c in candidates}):
+                    others = ", ".join(label(tgt, target_list[c[1]]) for c in candidates if c[0] == i)
+                    logger.info("Not matched across a time-zone shift: %s could be %s - more than one fits, "
+                                "so none is taken", label(src, source_list[i]), others)
+                return
 
     def download_and_save_raw_data(
         self,

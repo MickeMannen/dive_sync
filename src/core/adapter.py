@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 from datetime import datetime
 from src.core.models import UnifiedDive
 from src.core.fields import FieldSpec
@@ -31,10 +31,21 @@ class BaseDiveAdapter(ABC):
     # the changes were not sent, writes nothing there and queues no conflict
     # for it (a resolution would be an update it cannot take).
     accepts_updates: ClassVar[bool] = True
-    # False when a mirror run must never delete on this service (MySSI: a
-    # delete is permanent and the dive number may not come back). The engine
-    # logs each dive it would have deleted and leaves it.
+    # False when no sync run may ever delete on this service - not a Mirror
+    # run, not a pair with propagate_deletes on (MySSI: a delete is permanent
+    # and the dive number may not come back; Shearwater: the app's database
+    # is never deleted from). The engine logs each dive it would have deleted,
+    # counts it under skipped and leaves it; only a page of the app that says
+    # so deletes there. The name is kept from when only Mirror deleted.
     accepts_mirror_deletes: ClassVar[bool] = True
+
+    # Set by ``add_dive`` when it returned None because it left the dive out
+    # on purpose (the service already has it: Divelogs' "already exists",
+    # MySSI's duplicate check) - a short reason; None when the add was tried
+    # and failed, or never set. The engine clears it before every add_dive
+    # call and counts a None result with a reason as skipped
+    # (``receiver_already_has_dive``), without one as failed (check.md B4).
+    add_skipped_reason: Optional[str] = None
 
     @classmethod
     def field_catalog(cls) -> List[FieldSpec]:
@@ -49,6 +60,15 @@ class BaseDiveAdapter(ABC):
         ``add_dive`` applies the same check for callers that go straight to
         it. Default: every dive can be added."""
         return None
+
+    def upload_details(self, dive: UnifiedDive) -> Dict[str, Any]:
+        """How ``add_dive`` would send this dive when that is worth saying,
+        for the run's log and its results entry: an optional ``"note"`` (one
+        log line, said in a dry run too) plus any keys the entry under
+        ``uploaded_to_<service>`` should carry (Garmin's .fit upload, R13:
+        ``upload_as`` and ``fit_drops``). Called on the dive as it will be
+        uploaded, never makes a request. Default: nothing to say."""
+        return {}
 
     @classmethod
     def as_stored(cls, field_type: str, value: Any) -> Any:

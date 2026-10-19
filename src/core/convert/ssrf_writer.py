@@ -19,14 +19,14 @@ Subsurface wrote:
       <divemaster>, <buddy>, <notes>, <suit> (text elements)
       <cylinder size='11.1 l' description='...' o2='32.0%' he='..%' start='200.0 bar' end='50.0 bar' use='...' />
       <weightsystem weight='6.0 kg' description='weight' />
-      <divecomputer model='...' deviceid='8 hex' diveid='8 hex' dctype='CCR'>
+      <divecomputer model='...' deviceid='8 hex' diveid='8 hex' dctype='CCR' no_o2sensors='3'>
       <depth max='24.131 m' mean='10.138 m' />
       <temperature water='29.0 C' />
       <water salinity='1025 g/l' />
       <surfacetime>78:10 min</surfacetime>
       <extradata key='...' value='...' />
       <event time='m:ss min' type='25' flags='1' name='gaschange' cylinder='0' o2='32.0%' />
-      <sample time='m:ss min' depth='1.416 m' temp='30.0 C' pressure0='192.91 bar' ndl='..' tts='..' rbt='..' in_deco='1' stoptime='..' stopdepth='..' cns='3%' po2='0.37 bar' heartbeat='72' />
+      <sample time='m:ss min' depth='1.416 m' temp='30.0 C' pressure0='192.91 bar' ndl='..' tts='..' rbt='..' in_deco='1' stoptime='..' stopdepth='..' cns='3%' po2='0.37 bar' sensor1='0.69 bar' sensor2='0.71 bar' heartbeat='72' />
       </divecomputer>
     </dive>
     </dives>
@@ -43,7 +43,10 @@ always), every tank pressure it has (``pressureN`` by the tank's index in
 `UnifiedSample.pressure` as ``pressure0``), and the heart rate whenever it
 has one. The ``po2`` attribute is Subsurface's setpoint: a sample with a
 setpoint writes that; one without writes the computer's PO2, as Subsurface
-itself stores libdivecomputer's PO2 of an open-circuit dive.
+itself stores libdivecomputer's PO2 of an open-circuit dive. A rebreather's
+O2 cells are Subsurface's ``sensor1`` .. ``sensorN`` (bar, cell index + 1,
+written when a cell's reading changes) and the dive computer's
+``no_o2sensors`` is how many cells the dive has (plans/gap-roadmap.md R18).
 
 What Subsurface has no element for goes into the dive computer's
 ``extradata`` under the keys in `EXTRA_*` (the deco model and gradient
@@ -76,12 +79,17 @@ from src.core.models import (
     GasMixture,
     UnifiedDive,
     UnifiedSample,
+    salinity_of,
 )
+from src.core.models import SALINITY_BY_WATER_TYPE as _SALINITY_BY_WATER_TYPE
 from src.core.services.subsurface import (
     EXTERNAL_ID_PREFIX,
+    EXTRA_EXIT_GPS,
     MANUAL_DC_MODEL,
     SERVICE_ID,
     TANK_ROLE_TO_USE,
+    exit_position_text,
+    fmt_degrees,
     fmt_milli,
 )
 from src.core.site_matcher import find_site
@@ -105,15 +113,15 @@ EVENT_NAME_BOOKMARK = "bookmark"
 DIVEMODE_TEXT: Dict[str, str] = {"ccr": "CCR", "scr": "PSCR", "apnea": "Freedive"}
 DIVEMODE_OC = "OC"
 
-# Salinity Subsurface assumes for a water type (core/units.h) when the computer gave no density.
-SALINITY_BY_WATER_TYPE: Dict[str, int] = {"fresh": 1000, "salt": 1030, "en13319": 1020}
+# Salinity Subsurface assumes for a water type (core/units.h) when the computer gave no density (models.py since R10).
+SALINITY_BY_WATER_TYPE = _SALINITY_BY_WATER_TYPE
 
 # extradata keys: Subsurface's own where it has one (its Garmin import writes
 # "Deco model", "Serial", "FW Version", "GPS2"), ours for the rest.
 EXTRA_DECO_MODEL = "Deco model"
 EXTRA_SERIAL = "Serial"
 EXTRA_FIRMWARE = "FW Version"
-EXTRA_EXIT_GPS = "GPS2"
+# EXTRA_EXIT_GPS ("GPS2") lives in services/subsurface.py since R8: the git-storage adapter reads and writes it too
 EXTRA_BOTTOM_TIME = "Bottom time"
 EXTRA_CNS_START = "CNS start"
 EXTRA_CNS_END = "CNS end"
@@ -168,18 +176,19 @@ def fmt_min(seconds: int) -> str:
     return f"{seconds // 60}:{seconds % 60:02d} min"
 
 
+def _mss(seconds: int) -> str:
+    """``m:ss``: a duration without the unit (`fmt_min` less " min")."""
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
 def fmt_percent(value: float) -> str:
     """A gas fraction as Subsurface's `put_gasmix` writes it: one decimal from a permille value ("32.0%")."""
     permille = int(round(value * 10))
     return f"{permille // 10}.{permille % 10}%"
 
 
-def fmt_degrees(value: float) -> str:
-    """Subsurface's `put_degrees`: micro-degrees as a signed number with six decimals."""
-    udeg = int(round(value * 1_000_000))
-    sign = "-" if udeg < 0 else ""
-    udeg = abs(udeg)
-    return f"{sign}{udeg // 1_000_000}.{udeg % 1_000_000:06d}"
+# fmt_degrees (Subsurface's `put_degrees`) is services/subsurface.py's since R8, re-exported here.
 
 
 def hex_id(*parts: object) -> str:
@@ -311,7 +320,9 @@ class SsrfDocument:
         if dive.duration and int(dive.duration) > 0:
             head += f" duration='{fmt_min(int(dive.duration))}'"
         out.append(head + ">")
-        for tag, value in (("divemaster", sf.get(SF_DIVEMASTER)), ("buddy", dive.buddy), ("notes", dive.notes), ("suit", sf.get(SF_SUIT))):
+        # the suit is the dive's own field since R10; a dive cached before it still carries it as a service field
+        for tag, value in (("divemaster", sf.get(SF_DIVEMASTER)), ("buddy", dive.buddy), ("notes", dive.notes),
+                           ("suit", dive.suit if dive.suit is not None else sf.get(SF_SUIT))):
             text = _text(value)
             if text is not None:
                 out.append(f"  <{tag}>{xml_quote(text, attribute=False)}</{tag}>")
@@ -352,14 +363,19 @@ class SsrfDocument:
         dctype = DIVEMODE_TEXT.get(dive.dive_mode or "")
         if dctype:
             head += f" dctype='{dctype}'"
+        cells = max((i + 1 for s in dive.samples if s.channels is not None for i in s.channels.o2_cells), default=0)
+        if cells:
+            head += f" no_o2sensors='{cells}'"
         out.append(head + ">")
         if dive.max_depth or dive.avg_depth:
             depth = f"  <depth max='{fmt_milli(dive.max_depth or 0.0)} m'"
             if dive.avg_depth is not None:
                 depth += f" mean='{fmt_milli(dive.avg_depth)} m'"
             out.append(depth + " />")
-        if dive.temp_min is not None:
-            out.append(f"  <temperature water='{fmt_milli(dive.temp_min)} C' />")
+        temperature = (f" air='{fmt_milli(dive.air_temp)} C'" if dive.air_temp is not None else "") + \
+                      (f" water='{fmt_milli(dive.temp_min)} C'" if dive.temp_min is not None else "")
+        if temperature:
+            out.append(f"  <temperature{temperature} />")
         salinity = self.salinity(dive)
         if salinity:
             out.append(f"  <water salinity='{salinity} g/l' />")
@@ -376,9 +392,7 @@ class SsrfDocument:
     @staticmethod
     def salinity(dive: UnifiedDive) -> Optional[int]:
         """``<water salinity>`` in g/l: the computer's density, else Subsurface's value for the water type."""
-        if dive.water_density:
-            return int(round(dive.water_density))
-        return SALINITY_BY_WATER_TYPE.get(dive.water_type or "")
+        return salinity_of(dive.water_type, dive.water_density)
 
     @staticmethod
     def deco_model_text(dive: UnifiedDive) -> Optional[str]:
@@ -405,8 +419,9 @@ class SsrfDocument:
             out.append((EXTRA_DIVE_MODE, dive.dive_mode))
         if dive.water_type and dive.water_type not in SALINITY_BY_WATER_TYPE:
             out.append((EXTRA_WATER_TYPE, dive.water_type))
-        if dive.exit_lat is not None and dive.exit_lng is not None:
-            out.append((EXTRA_EXIT_GPS, f"{fmt_degrees(dive.exit_lat)}, {fmt_degrees(dive.exit_lng)}"))
+        exit_text = exit_position_text(dive.exit_lat, dive.exit_lng)
+        if exit_text is not None:
+            out.append((EXTRA_EXIT_GPS, exit_text))
         if dive.bottom_time:
             out.append((EXTRA_BOTTOM_TIME, fmt_min(int(dive.bottom_time))))
         if dive.cns_start is not None:
@@ -457,52 +472,22 @@ class SsrfDocument:
 
     @staticmethod
     def _samples(dive: UnifiedDive) -> List[str]:
-        """`save_samples`: the sticky values (temperature, NDL, TTS, RBT,
-        in_deco, stop, CNS, PO2) only when they change; the NDL starts at -1
-        so the first one is always written, the others at 0."""
+        """`save_samples`: depth always, the temperature when it changes,
+        every tank pressure, then the channel values of `sample_channel_values`
+        (sticky: only when they change) as ``name='value unit'``."""
         out: List[str] = []
-        last_temp, last_ndl, last_tts, last_rbt = 0, -1, 0, 0
-        last_in_deco, last_stoptime, last_stopdepth, last_cns, last_po2 = False, 0, 0, 0, 0
-        for sample in dive.samples:
+        last_temp = 0
+        extras = sample_channel_values(dive.samples)
+        for sample, values in zip(dive.samples, extras):
             line = f"  <sample time='{fmt_min(int(sample.time or 0))}' depth='{fmt_milli(sample.depth)} m'"
             if sample.temp is not None and _milli(sample.temp) and _milli(sample.temp) != last_temp:
                 last_temp = _milli(sample.temp)
                 line += f" temp='{fmt_milli(sample.temp)} C'"
-            ch = sample.channels
-            pressures = dict(ch.pressures) if ch and ch.pressures else ({0: sample.pressure} if sample.pressure is not None else {})
-            for tank, bar in sorted(pressures.items()):
+            for tank, bar in sorted(sample_pressures(sample).items()):
                 if _milli(bar):
                     line += f" pressure{int(tank)}='{fmt_milli(bar)} bar'"
-            if ch is not None:
-                if ch.ndl is not None and int(ch.ndl) != last_ndl:
-                    last_ndl = int(ch.ndl)
-                    line += f" ndl='{fmt_min(last_ndl)}'"
-                if ch.tts is not None and int(ch.tts) != last_tts:
-                    last_tts = int(ch.tts)
-                    line += f" tts='{fmt_min(last_tts)}'"
-                if ch.gas_time is not None and int(ch.gas_time) != last_rbt:
-                    last_rbt = int(ch.gas_time)
-                    line += f" rbt='{fmt_min(last_rbt)}'"
-                if ch.deco_stop_depth is not None:
-                    in_deco = ch.deco_stop_depth > 0
-                    if in_deco != last_in_deco:
-                        last_in_deco = in_deco
-                        line += f" in_deco='{1 if in_deco else 0}'"
-                if ch.deco_stop_time is not None and int(ch.deco_stop_time) != last_stoptime:
-                    last_stoptime = int(ch.deco_stop_time)
-                    line += f" stoptime='{fmt_min(last_stoptime)}'"
-                if ch.deco_stop_depth is not None and _milli(ch.deco_stop_depth) != last_stopdepth:
-                    last_stopdepth = _milli(ch.deco_stop_depth)
-                    line += f" stopdepth='{fmt_milli(ch.deco_stop_depth)} m'"
-                if ch.cns is not None and int(round(ch.cns)) != last_cns:
-                    last_cns = int(round(ch.cns))
-                    line += f" cns='{last_cns}%'"
-                po2 = ch.setpoint if ch.setpoint is not None else ch.ppo2
-                if po2 is not None and _milli(po2) != last_po2:
-                    last_po2 = _milli(po2)
-                    line += f" po2='{fmt_milli(po2)} bar'"
-                if ch.heart_rate:
-                    line += f" heartbeat='{int(ch.heart_rate)}'"
+            for name, value, unit in values:
+                line += f" {name}='{value}{' ' + unit if unit and unit != '%' else unit}'"
             out.append(line + " />")
         return out
 
@@ -529,6 +514,70 @@ class SsrfDocument:
             os.makedirs(parent, exist_ok=True)
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(self.to_string())
+
+
+def sample_pressures(sample: UnifiedSample) -> Dict[int, float]:
+    """The tank pressures a sample writes, keyed by the tank's index in
+    ``gas_mixtures``: its per-tank channel, else its one ``pressure`` as the
+    first tank's (shared with the git-storage adapter, R12)."""
+    ch = sample.channels
+    if ch is not None and ch.pressures:
+        return dict(ch.pressures)
+    return {0: sample.pressure} if sample.pressure is not None else {}
+
+
+def sample_channel_values(samples: Sequence[UnifiedSample]) -> List[List[Tuple[str, str, str]]]:
+    """Per sample, Subsurface's channel values as ``(name, value, unit)`` in
+    writing order, with its sticky rule applied (`save_samples`): the NDL,
+    TTS, RBT, in_deco, stop time and depth, CNS, PO2 and each O2 cell only
+    when they change (the NDL starts at -1 so the first one is always
+    written, the others at 0); the heart rate whenever there is one. The
+    ``.ssrf`` writer spells them ``ndl='10:00 min'``, the git-storage
+    adapter ``ndl=10:00`` (plans/gap-roadmap.md R12). ``po2`` is the
+    setpoint when the sample has one, else the computer's PO2."""
+    out: List[List[Tuple[str, str, str]]] = []
+    last_ndl, last_tts, last_rbt = -1, 0, 0
+    last_in_deco, last_stoptime, last_stopdepth, last_cns, last_po2 = False, 0, 0, 0, 0
+    last_cells: Dict[int, int] = {}
+    for sample in samples:
+        values: List[Tuple[str, str, str]] = []
+        ch = sample.channels
+        if ch is not None:
+            if ch.ndl is not None and int(ch.ndl) != last_ndl:
+                last_ndl = int(ch.ndl)
+                values.append(("ndl", _mss(last_ndl), "min"))
+            if ch.tts is not None and int(ch.tts) != last_tts:
+                last_tts = int(ch.tts)
+                values.append(("tts", _mss(last_tts), "min"))
+            if ch.gas_time is not None and int(ch.gas_time) != last_rbt:
+                last_rbt = int(ch.gas_time)
+                values.append(("rbt", _mss(last_rbt), "min"))
+            if ch.deco_stop_depth is not None:
+                in_deco = ch.deco_stop_depth > 0
+                if in_deco != last_in_deco:
+                    last_in_deco = in_deco
+                    values.append(("in_deco", "1" if in_deco else "0", ""))
+            if ch.deco_stop_time is not None and int(ch.deco_stop_time) != last_stoptime:
+                last_stoptime = int(ch.deco_stop_time)
+                values.append(("stoptime", _mss(last_stoptime), "min"))
+            if ch.deco_stop_depth is not None and _milli(ch.deco_stop_depth) != last_stopdepth:
+                last_stopdepth = _milli(ch.deco_stop_depth)
+                values.append(("stopdepth", fmt_milli(ch.deco_stop_depth), "m"))
+            if ch.cns is not None and int(round(ch.cns)) != last_cns:
+                last_cns = int(round(ch.cns))
+                values.append(("cns", str(last_cns), "%"))
+            po2 = ch.setpoint if ch.setpoint is not None else ch.ppo2
+            if po2 is not None and _milli(po2) != last_po2:
+                last_po2 = _milli(po2)
+                values.append(("po2", fmt_milli(po2), "bar"))
+            for cell, bar in sorted(ch.o2_cells.items()):
+                if _milli(bar) != last_cells.get(cell, 0):
+                    last_cells[cell] = _milli(bar)
+                    values.append((f"sensor{int(cell) + 1}", fmt_milli(bar), "bar"))
+            if ch.heart_rate:
+                values.append(("heartbeat", str(int(ch.heart_rate)), ""))
+        out.append(values)
+    return out
 
 
 def write_ssrf(dives: Sequence[UnifiedDive], path: PathLike) -> List[str]:

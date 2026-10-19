@@ -20,17 +20,20 @@ timestamps UWMedia rewrites one by one are, here, the one ``date_time``.
 ``date_time_utc`` follows the new local start and the new zone.
 
 **Time zones.** The model's ``timezone`` is an IANA name when a reader had
-one (``Asia/Kuala_Lumpur``; a FIT gives a fixed offset as ``Etc/GMT-7``).
+one (``Asia/Kuala_Lumpur``) and a fixed offset spelled ``UTC+07:00`` /
+``UTC+05:30`` when it had only the offset (a FIT; plans/gap-roadmap.md R7).
 The page shows and edits it as a UTC offset (``+07:00``), which is all a
-dive file can say. An offset typed on the page becomes ``Etc/GMT∓N`` for
-whole hours (the reader's own spelling) and ``UTC+05:30`` otherwise -
-not an IANA name, but the most that can be said for a half-hour zone, and
-nothing of the conversions reads it.
+dive file can say, and an offset typed on the page is stored in the same
+fixed spelling (`zone_for_offset`). A fixed offset is turned into a tz as
+a `datetime.timezone`, never through the zone database: the ``Etc/GMT∓N``
+names cover whole hours only, carry an inverted sign, and have nothing
+for India, Nepal, Newfoundland or Adelaide. They are still read
+(`tzinfo_of`) from dives cached or edited before R7.
 """
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from src.core.models import KNOWN_DIVE_MODES, KNOWN_WATER_TYPES, GasMixture, UnifiedDive
@@ -40,7 +43,7 @@ PROFILE_FIELDS: Tuple[str, ...] = ("duration", "max_depth", "avg_depth")
 
 # Text fields: blank clears them.
 TEXT_FIELDS: Tuple[str, ...] = (
-    "location", "buddy", "notes", "computer_vendor", "computer_model", "computer_serial", "computer_firmware", "deco_model",
+    "location", "buddy", "notes", "suit", "computer_vendor", "computer_model", "computer_serial", "computer_firmware", "deco_model",
 )
 # Numbers: field -> (label, minimum, maximum, integer?, required?)
 NUMBER_FIELDS: Dict[str, Tuple[str, Optional[float], Optional[float], bool, bool]] = {
@@ -50,6 +53,7 @@ NUMBER_FIELDS: Dict[str, Tuple[str, Optional[float], Optional[float], bool, bool
     "temp_min": ("Water temp (min)", -5, 60, False, False),
     "temp_max": ("Water temp (max)", -5, 60, False, False),
     "temp_avg": ("Water temp (avg)", -5, 60, False, False),
+    "air_temp": ("Air temp", -60, 60, False, False),
     "dive_number": ("Dive number", 0, None, True, False),
     "surface_interval": ("Surface interval", 0, None, True, False),
     "bottom_time": ("Bottom time", 0, None, True, False),
@@ -64,6 +68,7 @@ NUMBER_FIELDS: Dict[str, Tuple[str, Optional[float], Optional[float], bool, bool
     "gf_high": ("GF high", 0, 100, True, False),
     "cns_start": ("CNS start", 0, None, False, False),
     "cns_end": ("CNS end", 0, None, False, False),
+    "sac": ("SAC", 0, None, False, False),            # litres per minute at the surface (R9)
 }
 CHOICE_FIELDS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "dive_mode": ("Dive mode", KNOWN_DIVE_MODES),
@@ -115,46 +120,56 @@ def format_utc_offset(offset: Optional[timedelta]) -> str:
     return f"{sign}{hours:02d}:{minutes:02d}"
 
 
-def zone_offset(name: Optional[str], at: Optional[datetime] = None) -> Optional[timedelta]:
-    """The UTC offset of a ``timezone`` value: the fixed ``Etc/GMT∓N`` and
-    ``UTC+05:30`` spellings directly, an IANA name through the zone
-    database at ``at`` (the dive's local start); None for none or unknown."""
+def tzinfo_of(name: Optional[str]) -> Optional[tzinfo]:
+    """The tz of a ``timezone`` value: a fixed `datetime.timezone` for the
+    ``UTC+05:30`` spelling (`zone_for_offset`'s) and for the ``Etc/GMT∓N``
+    names of older dives (read here with their inverted sign, never through
+    the zone database, which has no Etc zone for a half hour), the zone
+    database for an IANA name; None for none or unknown (R7)."""
     name = (name or "").strip()
     if not name:
         return None
     if name.upper() in ("UTC", "ETC/UTC", "GMT", "ETC/GMT", "Z"):
-        return timedelta(0)
+        return timezone.utc
     m = _ETC_ZONE.match(name)
     if m:
         hours = int(m.group(2))
-        return timedelta(hours=-hours if m.group(1) == "+" else hours)   # the Etc zones carry the inverted sign
+        return timezone(timedelta(hours=-hours if m.group(1) == "+" else hours))
     if name.upper().startswith(("UTC", "GMT")):
         try:
-            return parse_utc_offset(name)
+            offset = parse_utc_offset(name)
         except EditError:
             return None
+        return timezone(offset) if offset is not None else None
     try:
         from zoneinfo import ZoneInfo
-        zone = ZoneInfo(name)
+        return ZoneInfo(name)
     except Exception:
+        return None
+
+
+def zone_offset(name: Optional[str], at: Optional[datetime] = None) -> Optional[timedelta]:
+    """The UTC offset of a ``timezone`` value (`tzinfo_of`) at ``at`` (the
+    dive's local start; it matters for an IANA zone with summer time);
+    None for none or unknown."""
+    zone = tzinfo_of(name)
+    if zone is None:
         return None
     when = at or datetime(2000, 1, 1)
     return zone.utcoffset(when.replace(tzinfo=zone))
 
 
 def zone_for_offset(offset: Optional[timedelta]) -> Optional[str]:
-    """The ``timezone`` value for an offset the page edited: ``Etc/GMT-7``
-    for UTC+7 (the FIT reader's spelling; whole hours only), ``Etc/UTC``
-    for zero, ``UTC+05:30`` for a half-hour offset; None for no offset."""
+    """The ``timezone`` value for a fixed UTC offset - a FIT's, or one the
+    page edited: ``UTC+07:00``, ``UTC-03:30``, ``UTC+05:45``, ``UTC`` for
+    zero; None for no offset. One spelling for every offset, whole hours
+    and half or quarter hours alike (R7)."""
     if offset is None:
         return None
     minutes = int(round(offset.total_seconds() / 60))
     if minutes == 0:
-        return "Etc/UTC"
-    hours, rest = divmod(abs(minutes), 60)
-    if rest or hours > 14:
-        return "UTC" + format_utc_offset(offset)
-    return f"Etc/GMT{'-' if minutes > 0 else '+'}{hours}"
+        return "UTC"
+    return "UTC" + format_utc_offset(offset)
 
 
 def utc_offset_of(dive: UnifiedDive) -> Optional[timedelta]:

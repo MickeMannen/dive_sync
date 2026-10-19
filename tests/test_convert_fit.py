@@ -94,16 +94,26 @@ def _record(seconds, depth, temperature=None):
     return _message(3, RECORD, fields)
 
 
-def _dive_gas(index, oxygen, helium=0, status=1):
-    return _message(4, DIVE_GAS, [(254, "uint16", index), (0, "uint8", helium), (1, "uint8", oxygen), (2, "enum", status)])
+def _dive_gas(index, oxygen, helium=0, status=1, mode=None):
+    """A gas; ``mode`` is dive_gas.mode (0 open circuit, 1 closed-circuit diluent), left out when None."""
+    fields = [(254, "uint16", index), (0, "uint8", helium), (1, "uint8", oxygen), (2, "enum", status)]
+    if mode is not None:
+        fields.append((3, "enum", mode))
+    return _message(4, DIVE_GAS, fields)
 
 
 def _gas_switch(seconds, gas_index):
     return _message(5, EVENT, [(253, "uint32", T0 + seconds), (0, "enum", 57), (1, "enum", 3), (3, "uint32", gas_index)])
 
 
-def _dive_summary(number=12, max_depth=18.5):
-    return _message(6, DIVE_SUMMARY, [(253, "uint32", T0 + 600), (10, "uint32", number), (3, "uint32", int(max_depth * 1000))])
+def _dive_summary(number=12, max_depth=18.5, sac=None, rmv=None, otu=None, pressure_sac=None):
+    """The summary; SAC, RMV (L/min, stored in hundredths), the pressure SAC
+    (bar/min, hundredths) and the OTU are written only when given."""
+    fields = [(253, "uint32", T0 + 600), (10, "uint32", number), (3, "uint32", int(max_depth * 1000))]
+    for num, value, scale in ((9, otu, 1), (12, pressure_sac, 100), (13, sac, 100), (14, rmv, 100)):
+        if value is not None:
+            fields.append((num, "uint16", int(round(value * scale))))
+    return _message(6, DIVE_SUMMARY, fields)
 
 
 def minimal_dive(**kwargs):
@@ -160,7 +170,7 @@ def test_two_tanks_summary():
     assert dive.dive_number == 38
     assert dive.date_time == datetime(2026, 8, 29, 9, 56, 11)
     assert dive.date_time_utc == datetime(2026, 8, 29, 2, 56, 11)
-    assert dive.timezone == "Etc/GMT-7"
+    assert dive.timezone == "UTC+07:00"
     assert dive.duration == 2780
     assert dive.max_depth == pytest.approx(11.92)
     assert dive.avg_depth == pytest.approx(5.894)     # the watch's own (Connect's), not the profile mean 6.04
@@ -182,6 +192,7 @@ def test_two_tanks_carried_fields():
     assert dive.dive_mode == "oc_single_gas"
     assert dive.surface_interval == 497326 and dive.bottom_time == 2599
     assert (dive.cns_start, dive.cns_end) == (0.0, 0.0)
+    assert (dive.sac, dive.rmv, dive.otu) == (13.71, 22.12, 0.0)          # the watch's own, L/min and OTU (R6)
 
 
 @fixtures
@@ -191,6 +202,7 @@ def test_two_tanks_gases_and_transmitters():
     dive = read_fit(TWO_TANKS)
     tanks = [(g.oxygen, g.helium, g.start_pressure, g.end_pressure, g.tank_name, g.tank_volume) for g in dive.gas_mixtures]
     assert tanks == [(21.0, 0.0, 204.29, 164.37, "Tank 1", 11.1), (21.0, 0.0, 209.66, 161.75, "Tank 2", 11.1)]
+    assert [g.tank_role for g in dive.gas_mixtures] == [None, None]       # open circuit is no role
 
 
 @fixtures
@@ -264,7 +276,7 @@ def test_single_gas_fixture():
     assert dive.dive_number == 28
     assert dive.date_time == datetime(2026, 6, 27, 11, 24, 51)
     assert dive.date_time_utc == datetime(2026, 6, 27, 3, 24, 51)
-    assert dive.timezone == "Etc/GMT-8"
+    assert dive.timezone == "UTC+08:00"
     assert dive.duration == 3065 and dive.bottom_time == 2884 and dive.surface_interval == 4690
     assert dive.max_depth == pytest.approx(24.131)
     assert dive.avg_depth == pytest.approx(10.138)   # the watch's own; the profile mean is 10.31
@@ -277,6 +289,10 @@ def test_single_gas_fixture():
     assert dive.events[0].model_dump() == {"time": 0, "type": EVENT_GAS_SWITCH, "tank": 0, "oxygen": 32.0, "helium": 0.0}
     assert (dive.cns_start, dive.cns_end) == (3.0, 10.0)
     assert dive.computer_firmware == "5.12" and dive.dive_mode == "oc_single_gas"
+    # the watch's air consumption and OTU (R6): its volume SAC is its pressure SAC
+    # (1.01 bar/min) over the 11.1 L tank, its RMV that SAC at the mean ambient pressure
+    assert (dive.sac, dive.rmv, dive.otu) == (11.2, 22.53, 19.0)
+    assert dive.gas_mixtures[0].tank_role is None
     assert dive.events[-1].type == "tank_pod_disconnected" and dive.events[-1].tank == 0
 
 
@@ -355,7 +371,7 @@ def test_activity_id_from_name(names, expected):
 def test_minimal_dive_fills_what_is_there_and_leaves_the_rest_unset():
     dive = read_fit(minimal_dive())
     assert dive.date_time_utc == datetime(2024, 11, 8, 11, 33, 20)
-    assert dive.date_time == datetime(2024, 11, 8, 12, 33, 20) and dive.timezone == "Etc/GMT-1"
+    assert dive.date_time == datetime(2024, 11, 8, 12, 33, 20) and dive.timezone == "UTC+01:00"
     assert dive.duration == 600 and dive.dive_number == 12 and dive.max_depth == 18.5
     assert [(s.time, s.depth, s.temp) for s in dive.samples] == [(0, 0.5, 24.0), (60, 18.0, 22.0), (120, 1.0, 23.0)]
     assert dive.avg_depth == pytest.approx(((0.5 + 18.0) / 2 * 60 + (18.0 + 1.0) / 2 * 60) / 120, abs=1e-3)
@@ -435,14 +451,67 @@ def test_a_zip_without_fit_and_a_missing_file(tmp_path):
         read_fit(str(tmp_path / "missing.fit"))
 
 
+def test_gas_mode_and_consumption_summary():
+    """A gas whose mode is closed_circuit_diluent is a tank with the
+    diluent role; open circuit (0) or no mode is no role. The summary's
+    volume SAC, RMV and OTU come back as the dive's sac, rmv and otu, in
+    L/min and OTU; a summary without them leaves them None (R6)."""
+    plain = read_fit(minimal_dive())
+    assert (plain.sac, plain.rmv, plain.otu) == (None, None, None) and plain.gas_mixtures[0].tank_role is None
+    ccr = build_fit([_file_id(), _session(sub_sport=63), _activity(),
+                     _record(0, 0.5, 24), _record(60, 18.0, 22), _record(120, 1.0, 23),
+                     _dive_gas(0, 21, mode=1), _dive_gas(1, 100, mode=0), _dive_gas(2, 50),
+                     _gas_switch(0, 0), _dive_summary(sac=11.2, rmv=22.53, otu=19, pressure_sac=1.01)])
+    dive = read_fit(ccr)
+    assert dive.dive_mode == "ccr"
+    assert [(g.oxygen, g.tank_role) for g in dive.gas_mixtures] == [(21.0, "diluent"), (100.0, None), (50.0, None)]
+    assert (dive.sac, dive.rmv, dive.otu) == (11.2, 22.53, 19.0)
+    # an extra transmitter holding the first gas does not take its diluent role
+    with_pods = build_fit([_file_id(), _session(sub_sport=63), _activity(), _record(0, 0.5), _record(60, 18.0),
+                           _dive_gas(0, 21, mode=1),
+                           _message(7, 323, [(253, "uint32", T0 + 60), (0, "uint32z", 11), (1, "uint16", 20000), (2, "uint16", 15000)]),
+                           _message(8, 323, [(253, "uint32", T0 + 60), (0, "uint32z", 12), (1, "uint16", 20000), (2, "uint16", 15000)]),
+                           _dive_summary()])
+    assert [(g.oxygen, g.tank_role, g.start_pressure) for g in read_fit(with_pods).gas_mixtures] == [
+        (21.0, "diluent", 200.0), (21.0, None, 200.0)]
+
+
 @pytest.mark.parametrize("offset, name", [
-    (0, "Etc/UTC"), (3600, "Etc/GMT-1"), (8 * 3600, "Etc/GMT-8"), (-5 * 3600, "Etc/GMT+5"), (14 * 3600, "Etc/GMT-14"),
-    (5 * 3600 + 1800, None), (15 * 3600, None), (-13 * 3600, None),
+    (0, "UTC"), (3600, "UTC+01:00"), (8 * 3600, "UTC+08:00"), (-5 * 3600, "UTC-05:00"), (14 * 3600, "UTC+14:00"),
+    (5 * 3600 + 1800, "UTC+05:30"), (5 * 3600 + 2700, "UTC+05:45"), (-3 * 3600 - 1800, "UTC-03:30"),
+    (15 * 3600, None), (-13 * 3600, None),
 ])
 def test_zone_name(offset, name):
+    """A FIT's offset as the fixed-offset spelling the Dive edit page
+    stores, half and quarter hours included (R7); outside -12..+14 h none."""
+    from datetime import timedelta
+    from src.core.convert.edit import tzinfo_of
     assert zone_name(offset) == name
     if name:
-        from zoneinfo import ZoneInfo
+        assert datetime(2026, 1, 1, tzinfo=tzinfo_of(name)).utcoffset() == timedelta(seconds=offset)
 
-        from datetime import timedelta
-        assert datetime(2026, 1, 1, tzinfo=ZoneInfo(name)).utcoffset() == timedelta(seconds=offset)
+
+@pytest.mark.parametrize("offset, local, name", [
+    (5 * 3600 + 1800, datetime(2024, 11, 8, 17, 3, 20), "UTC+05:30"),     # India
+    (5 * 3600 + 2700, datetime(2024, 11, 8, 17, 18, 20), "UTC+05:45"),    # Nepal
+    (-3 * 3600 - 1800, datetime(2024, 11, 8, 8, 3, 20), "UTC-03:30"),     # Newfoundland
+    (10 * 3600 + 1800, datetime(2024, 11, 8, 22, 3, 20), "UTC+10:30"),    # Adelaide
+])
+def test_half_hour_zone_is_kept(offset, local, name):
+    """A dive logged in a half-hour or quarter-hour zone keeps its zone
+    and its local clock (before R7 the zone was None, the clock right)."""
+    dive = read_fit(build_fit([_file_id(), _session(), _activity(offset_seconds=offset),
+                               _record(0, 0.5, 24), _record(60, 18.0, 22), _dive_gas(0, 32), _dive_summary()]))
+    assert (dive.date_time, dive.date_time_utc, dive.timezone) == (local, datetime(2024, 11, 8, 11, 33, 20), name)
+
+
+# check.md B17: the per-sample setpoint of a Garmin rebreather dive
+def test_sample_setpoints_follow_the_switches_only():
+    from src.core.convert.fit_reader import sample_setpoints
+    from src.core.models import EVENT_SETPOINT_CHANGE, DiveEvent
+    hi = DiveEvent(time=100, type=EVENT_SETPOINT_CHANGE, name="setpoint_switch_auto_high", value=1.3)
+    lo = DiveEvent(time=200, type=EVENT_SETPOINT_CHANGE, name="setpoint_switch_auto_low", value=0.7)
+    assert sample_setpoints([0, 100, 150, 250], [hi, lo]) == [0.7, 1.3, 1.3, 0.7]
+    assert sample_setpoints([0, 150], [hi]) == [None, 1.3]                             # low never named: not invented
+    assert sample_setpoints([0, 150], [hi], {"low": 0.6, "high": 1.3}) == [0.6, 1.3]   # dive_settings knows it
+    assert sample_setpoints([0, 150], []) == [None, None]

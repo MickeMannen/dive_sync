@@ -9,7 +9,7 @@ import copy
 import json
 import os
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 import pytest
@@ -465,8 +465,10 @@ def test_carried_computer_data_is_invisible_to_a_sync(tmp_path):
                    computer_vendor="Garmin", computer_model="Descent Mk3i", computer_serial="1", computer_firmware="13.05",
                    gf_low=45, gf_high=85, deco_model="ZHL-16C", water_type="salt", water_density=1025.0,
                    dive_mode="oc_multi_gas", exit_lat=7.601, exit_lng=98.371, surface_interval=5400, bottom_time=2400,
-                   cns_start=2.0, cns_end=11.0)
-    assert set(carried) == set(CARRIED_DIVE_FIELDS)
+                   cns_start=2.0, cns_end=11.0, sac=11.2, rmv=22.53, otu=19.0)
+    # the water type (R10) and the exit position (R8) are catalogue fields, but no shipped rule names them, so the
+    # default board still ignores them
+    assert set(carried) == set(CARRIED_DIVE_FIELDS) | {"water_type", "exit_lat", "exit_lng"}
     g, d = _pair(dict(carried, samples=rich, buddy="A"), {"samples": profile, "buddy": "A"})
 
     for direction in ("to_divelogs", "to_garmin"):
@@ -548,8 +550,10 @@ def test_field_links_override_survives_settings_reload(tmp_path):
 # ---------------------------------------------------------------- match keys (C19)
 
 def test_match_keys_come_from_the_board(tmp_path):
+    # different max depths: 12 h apart with the same depth and duration would
+    # be a time-zone shift (R11, test_zone_shift_*), not what this pins
     g = [_dive(date_time=datetime(2026, 1, 1, 8), dive_number=7, external_ids={"garmin": "1"})]
-    d = [_dive(date_time=datetime(2026, 1, 1, 20), dive_number=7, external_ids={"divelogs": "2"})]
+    d = [_dive(date_time=datetime(2026, 1, 1, 20), dive_number=7, max_depth=12.0, external_ids={"divelogs": "2"})]
 
     # The Garmin/Divelogs default board has no match key (Divelogs numbers its own dives)
     engine = _engine(tmp_path, g, d)
@@ -570,7 +574,7 @@ def test_match_keys_come_from_the_board(tmp_path):
 
     # Dive number zero is "unset"
     g0 = [_dive(date_time=datetime(2026, 1, 1, 8), dive_number=0, external_ids={"garmin": "1"})]
-    d0 = [_dive(date_time=datetime(2026, 1, 1, 20), dive_number=0, external_ids={"divelogs": "2"})]
+    d0 = [_dive(date_time=datetime(2026, 1, 1, 20), dive_number=0, max_depth=12.0, external_ids={"divelogs": "2"})]
     engine = _engine(tmp_path, g0, d0, field_links=with_key)
     assert engine.match_dives(g0, d0)[0] == []
 
@@ -616,9 +620,171 @@ def test_matching_uses_utc_when_both_sides_have_it(tmp_path):
     d = [_dive(date_time=datetime(2026, 6, 1, 12), date_time_utc=datetime(2026, 6, 1, 12), external_ids={"divelogs": "2"})]
     engine = _engine(tmp_path, g, d)
     assert len(engine.match_dives(g, d)[0]) == 1
-    # Without UTC on one side the naive local times decide (8 h apart: no match)
+    # Without UTC on one side the naive local times decide: 8 h apart is no
+    # start-time match, only a time-zone shift, taken when depth and
+    # duration agree (R11) - here they do not
     d[0].date_time_utc = None
+    d[0].max_depth = 25.0
     assert engine.match_dives(g, d)[0] == []
+    d[0].max_depth = 20.2           # within 0.5 m: the same dive, logged in another zone
+    assert len(engine.match_dives(g, d)[0]) == 1
+
+
+# ---------------------------------------------------------------- time-zone shifts (R11)
+
+from src.core.sync_engine import (  # noqa: E402
+    format_shift,
+    profile_mismatch,
+    profiles_agree,
+    zone_shift_minutes,
+)
+
+
+def test_profiles_agree_within_the_documented_tolerances():
+    base = _dive(max_depth=20.0, duration=3000)
+    assert profiles_agree(base, _dive(max_depth=20.5, duration=3090))         # 0.5 m, 90 s
+    assert not profiles_agree(base, _dive(max_depth=20.7, duration=3000))     # 0.7 m > max(0.5, 3 % of 20.7)
+    assert not profiles_agree(base, _dive(max_depth=20.0, duration=3100))     # 100 s > max(90 s, 3 % of 3100)
+    deep = _dive(max_depth=60.0, duration=6000)
+    assert profiles_agree(deep, _dive(max_depth=61.5, duration=6170))         # 3 % of the larger wins
+    # a dive without a depth or a duration never agrees
+    assert not profiles_agree(base, _dive(max_depth=0.0, duration=3000))
+    assert not profiles_agree(base, _dive(max_depth=20.0, duration=0))
+    # the mismatch orders: identical 0, each missing value one tolerance
+    assert profile_mismatch(base, _dive()) == 0.0
+    shallow = _dive(max_depth=10.0, duration=1800)                            # tolerances 0.5 m and 90 s here
+    assert profile_mismatch(shallow, _dive(max_depth=10.25, duration=1845)) == pytest.approx(1.0)
+    assert profile_mismatch(base, _dive(max_depth=0.0, duration=0)) == 2.0
+
+
+def test_zone_shift_minutes_takes_quarter_hours_from_30_min_to_14_h():
+    grace = 15 * 60
+    h = 3600
+    assert zone_shift_minutes(8 * h, grace) == 480
+    assert zone_shift_minutes(-8 * h + 120, grace) == -480                   # 2 min off: within the slack
+    assert zone_shift_minutes(8 * h + 300, grace) is None                     # 5 min off a quarter hour
+    assert zone_shift_minutes(5 * h + 45 * 60, grace) == 345                  # Nepal
+    assert zone_shift_minutes(-3.5 * h, grace) == -210                        # Newfoundland
+    assert zone_shift_minutes(14 * h, grace) == 840
+    assert zone_shift_minutes(15 * h, grace) is None                          # beyond 14 h
+    assert zone_shift_minutes(10 * 60, grace) is None                         # inside the grace window
+    assert zone_shift_minutes(15 * 60, 0) is None                             # 15 min is drift, not a zone
+    assert (format_shift(480), format_shift(-210), format_shift(345)) == ("+8:00", "-3:30", "+5:45")
+
+
+def test_zone_shift_match_needs_depth_and_duration(tmp_path, caplog):
+    """The owner's case: one side logged the dive 8 h later on its clock (the
+    home zone vs the dive's). Matched only when depth and duration agree, and
+    the match is logged."""
+    g = [_dive(date_time=datetime(2026, 3, 1, 9, 12), max_depth=18.4, duration=2810, external_ids={"garmin": "g1"})]
+    d = [_dive(date_time=datetime(2026, 3, 1, 17, 12), max_depth=18.3, duration=2760, external_ids={"divelogs": "d1"})]
+    engine = _engine(tmp_path, g, d)
+    with caplog.at_level("INFO", logger="dive_sync.sync_engine"):
+        matched, ug, ud = engine.match_dives(g, d)
+    assert [(a.external_ids["garmin"], b.external_ids["divelogs"]) for a, b in matched] == [("g1", "d1")]
+    assert ug == [] and ud == []
+    line = next(r.getMessage() for r in caplog.records if "time-zone shift" in r.getMessage())
+    assert "garmin dive g1 (2026-03-01 09:12)" in line and "divelogs dive d1 (2026-03-01 17:12)" in line
+    assert "+8:00 h" in line and "local start times" in line
+
+    for bad in (dict(max_depth=21.0), dict(duration=3300), dict(max_depth=0.0)):
+        d2 = [d[0].model_copy(update=bad)]
+        assert engine.match_dives(g, d2)[0] == [], bad
+    # 8 h 05 min apart is no zone, whatever the depth says
+    d3 = [d[0].model_copy(update={"date_time": datetime(2026, 3, 1, 17, 17)})]
+    assert engine.match_dives(g, d3)[0] == []
+
+    # A whole run: the shifted twin is matched, not uploaded again
+    res = _engine(tmp_path, g, d).run_sync(dry_run=True)
+    assert res["matched_count"] == 1 and res["uploaded_to_divelogs"] == []
+
+
+def test_zone_shift_on_utc_clocks_when_one_zone_is_wrong(tmp_path, caplog):
+    """Both dives carry a UTC instant but one service stamped the wrong zone
+    (the C15 Garmin upload case): the instants are 8 h apart, the local
+    clocks agree. Tier 3 compares UTC and misses; tier 4 pairs it on the
+    UTC difference because depth and duration agree."""
+    g = [_dive(date_time=datetime(2026, 3, 1, 9), date_time_utc=datetime(2026, 3, 1, 1), external_ids={"garmin": "g"})]
+    d = [_dive(date_time=datetime(2026, 3, 1, 9), date_time_utc=datetime(2026, 3, 1, 9), external_ids={"divelogs": "d"})]
+    with caplog.at_level("INFO", logger="dive_sync.sync_engine"):
+        assert len(_engine(tmp_path, g, d).match_dives(g, d)[0]) == 1
+    assert any("+8:00 h: their UTC start times" in r.getMessage() for r in caplog.records)
+
+
+def test_linked_pairs_are_never_moved_by_a_zone_shift(tmp_path):
+    """Tier 1 wins: a remembered pair stays as it is even when another dive
+    fits it better across a time-zone shift, and that dive is not taken
+    from it either."""
+    g = [_dive(date_time=datetime(2026, 3, 1, 9), external_ids={"garmin": "g1"})]
+    d = [_dive(date_time=datetime(2026, 3, 1, 9, 40), max_depth=12.0, external_ids={"divelogs": "linked"}),
+         _dive(date_time=datetime(2026, 3, 1, 17), external_ids={"divelogs": "shifted"})]
+    engine = _engine(tmp_path, g, d)
+    matched, ug, ud = engine.match_dives(g, d, known_links={"g1": "linked"})
+    assert [(a.external_ids["garmin"], b.external_ids["divelogs"]) for a, b in matched] == [("g1", "linked")]
+    assert [x.external_ids["divelogs"] for x in ud] == ["shifted"]
+    # ...and a dive both sides name each other in (stored ids) likewise
+    g2 = [g[0].model_copy(update={"external_ids": {"garmin": "g1", "divelogs": "linked"}})]
+    matched, _, _ = engine.match_dives(g2, d, known_links={})
+    assert [b.external_ids["divelogs"] for _, b in matched] == ["linked"]
+
+
+def test_equally_close_candidates_go_by_depth_and_duration(tmp_path):
+    """pair_closest: two dives the same morning that start equally close to
+    one dive (same minute) - the one whose depth and duration agree is taken,
+    not the first in the list. A clearly closer start still wins."""
+    g = [_dive(date_time=datetime(2026, 3, 1, 10), max_depth=20.0, duration=2400, external_ids={"garmin": "a"})]
+    d = [_dive(date_time=datetime(2026, 3, 1, 9, 55), max_depth=8.0, duration=1500, external_ids={"divelogs": "short"}),
+         _dive(date_time=datetime(2026, 3, 1, 10, 5, 20), max_depth=20.1, duration=2400, external_ids={"divelogs": "twin"})]
+    engine = _engine(tmp_path, g, d)
+    assert [b.external_ids["divelogs"] for _, b in engine.match_dives(g, d)[0]] == ["twin"]
+    d[1].date_time = datetime(2026, 3, 1, 10, 9)                               # 9 min vs 5 min: closest first
+    assert [b.external_ids["divelogs"] for _, b in engine.match_dives(g, d)[0]] == ["short"]
+
+
+def test_two_dives_the_same_day_are_not_swapped_across_a_shift(tmp_path):
+    """Morning and afternoon dives, both 8 h later on the other clock: the
+    afternoon dive is also a quarter-hour multiple away from the morning
+    twin (3 h 30), but its depth and duration do not agree with it."""
+    g = [_dive(date_time=datetime(2026, 3, 1, 9), max_depth=24.0, duration=2700, external_ids={"garmin": "am"}),
+         _dive(date_time=datetime(2026, 3, 1, 12, 30), max_depth=11.0, duration=3600, external_ids={"garmin": "pm"})]
+    d = [_dive(date_time=datetime(2026, 3, 1, 20, 30), max_depth=11.1, duration=3570, external_ids={"divelogs": "pm"}),
+         _dive(date_time=datetime(2026, 3, 1, 17), max_depth=23.8, duration=2690, external_ids={"divelogs": "am"})]
+    matched, ug, ud = _engine(tmp_path, g, d).match_dives(g, d)
+    assert sorted((a.external_ids["garmin"], b.external_ids["divelogs"]) for a, b in matched) == [("am", "am"), ("pm", "pm")]
+
+
+def test_repeat_dives_the_same_day_pair_on_the_shift_they_share(tmp_path, caplog):
+    """Three near-identical repeat dives (a liveaboard day) shifted +8 h:
+    every dive fits several others by depth and duration, but +8:00 is the
+    shift three candidates share, so each pairs with its own twin. A lone
+    dive that fits two others at different shifts is left alone."""
+    starts = [datetime(2026, 3, 1, 7), datetime(2026, 3, 1, 10), datetime(2026, 3, 1, 13, 30)]
+    g = [_dive(date_time=t, max_depth=18.0, duration=2700, external_ids={"garmin": f"g{n}"}) for n, t in enumerate(starts)]
+    d = [_dive(date_time=t + timedelta(hours=8), max_depth=18.2, duration=2680, external_ids={"divelogs": f"d{n}"})
+         for n, t in reversed(list(enumerate(starts)))]
+    matched, ug, ud = _engine(tmp_path, g, d).match_dives(g, d)
+    assert sorted((a.external_ids["garmin"], b.external_ids["divelogs"]) for a, b in matched) == \
+        [("g0", "d0"), ("g1", "d1"), ("g2", "d2")]
+
+    # one dive, two equally good candidates at +8:00 and +11:00: none is taken
+    lone = [_dive(date_time=datetime(2026, 4, 1, 7), external_ids={"garmin": "x"})]
+    two = [_dive(date_time=datetime(2026, 4, 1, 15), external_ids={"divelogs": "p"}),
+           _dive(date_time=datetime(2026, 4, 1, 18), external_ids={"divelogs": "q"})]
+    with caplog.at_level("INFO", logger="dive_sync.sync_engine"):
+        matched, ug, ud = _engine(tmp_path, lone, two).match_dives(lone, two)
+    assert matched == [] and len(ug) == 1 and len(ud) == 2
+    assert any("Not matched across a time-zone shift: garmin dive x" in r.getMessage() for r in caplog.records)
+
+
+def test_no_new_match_for_dives_only_on_one_side(tmp_path):
+    """A dive only on Garmin and an unrelated Divelogs dive later that day
+    (a whole number of hours apart, other depth) stay two dives; so do two
+    with the same depth and duration whose clocks are not a zone apart."""
+    g = [_dive(date_time=datetime(2026, 3, 1, 9), max_depth=30.0, duration=2400, external_ids={"garmin": "g"})]
+    d = [_dive(date_time=datetime(2026, 3, 1, 14), max_depth=12.0, duration=3300, external_ids={"divelogs": "d"}),
+         _dive(date_time=datetime(2026, 3, 1, 11, 7), max_depth=30.0, duration=2400, external_ids={"divelogs": "e"})]
+    matched, ug, ud = _engine(tmp_path, g, d).match_dives(g, d)
+    assert matched == [] and len(ug) == 1 and len(ud) == 2
 
 
 # ---------------------------------------------------------------- generic pair (F1)
@@ -1335,6 +1501,159 @@ def test_receiver_without_updates_logs_once_per_dive_and_writes_nothing(tmp_path
     assert len(res["conflicts"]) == 1 and len(ConflictStore(engine.conflicts_file).load()) == 1   # notes queued as usual
 
 
+def test_a_refused_update_is_counted_as_failed_not_updated(tmp_path, caplog):
+    """check.md B3: update_dive returning False (the service refused, or the
+    write broke and the adapter logged why) is never listed under
+    updated_on_<svc>; it is one warning and an entry under ``failed``
+    with the action, service, id and time. A dry run reports the update
+    as it would have been tried, as before."""
+    import logging
+
+    class RefusingDivelogs(FakeDivelogs):
+        def update_dive(self, external_id, dive):
+            self.updated.append((external_id, dive))
+            return external_id != "2"             # the first dive is refused
+
+    links = [FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="prefer_source")]
+    def dives():          # fresh copies per run: the rules edit the receiver's dives in memory
+        g = [_dive(external_ids={"garmin": "1", "divelogs": "2"}, buddy="Anna"),
+             _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "3", "divelogs": "4"}, buddy="Bob")]
+        d = [_dive(external_ids={"garmin": "1", "divelogs": "2"}, buddy="Old"),
+             _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "3", "divelogs": "4"}, buddy="Older")]
+        return g, d
+
+    path = _settings_file(tmp_path, field_links=links)
+    g, d = dives()
+    engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                        source_adapter=FakeGarmin(g), target_adapter=RefusingDivelogs(d))
+    with caplog.at_level(logging.WARNING, logger="dive_sync.sync_engine"):
+        res = engine.run_sync(dry_run=False)
+    assert [eid for eid, _ in engine.target.updated] == ["2", "4"]          # both were tried
+    assert [e["id"] for e in res["updated_on_divelogs"]] == ["4"]
+    assert res["failed"] == [{"action": "update", "service": "divelogs", "id": "2", "time": "2026-06-22 12:00:00",
+                              "reason": "Divelogs.org did not take the update"}]
+    assert "  Failed to update Divelogs.org ID 2 (dive at 2026-06-22 12:00:00); see the lines above for why" in caplog.text
+    # every run result carries the bucket; a run with nothing refused has it empty
+    g, d = dives()
+    engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                        source_adapter=FakeGarmin(g), target_adapter=RefusingDivelogs(d))
+    res = engine.run_sync(dry_run=True)
+    assert res["failed"] == [] and [e["id"] for e in res["updated_on_divelogs"]] == ["2", "4"]
+    g, d = dives()
+    res = _engine(tmp_path, g, d, field_links=links).run_sync(dry_run=False)
+    assert res["failed"] == [] and [e["id"] for e in res["updated_on_divelogs"]] == ["2", "4"]
+
+
+def test_an_add_the_receiver_did_not_take_is_failed_and_a_duplicate_skip_is_skipped(tmp_path, caplog):
+    """check.md B4: add_dive returning None lands in ``failed`` (action
+    add) with a warning and no link, unless the adapter set
+    ``add_skipped_reason`` (it left the dive out on purpose because it
+    already has it: Divelogs' "already exists", MySSI's duplicate check) -
+    then it is counted under skipped as receiver_already_has_dive. The
+    engine clears the reason before every call, so a stale one never
+    turns a later failure into a skip. Both upload directions."""
+    import logging
+
+    class PickyDivelogs(FakeDivelogs):
+        def add_dive(self, dive):
+            self.added.append(dive)
+            if dive.notes == "dup":
+                self.add_skipped_reason = "already on Divelogs.org"
+                return None
+            if dive.notes == "broken":
+                return None
+            return f"new-{len(self.added)}"
+
+    class PickyGarmin(FakeGarmin):
+        add_dive = PickyDivelogs.add_dive
+
+    g = [_dive(external_ids={"garmin": "1"}, notes="dup"),
+         _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "2"}, notes="broken"),
+         _dive(date_time=datetime(2026, 7, 2, 9), external_ids={"garmin": "3"}, notes="fine")]
+    path = _settings_file(tmp_path)
+    engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                        source_adapter=FakeGarmin(g), target_adapter=PickyDivelogs([]))
+    with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+        res = engine.run_sync(dry_run=False)
+    assert len(engine.target.added) == 3                                   # every one was tried
+    assert [e["source_id"] for e in res["uploaded_to_divelogs"]] == ["3"]
+    assert res["skipped"] == [{"reason": "receiver_already_has_dive", "detail": "already on Divelogs.org",
+                               "time": "2026-06-22 12:00:00"}]
+    assert res["failed"] == [{"action": "add", "service": "divelogs", "time": "2026-07-01 09:00:00", "source_id": "2",
+                              "reason": "Divelogs.org did not add the dive"}]
+    assert engine.load_links() == {"3": "new-3"}                            # only the created dive is linked
+    lines = [r.getMessage() for r in caplog.records]
+    assert "  Divelogs.org: dive at 2026-06-22 12:00:00 not added, already on Divelogs.org; counted as skipped" in lines
+    assert "  Failed to add the dive at 2026-07-01 09:00:00 to Divelogs.org; see the lines above for why" in lines
+    # towards the source side, the same
+    d = [_dive(external_ids={"divelogs": "11"}, notes="dup"),
+         _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"divelogs": "12"}, notes="broken")]
+    path = _settings_file(tmp_path, directionality="to_garmin", create_on_garmin=True)
+    engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                        source_adapter=PickyGarmin([]), target_adapter=FakeDivelogs(d))
+    res = engine.run_sync(dry_run=False)
+    assert res["uploaded_to_garmin"] == [] and [s["reason"] for s in res["skipped"]] == ["receiver_already_has_dive"]
+    assert [(f["action"], f["service"], f["source_id"]) for f in res["failed"]] == [("add", "garmin", "12")]
+    # a dry run tries nothing, so it reports neither
+    res = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                     source_adapter=PickyGarmin([]), target_adapter=FakeDivelogs(d)).run_sync(dry_run=True)
+    assert len(res["uploaded_to_garmin"]) == 2 and res["skipped"] == [] and res["failed"] == []
+
+
+def test_a_run_that_breaks_off_keeps_the_links_to_the_dives_it_created(tmp_path, caplog):
+    """check.md B5: every link is written the moment its upload succeeds,
+    so an exception from the next dive (or a killed process) leaves the
+    pairs already made in sync_state.json - the next run neither creates
+    those dives again nor re-matches them by time - while the last sync
+    time stays where it was (the dives not reached must still count as
+    new). A dry run writes nothing. The same towards the source side."""
+    import logging
+
+    class BreaksOnSecondAdd:
+        def add_dive(self, dive):
+            if len(self.added) == 1:
+                raise RuntimeError("connection reset")
+            return super().add_dive(dive)
+
+    class BreaksOnSecond(BreaksOnSecondAdd, FakeDivelogs):
+        pass
+
+    class GarminBreaksOnSecond(BreaksOnSecondAdd, FakeGarmin):
+        pass
+
+    g = [_dive(external_ids={"garmin": "1"}),
+         _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"garmin": "2"}),
+         _dive(date_time=datetime(2026, 7, 2, 9), external_ids={"garmin": "3"})]
+    path = _settings_file(tmp_path)
+    state_file = tmp_path / "sync" / "sync_state.json"
+    broken = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                        source_adapter=FakeGarmin(g), target_adapter=BreaksOnSecond([]))
+    assert broken.run_sync(dry_run=True) and not state_file.exists()        # a dry run saves nothing
+    with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+        with pytest.raises(RuntimeError, match="connection reset"):
+            broken.run_sync(dry_run=False)
+    state = json.loads(state_file.read_text())
+    assert state["links"] == {"1": "new-1"} and "last_sync_time" not in state
+    assert not any("Saved sync state" in r.getMessage() for r in caplog.records)   # the per-upload save is quiet
+    # the rerun: the first dive is a known pair, only the other two are created
+    target = FakeDivelogs([_dive(external_ids={"divelogs": "new-1"})])
+    again = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                       source_adapter=FakeGarmin(g), target_adapter=target)
+    res = again.run_sync(dry_run=False)
+    assert [d.external_ids["garmin"] for d in target.added] == ["2", "3"] and res["matched_count"] == 1
+    assert again.load_links() == {"1": "new-1", "2": "new-1", "3": "new-2"}
+    assert "last_sync_time" in json.loads(state_file.read_text())                   # a finished run advances it
+    # towards the source side
+    d = [_dive(external_ids={"divelogs": "11"}), _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"divelogs": "12"})]
+    path = _settings_file(tmp_path, directionality="to_garmin", create_on_garmin=True)
+    state_file.unlink()
+    broken = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                        source_adapter=GarminBreaksOnSecond([]), target_adapter=FakeDivelogs(d))
+    with pytest.raises(RuntimeError):
+        broken.run_sync(dry_run=False)
+    assert json.loads(state_file.read_text())["links"] == {"new-1": "11"}
+
+
 def test_mirror_never_deletes_on_a_receiver_that_refuses(tmp_path, caplog):
     """accepts_mirror_deletes False: a mirror run still creates the missing
     dives and forces the fields it may write, but each receiver dive the
@@ -1357,6 +1676,37 @@ def test_mirror_never_deletes_on_a_receiver_that_refuses(tmp_path, caplog):
     engine = _engine(tmp_path, g, d, sync_filters=SyncFilters(only_new=True))
     res = engine.run_sync(dry_run=False, mirror_override=True)
     assert engine.target.deleted == ["11", "12"] and res["skipped"] == []
+
+
+def test_propagate_deletes_never_deletes_on_a_receiver_that_refuses(tmp_path, caplog):
+    """check.md B1: accepts_mirror_deletes False also holds for the
+    propagate-deletes path (a linked dive gone from the sender), which
+    Mirror turns on - the receiver's copy is logged, counted as skipped
+    under its own reason, kept with its link, and neither deleted nor
+    re-uploaded. A plain receiver is deleted on as before."""
+    import logging
+    g = [_dive(external_ids={"garmin": "1"})]
+    d = [_dive(external_ids={"divelogs": "2"})]
+    _add_only_engine(tmp_path, g, d).run_sync(dry_run=False)
+    for overrides in ({}, {"mirror_override": True}):
+        caplog.clear()
+        engine = _add_only_engine(tmp_path, [], d, propagate_deletes=True)
+        with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+            res = engine.run_sync(dry_run=False, **overrides)
+        assert engine.target.deleted == [] and engine.target.added == []
+        assert res["deleted_on_divelogs"] == [] and res["uploaded_to_garmin"] == [] and res["matched_count"] == 0
+        assert res["skipped"] == [{"reason": "sync_never_deletes_here", "id": "2", "time": "2026-06-22 12:00:00",
+                                   "gone_from": "garmin"}]
+        assert engine.load_links() == {"1": "2"}
+        lines = [r.getMessage() for r in caplog.records]
+        assert "  Dive 1 is gone from Garmin Connect; propagate_deletes is on, but Divelogs.org ID 2 is not deleted (a sync never deletes on Divelogs.org)" in lines
+        assert not any("deleting" in l or "Failed to delete" in l for l in lines)
+    # a dry run reports the same; the plain receiver keeps the existing behaviour
+    res = _add_only_engine(tmp_path, [], d, propagate_deletes=True).run_sync(dry_run=True)
+    assert [s["reason"] for s in res["skipped"]] == ["sync_never_deletes_here"] and res["deleted_on_divelogs"] == []
+    engine = _engine(tmp_path, [], d, propagate_deletes=True)
+    assert engine.run_sync(dry_run=False)["deleted_on_divelogs"] == [{"id": "2", "gone_from": "garmin"}]
+    assert engine.target.deleted == ["2"] and engine.load_links() == {}
 
 
 def test_receiver_refusing_a_dive_counts_it_as_skipped_not_tried(tmp_path, caplog):
@@ -1382,3 +1732,130 @@ def test_receiver_refusing_a_dive_counts_it_as_skipped_not_tried(tmp_path, caplo
     engine = _engine(tmp_path, g, [])
     assert engine.target.cannot_add_reason(g[0]) is None
     assert len(engine.run_sync(dry_run=False)["uploaded_to_divelogs"]) == 2
+
+
+# ---------------------------------------------------------------- R13: new Garmin dives as .fit (beta)
+
+class FitGarmin(FakeGarmin):
+    """FakeGarmin with the real adapter's .fit-upload switch and its
+    upload_details (plans/gap-roadmap.md R13); add_dive records the switch
+    as the run set it and answers "duplicate" for a dive noted "dup"."""
+
+    sends_as_fit = GarminAdapter.sends_as_fit
+    fit_upload_split = GarminAdapter.fit_upload_split
+    upload_details = GarminAdapter.upload_details
+
+    def __init__(self, dives=None):
+        super().__init__(dives)
+        self.fit_upload = False
+        self.switch_seen = []
+
+    def add_dive(self, dive):
+        self.switch_seen.append(self.fit_upload)
+        if dive.notes == "dup":
+            self.add_skipped_reason = "already on Garmin Connect (Connect answered: duplicate activity)"
+            return None
+        return super().add_dive(dive)
+
+
+def _profiled(**kw):
+    kw.setdefault("samples", [UnifiedSample(time=t, depth=min(20.0, t / 10.0)) for t in range(0, 301, 60)])
+    return _dive(**kw)
+
+
+def _fit_engine(tmp_path, divelogs_dives, **settings):
+    settings.setdefault("directionality", "to_garmin")
+    path = _settings_file(tmp_path, **settings)
+    return SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                      source_adapter=FitGarmin([]), target_adapter=FakeDivelogs(divelogs_dives))
+
+
+def test_garmin_fit_upload_is_off_by_default_and_set_by_settings_pair_or_run(tmp_path):
+    """garmin_fit_upload (R13, beta): off by default; the global setting, the
+    pair's own value and a run override (CLI flag, job, Sync page) each set
+    the adapter's switch for the run, the run's value winning."""
+    d = [_profiled(external_ids={"divelogs": "2"})]
+    engine = _fit_engine(tmp_path, d, create_on_garmin=True)
+    res = engine.run_sync(dry_run=False)
+    assert engine.source.switch_seen == [False] and "upload_as" not in res["uploaded_to_garmin"][0]
+
+    engine = _fit_engine(tmp_path, d, create_on_garmin=True, garmin_fit_upload=True)
+    engine.run_sync(dry_run=False)
+    assert engine.source.switch_seen == [True]
+    engine.source.switch_seen.clear()
+    engine.run_sync(dry_run=False, garmin_fit_upload_override=False)
+    assert engine.source.switch_seen == [False]
+
+    path = _settings_file(tmp_path, create_on_garmin=True, sync_pairs=[SyncPairModel(
+        id="garmin_divelogs", source="garmin", target="divelogs", directionality="to_garmin", garmin_fit_upload=True)])
+    engine = SyncEngine(settings_path=path, credentials_path=str(tmp_path / "credentials.json"),
+                        source_adapter=FitGarmin([]), target_adapter=FakeDivelogs(d))
+    engine.run_sync(dry_run=False)
+    assert engine.source.switch_seen == [True]
+    engine = _fit_engine(tmp_path, d, create_on_garmin=True)
+    engine.run_sync(dry_run=False, garmin_fit_upload_override=True)
+    assert engine.source.switch_seen == [True]
+
+
+def test_garmin_fit_upload_dry_run_lists_the_uploads_and_the_drops(tmp_path, caplog):
+    """A dry run uploads nothing and lists each dive that would go as a
+    .fit, with what the file cannot carry, in the log and on its entry."""
+    import logging
+    d = [_profiled(external_ids={"divelogs": "2"}, notes="Reef", suit="5 mm"),
+         _dive(date_time=datetime(2026, 7, 1, 9), external_ids={"divelogs": "3"})]      # no profile: manual
+    engine = _fit_engine(tmp_path, d, create_on_garmin=True, garmin_fit_upload=True)
+    with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+        res = engine.run_sync(dry_run=True)
+    assert engine.source.added == [] and not os.path.exists(engine.state_file)
+    fit, manual = sorted(res["uploaded_to_garmin"], key=lambda e: e["time"])
+    assert fit["dry_run"] and fit["upload_as"] == "fit" and fit["fit_drops"] == ["suit"]
+    assert manual["dry_run"] and "upload_as" not in manual
+    lines = [r.getMessage() for r in caplog.records]
+    assert "Garmin Connect: new dives with a profile are uploaded as .fit files (beta)" in lines
+    assert ("  as a .fit file (profile, tanks and gases); set on the activity after the upload: notes; "
+            "not carried to Garmin: suit") in lines
+
+
+def test_garmin_fit_upload_links_the_new_activity_and_counts_a_duplicate(tmp_path):
+    """A .fit upload's new activity id is linked in sync_state at once (tier
+    1 next run); Connect's duplicate answer is counted as
+    receiver_already_has_dive, not as a failure, and links nothing."""
+    d = [_profiled(external_ids={"divelogs": "2"}),
+         _profiled(date_time=datetime(2026, 7, 1, 9), external_ids={"divelogs": "3"}, notes="dup")]
+    engine = _fit_engine(tmp_path, d, create_on_garmin=True, garmin_fit_upload=True)
+    res = engine.run_sync(dry_run=False)
+    assert [e["new_id"] for e in res["uploaded_to_garmin"]] == ["new-1"]
+    assert res["uploaded_to_garmin"][0]["upload_as"] == "fit" and res["failed"] == []
+    assert res["skipped"] == [{"reason": "receiver_already_has_dive", "time": "2026-07-01 09:00:00",
+                               "detail": "already on Garmin Connect (Connect answered: duplicate activity)"}]
+    assert engine.load_links() == {"new-1": "2"}
+
+
+def test_garmin_fit_upload_does_not_create_dives_by_itself(tmp_path, caplog):
+    """The switch changes how a dive is created on Garmin, not whether:
+    with create_on_garmin off the dives are skipped as before and the line
+    says why the switch did nothing."""
+    import logging
+    d = [_profiled(external_ids={"divelogs": "2"})]
+    engine = _fit_engine(tmp_path, d, garmin_fit_upload=True)
+    with caplog.at_level(logging.INFO, logger="dive_sync.sync_engine"):
+        res = engine.run_sync(dry_run=False)
+    assert engine.source.added == [] and [s["reason"] for s in res["skipped"]] == ["create_on_garmin_off"]
+    assert any("upload as .fit is on, but it only applies once create_on_garmin is on" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_divelogs_air_temperature_has_no_shipped_rule(tmp_path):
+    """R10b: divelogs.air_temp is in the catalogue but no shipped rule names
+    it, so the first run after upgrading sees nothing new: a matched pair
+    where only Divelogs has an air temperature is in agreement both ways."""
+    from src.core.config import SettingsModel
+    pair = SettingsModel().default_pair()
+    assert not any("air_temp" in key for rules in pair.rules.values() for r in rules
+                   for key in list(r.source) + [r.target])
+    g, d = _pair({"buddy": "A"}, {"buddy": "A", "air_temp": 24.5})
+    for direction in ("to_divelogs", "to_garmin"):
+        engine = _engine(tmp_path, [g], [d], directionality=direction)
+        res = engine.run_sync(dry_run=False)
+        assert not res["updated_on_garmin"] and not res["updated_on_divelogs"] and not res.get("conflicts")
+    assert d.air_temp == 24.5

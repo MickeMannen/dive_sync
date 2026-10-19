@@ -266,6 +266,7 @@ ColumnLayout {
             color: Theme.accent
         }
         // the tooltip, beside the cursor: right of it, or left of it near the right edge, inside the plot
+        // (a value a sample does not log is the last one logged, profile.held_values)
         Rectangle {
             id: tip
             objectName: "sampleTip"
@@ -277,10 +278,14 @@ ColumnLayout {
             color: Theme.tipBg
             border.color: Theme.tipBorder
             radius: 4
-            Column {
+            // one column while the lines fit the plot's height, then a second beside it
+            Grid {
                 id: tipColumn
                 x: 6; y: 4
-                spacing: 1
+                flow: Grid.TopToBottom
+                rowSpacing: 1; columnSpacing: 10
+                rows: Math.max(1, Math.min(chart.tooltipLines.length, Math.floor((plot.height - 8 + 1) / (tipFont.height + 1))))
+                FontMetrics { id: tipFont; font.pixelSize: 11 }
                 Repeater {
                     model: chart.tooltipLines
                     Text { text: modelData; color: Theme.tipText; font.pixelSize: 11 }

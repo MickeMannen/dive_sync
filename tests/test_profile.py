@@ -29,8 +29,8 @@ def test_export_contains_everything_but_secrets():
     # v2 (rework.md G1): the Garmin <-> Divelogs board and direction are in sync_pairs like every pair's
     assert set(profile) == {"dive_sync_profile", "sync_filters", "grace_window_minutes",
                             "api_cooldown_seconds", "garmin_timezone", "sync_pairs", "schedule",
-                            "cron_jobs", "notify_url", "propagate_deletes", "backup_retention_count", "create_on_garmin",
-                            "create_device_dives_on_submersion"}
+                            "cron_jobs", "notify_url", "notify_on", "propagate_deletes", "backup_retention_count", "create_on_garmin",
+                            "create_device_dives_on_submersion", "garmin_fit_upload"}
     text = json.dumps(profile)
     assert "password" not in text and "token" not in text
     assert profile["cron_jobs"][0]["id"] == "n"
@@ -99,3 +99,20 @@ def test_import_refuses_newer_or_broken_profiles(tmp_path):
     (tmp_path / "bad.json").write_text("{")
     with pytest.raises(ProfileError, match="not valid JSON"):
         read_profile(str(tmp_path / "bad.json"))
+
+
+def test_notify_on_defaults_to_failure_and_tolerates_unknown_values():
+    """R24: notify_on is 'failure' unless set; a hand-edited or newer value
+    this build does not know falls back to 'failure' instead of making the
+    settings unreadable, and a profile carries the choice."""
+    assert SettingsModel().notify_on == "failure"
+    for value in ("failure", "changes", "always"):
+        assert SettingsModel(notify_on=value).notify_on == value
+    assert SettingsModel(notify_on="hourly").notify_on == "failure"
+    assert SettingsModel(notify_on=None).notify_on == "failure"
+    assert SettingsModel.model_validate_json('{"notify_url": "https://x"}').notify_on == "failure"
+
+    profile = export_profile(SettingsModel(notify_on="changes"))
+    assert profile["notify_on"] == "changes"
+    imported, summary = import_profile(profile, SettingsModel())
+    assert imported.notify_on == "changes" and "notify_on" in summary.sections

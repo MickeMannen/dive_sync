@@ -24,14 +24,14 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from src.core import units as core_units
-from src.core.models import EVENT_GAS_SWITCH, UnifiedDive, UnifiedSample
+from src.core.models import EVENT_GAS_SWITCH, SampleChannels, UnifiedDive, UnifiedSample
 
 # A timeline entry's gas: the index into UnifiedDive.gas_mixtures, or the
 # name of a mix the gas list does not hold.
 Gas = Union[int, str]
 
 # The tooltip's line order (ProfileChart.qml draws `lines`; the keys are for tests and callers).
-DETAIL_ORDER = ("time", "depth", "temp", "ndl", "deco", "gas", "tanks", "cns", "po2", "setpoint", "heart_rate", "gas_time")
+DETAIL_ORDER = ("time", "depth", "temp", "ndl", "deco", "gas", "tanks", "cns", "po2", "setpoint", "cells", "heart_rate", "gas_time")
 
 
 # --- gas names ----------------------------------------------------------------
@@ -189,6 +189,53 @@ def _depth_text(metres: float, system: str) -> str:
     return core_units.format_with_label("depth", metres, system, decimals)
 
 
+_HELD_CHANNELS = ("tts", "deco_stop_time", "cns", "ppo2", "setpoint", "gf99", "gas_time", "heart_rate")
+
+
+def held_values(dive: UnifiedDive, index: int) -> Tuple[Optional[float], Dict[int, float], Optional[SampleChannels]]:
+    """Sample ``index``'s temperature, tank pressures (per tank) and
+    channels, each value it does not log taken from the last sample before
+    it that does: a computer logs a tank pressure, the temperature or the
+    NDL every few samples, so most samples miss some. NDL and the next
+    deco stop are one reading: whichever was logged last wins, so a stop
+    held from earlier never hides a newer NDL. A rebreather's O2 cells are
+    held one by one, like the tank pressures. Nothing is invented before
+    the first reading."""
+    temp: Optional[float] = None
+    pressures: Dict[int, float] = {}
+    cells: Dict[int, float] = {}
+    held: Dict[str, Any] = {}
+    deco: Dict[str, Any] = {}
+    for s in dive.samples[:index + 1]:
+        if s.temp is not None:
+            temp = s.temp
+        ch = s.channels
+        if ch is not None and ch.pressures:
+            pressures.update(ch.pressures)
+        elif s.pressure is not None:
+            pressures[0] = s.pressure
+        if ch is None:
+            continue
+        cells.update(ch.o2_cells)
+        if ch.deco_stop_depth is not None or ch.ndl is not None:
+            deco = {"deco_stop_depth": ch.deco_stop_depth, "ndl": ch.ndl}
+        for name in _HELD_CHANNELS:
+            value = getattr(ch, name)
+            if value is not None:
+                held[name] = value
+    values = {**held, **{k: v for k, v in deco.items() if v is not None}}
+    if cells:
+        values["o2_cells"] = cells
+    return temp, pressures, (SampleChannels(**values) if values else None)
+
+
+def cells_text(cells: Dict[int, float]) -> str:
+    """The O2 cells on one line, in cell order, ``Cells 1.22 / 1.19 / 1.21
+    bar``; a cell between two others that has no reading is a dash."""
+    top = max(cells)
+    return "Cells " + " / ".join(f"{cells[i]:.2f}" if i in cells else "-" for i in range(top + 1)) + " bar"
+
+
 def sample_details(dive: UnifiedDive, index: int, system: str = core_units.METRIC) -> Dict[str, Any]:
     """The tooltip for sample ``index`` of ``dive``: display-ready text per
     key, only the keys the sample has data for, plus ``lines`` (the texts in
@@ -198,18 +245,18 @@ def sample_details(dive: UnifiedDive, index: int, system: str = core_units.METRI
     6 m for 3 min, TTS 12 min``) when the next stop is deeper than 0;
     ``gas`` (the active gas); ``tanks`` (``Tank 1 162 bar`` per tank
     pressure the sample holds, named as on the page); ``cns``, ``po2``,
-    ``setpoint``, ``heart_rate``, ``gas_time``. ``{}`` for an index outside
-    the profile."""
+    ``setpoint``, ``cells`` (a rebreather's O2 cells, ``Cells 1.22 / 1.19 /
+    1.21 bar``), ``heart_rate``, ``gas_time``. A value the sample does not
+    log is the last one logged before it (`held_values`): computers log a
+    tank pressure or the NDL every few samples, not at each. ``{}`` for an
+    index outside the profile."""
     if not 0 <= index < len(dive.samples):
         return {}
     s = dive.samples[index]
     out: Dict[str, Any] = {"time": clock_text(s.time or 0), "depth": core_units.format_with_label("depth", s.depth, system)}
-    if s.temp is not None:
-        out["temp"] = core_units.format_with_label("temperature", s.temp, system)
-    ch = s.channels
-    pressures: Dict[int, float] = dict(ch.pressures) if ch is not None else {}
-    if not pressures and s.pressure is not None:
-        pressures[0] = s.pressure
+    temp, pressures, ch = held_values(dive, index)
+    if temp is not None:
+        out["temp"] = core_units.format_with_label("temperature", temp, system)
     if ch is not None:
         in_deco = (ch.deco_stop_depth or 0) > 0
         if in_deco:
@@ -234,6 +281,8 @@ def sample_details(dive: UnifiedDive, index: int, system: str = core_units.METRI
             out["po2"] = f"PO2 {ch.ppo2:.2f} bar"
         if ch.setpoint is not None:
             out["setpoint"] = f"Setpoint {ch.setpoint:.2f} bar"
+        if ch.o2_cells:
+            out["cells"] = cells_text(ch.o2_cells)
         if ch.heart_rate is not None:
             out["heart_rate"] = f"HR {int(ch.heart_rate)} bpm"
         if ch.gas_time is not None:
@@ -269,5 +318,6 @@ def dive_from_samples(samples: Sequence[Dict[str, Any]]) -> UnifiedDive:
                        max_depth=max((s.depth for s in kept), default=0.0), samples=kept)
 
 
-__all__ = ["DETAIL_ORDER", "active_gas_at", "active_gas_timeline", "ceiling_series", "clock_text",
-           "detail_lines", "dive_from_samples", "gas_label", "gas_name", "gas_switch_markers", "sample_details", "tank_label"]
+__all__ = ["DETAIL_ORDER", "active_gas_at", "active_gas_timeline", "ceiling_series", "cells_text", "clock_text",
+           "detail_lines", "dive_from_samples", "gas_label", "gas_name", "gas_switch_markers", "held_values", "sample_details",
+           "tank_label"]

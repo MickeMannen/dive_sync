@@ -244,6 +244,10 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
                 overrides["use_garmin_cache_override"] = bool(custom_settings["use_garmin_cache"])
             if custom_settings.get("propagate_deletes") is not None:
                 overrides["propagate_deletes_override"] = bool(custom_settings["propagate_deletes"])
+            # plans/gap-roadmap.md R13 (beta): a job, the dashboard's Sync now or
+            # the desktop Sync page can send this run's new Garmin dives as .fit
+            if custom_settings.get("garmin_fit_upload") is not None:
+                overrides["garmin_fit_upload_override"] = bool(custom_settings["garmin_fit_upload"])
             if custom_settings.get("mirror"):
                 overrides["mirror_override"] = True
             if "date_from" in custom_settings:
@@ -260,6 +264,7 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
             results = engine.run_sync(dry_run=dry_run)
         last_sync_results[job_id] = results
         logger.info("Synchronization completed successfully.")
+        _notify_finished(job_id, _run_label(engine), results, dry_run)
     except progress.Stopped:
         error = "Stopped before it finished."
         if engine is not None:
@@ -295,6 +300,36 @@ def _notify_failure(job_id: str, error: str) -> None:
             notify_run_failure(notify_url, job_id, error)
     except Exception as notify_error:
         logger.warning("Failed to send failure alert for job '%s': %s", job_id, notify_error)
+
+
+def _run_label(engine) -> Optional[str]:
+    """``sender -> receiver`` by service id for the run summary (R24), the
+    direction the run actually went; None when the engine cannot say."""
+    try:
+        receiver = engine.receiver_id()
+        if receiver == engine.target_id:
+            return f"{engine.source_id} -> {engine.target_id}"
+        if receiver == engine.source_id:
+            return f"{engine.target_id} -> {engine.source_id}"
+        return f"{engine.source_id} / {engine.target_id}"
+    except Exception:
+        return None
+
+
+def _notify_finished(job_id: str, pair: Optional[str], results: Any, dry_run: bool) -> None:
+    """Best-effort run summary to notify_url when ``notify_on`` asks for one
+    (plans/gap-roadmap.md R24: 'always', or 'changes' after a run that wrote,
+    failed a write or raised a conflict). Like _notify_failure it never
+    raises: the run it reports on has already finished."""
+    try:
+        from src.core.config import ConfigManager
+        from src.core.notify import notify_run_finished, should_notify_finished
+        settings = ConfigManager.load_settings()
+        results = results if isinstance(results, dict) else {}
+        if settings.notify_url and should_notify_finished(settings.notify_on, results, dry_run):
+            notify_run_finished(settings.notify_url, job_id, pair, results, dry_run)
+    except Exception as notify_error:
+        logger.warning("Failed to send the run summary for job '%s': %s", job_id, notify_error)
 
 
 def _next_daily_occurrence(now: datetime, hour: int, minute: int) -> datetime:

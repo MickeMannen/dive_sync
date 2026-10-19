@@ -192,14 +192,18 @@ def _compare_fit_round_trip(fit_path, tmp_path):
     assert result.format_id == "ssrf" and result.warnings == [] and len(result.dives) == 1
     again = result.dives[0]
     mine, theirs = dive.model_dump(exclude={"samples", "events"}), again.model_dump(exclude={"samples", "events"})
-    differs = {k for k in mine if mine[k] != theirs[k]}
+    differs = {k for k in mine if mine[k] != theirs.get(k)}
     # legitimately different: the zone and the UTC instant (no Subsurface slot), temp max/avg (the
-    # profile holds them), GPS rounded to six decimals, the Subsurface adapter's five service fields
-    assert differs == {"date_time_utc", "timezone", "temp_max", "temp_avg", "lat", "lng", "exit_lat", "exit_lng", "service_fields"}
+    # profile holds them), GPS rounded to six decimals, the Subsurface adapter's five service fields,
+    # and the watch's SAC, RMV and OTU (R6 reads them from the FIT; Subsurface computes its own, and
+    # plans/gap-roadmap.md R9 is where they reach other formats)
+    assert differs == {"date_time_utc", "timezone", "temp_max", "temp_avg", "lat", "lng", "exit_lat", "exit_lng", "service_fields",
+                       "sac", "rmv", "otu"}
+    assert all(theirs.get(k) is None for k in ("sac", "rmv", "otu"))
     assert theirs["timezone"] is None and theirs["date_time_utc"] is None
     for key in ("lat", "lng", "exit_lat", "exit_lng"):
         assert theirs[key] == pytest.approx(mine[key], abs=1e-6)
-    assert again.service_fields == {"suit": None, "divemaster": None, "rating": None, "visibility_stars": None, "tags": []}
+    assert again.service_fields == {"divemaster": None, "rating": None, "visibility_stars": None, "tags": []}
     # carried fields: the computer, the deco settings, water, exit, bottom time, CNS, mode, external ids
     for key in ("computer_vendor", "computer_model", "computer_serial", "computer_firmware", "gf_low", "gf_high", "deco_model",
                 "water_type", "water_density", "dive_mode", "surface_interval", "bottom_time", "cns_start", "cns_end",
@@ -323,7 +327,8 @@ def test_handwritten_imperial_dive(handwritten):
     assert (d.weight, d.weight_unit) == (3.629, "kilogram")   # 6 + 2 lb
     assert [g.model_dump() for g in d.gas_mixtures] == [
         {"oxygen": 32.0, "helium": 0.0, "start_pressure": 199.948, "end_pressure": 48.263, "tank_volume": 11.097, "tank_name": "AL80", "tank_role": None}]
-    assert d.service_fields == {"suit": "3mm shorty", "divemaster": "D. Master", "rating": 3, "visibility_stars": 4, "tags": ["training", "wreck"]}
+    assert d.service_fields == {"divemaster": "D. Master", "rating": 3, "visibility_stars": 4, "tags": ["training", "wreck"]}
+    assert d.suit == "3mm shorty"
     assert (d.location, d.lat, d.lng) == ("Imperial Pinnacle", 1.5, 2.5)
     assert (d.computer_vendor, d.computer_model, d.computer_serial, d.computer_firmware) == ("Suunto", "EON Steel", "EON-000001", "2.5.4")
     assert d.samples[0].model_dump() == {"depth": 0.0, "temp": 30.0, "time": 0, "pressure": 199.948}, "pressure set, channels None"
@@ -335,8 +340,9 @@ def test_handwritten_imperial_dive(handwritten):
 def test_handwritten_ccr_dive(handwritten):
     """Dive 103: dctype CCR, cylinder uses, the sensor remap and the legacy
     o2pressure, po2 as the setpoint with dc_supplied_ppo2 as the PO2, the
-    O2 sensors ignored, modechange / SP change / bookmark / unknown events,
-    the dive's watersalinity, a blank dive_sync id skipped."""
+    three O2 cells (sensor1..3, held until the next reading, R18),
+    modechange / SP change / bookmark / unknown events, the dive's
+    watersalinity, a blank dive_sync id skipped."""
     d = handwritten[0][2]
     assert d.dive_mode == "ccr" and (d.water_type, d.water_density) == ("salt", 1030.0)
     assert (d.deco_model, d.gf_low, d.gf_high) == (None, 45, 75)
@@ -358,11 +364,12 @@ def test_handwritten_ccr_dive(handwritten):
         {"time": 3360, "type": "alert", "value": 7.0}]
     s = d.samples
     assert [x.pressure for x in s] == [180.0, 170.0, 165.0, None, None, 150.0], "the lowest-numbered tank with readings"
-    assert _channels(s[0]) == {"pressures": {1: 180.0, 2: 150.0}, "ppo2": 0.7, "setpoint": 0.7}
-    assert _channels(s[1]) == {"pressures": {1: 170.0, 2: 148.0}, "deco_stop_depth": 6.0, "deco_stop_time": 180, "cns": 5.0, "ppo2": 0.7, "setpoint": 1.2}
+    cells = {0: 0.69, 1: 0.71, 2: 0.7}
+    assert _channels(s[0]) == {"pressures": {1: 180.0, 2: 150.0}, "ppo2": 0.7, "setpoint": 0.7, "o2_cells": cells}
+    assert _channels(s[1]) == {"pressures": {1: 170.0, 2: 148.0}, "deco_stop_depth": 6.0, "deco_stop_time": 180, "cns": 5.0, "ppo2": 0.7, "setpoint": 1.2, "o2_cells": cells}
     # on bailout (OC) the computer's po2 is still its setpoint: it reports its PO2 separately
-    assert _channels(s[2]) == {"pressures": {1: 165.0, 2: 140.0}, "deco_stop_depth": 6.0, "deco_stop_time": 180, "cns": 5.0, "ppo2": 0.7, "setpoint": 0.9}
-    assert _channels(s[4]) == {"deco_stop_depth": 0.0, "deco_stop_time": 0, "cns": 9.0, "ppo2": 0.7, "setpoint": 1.3}
+    assert _channels(s[2]) == {"pressures": {1: 165.0, 2: 140.0}, "deco_stop_depth": 6.0, "deco_stop_time": 180, "cns": 5.0, "ppo2": 0.7, "setpoint": 0.9, "o2_cells": cells}
+    assert _channels(s[4]) == {"deco_stop_depth": 0.0, "deco_stop_time": 0, "cns": 9.0, "ppo2": 0.7, "setpoint": 1.3, "o2_cells": cells}
     assert all(x.temp == 14.0 for x in s)
 
 
@@ -385,6 +392,25 @@ def test_handwritten_hand_logged_dive(handwritten):
 
 
 # --- edge cases on small strings -------------------------------------------------
+
+def test_o2_cells_change_one_at_a_time_and_a_zero_ends_a_cell():
+    """Subsurface writes a sensorN only when that cell's reading changes
+    and 0 when it has none; each cell is held on its own, sensor1 is cell 0,
+    and a sensorN without a unit is still the pressure-slot remap."""
+    text = (
+        "<divelog program='subsurface' version='3'><dives><dive date='2026-06-01' time='10:00:00' duration='3:00 min'>"
+        "<cylinder o2='21.0%' use='diluent' /><cylinder o2='100.0%' use='oxygen' />"
+        "<divecomputer model='Shearwater Perdix' dctype='CCR' no_o2sensors='3'>"
+        "<sample time='0:00 min' depth='0.0 m' po2='0.7 bar' sensor1='0.69 bar' sensor2='0.71 bar' sensor3='0.70 bar' />"
+        "<sample time='1:00 min' depth='20.0 m' sensor1='1.22 bar' sensor3='1.19 bar' />"
+        "<sample time='2:00 min' depth='20.0 m' pressure0='150.0 bar' sensor0='1' sensor2='0.0 bar' />"
+        "<sample time='3:00 min' depth='0.0 m' />"
+        "</divecomputer></dive></dives></divelog>")
+    d = read_ssrf_string(text)[0][0]
+    assert [s.channels.o2_cells for s in d.samples] == [{0: 0.69, 1: 0.71, 2: 0.7}, {0: 1.22, 1: 0.71, 2: 1.19},
+                                                        {0: 1.22, 2: 1.19}, {0: 1.22, 2: 1.19}]
+    assert [s.channels.setpoint for s in d.samples] == [0.7] * 4 and d.samples[2].channels.pressures == {1: 150.0}
+
 
 def test_not_a_divelog_and_empty_log():
     with pytest.raises(SsrfReadError, match=r"x.xml: not a Subsurface divelog \(root element <uddf>\)"):
@@ -538,3 +564,41 @@ def test_uwmedia_local_exports_read_without_warnings():
             assert dive.dive_mode in ("oc_single_gas", "oc_multi_gas")
             assert not any(s.channels and s.channels.setpoint for s in dive.samples)
         assert dive.water_density in (1000.0, 1020.0, 1025.0, 1030.0) and dive.water_type is not None
+
+
+def test_air_temperature_is_read_from_the_computer_or_the_dive(tmp_path):
+    """R10: ``temperature air=`` on the divecomputer first, else the dive's
+    own ``<divetemperature air=>`` (what Subsurface writes for a value the
+    diver typed), in °C or °F; none when neither."""
+    def dive_with(dc_temp, dive_temp=""):
+        path = tmp_path / "t.ssrf"
+        path.write_text(f"""<divelog program='subsurface' version='3'><dives>
+<dive number='1' date='2026-03-14' time='09:30:05' duration='10:00 min'>{dive_temp}
+<divecomputer model='Perdix 2'>{dc_temp}<depth max='10.0 m' /><sample time='0:00 min' depth='0.0 m' /><sample time='10:00 min' depth='0.0 m' /></divecomputer>
+</dive></dives></divelog>""", encoding="utf-8")
+        dives, _warnings = read_ssrf(path)
+        return dives[0]
+    assert dive_with("<temperature air='28.5 C' water='24.0 C' />").air_temp == 28.5
+    assert dive_with("<temperature water='24.0 C' />", "<divetemperature air='82.4 F' />").air_temp == 28.0
+    assert dive_with("<temperature air='28.5 C' />", "<divetemperature air='20.0 C' />").air_temp == 28.5   # the computer's first
+    assert dive_with("").air_temp is None
+
+
+def test_read_sample_values_takes_xml_and_git_spellings():
+    """plans/gap-roadmap.md R12: the sample attribute reader is shared with
+    the Subsurface git-storage adapter, whose tokens carry the unit without
+    a space (``po2=1.2bar``, ``stopdepth=3.0m``, ``ndl=10:00``)."""
+    from src.core.convert.ssrf_reader import RawSample, read_sample_values
+    for attrs in ({"ndl": "10:00 min", "stopdepth": "3.0 m", "po2": "1.2 bar", "sensor1": "1.19 bar", "cns": "4%",
+                   "heartbeat": "70", "in_deco": "1", "o2pressure": "150.0 bar"},
+                  {"ndl": "10:00", "stopdepth": "3.0m", "po2": "1.2bar", "sensor1": "1.19bar", "cns": "4%",
+                   "heartbeat": "70", "in_deco": "1", "o2pressure": "150.0bar"}):
+        raw = RawSample()
+        read_sample_values(raw, attrs, {}, 2)
+        assert raw.values == {"ndl": 600, "stopdepth": 3.0, "po2": 1.2, "cell0": 1.19, "cns": 4.0, "heartbeat": 70,
+                              "in_deco": True}
+        assert raw.pressures == {2: 150.0}
+    # a plain-number sensorN is the .ssrf pressure-slot remap, not a cell
+    raw, remap = RawSample(), {}
+    read_sample_values(raw, {"sensor1": "3"}, remap, 1)
+    assert remap == {1: 3} and raw.values == {}
