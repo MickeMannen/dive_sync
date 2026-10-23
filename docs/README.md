@@ -32,4 +32,3 @@ DiveSync keeps dive logs in sync between Garmin Connect, Divelogs.org, Subsurfac
 ## Service notes
 
 - [Garmin Connect diving API](garmin_diving_api.md) - what the API accepts and refuses (why gases never reach Garmin).
-- [Submersion sync format](submersion_sync_format.md) - the Submersion store, for when that sync is enabled again.

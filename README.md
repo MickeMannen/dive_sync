@@ -2,9 +2,6 @@
 # Dive Sync 
 ## Keep a backup of your dives! I am using the app but there might be cases that will cause issues
 
-> **Note:** Submersion sync doesn't work as of now and is disabled: it isn't offered in the web dashboard, the desktop app, `setup_credentials.py` or the CLI.
-
-
 Dive Sync is a dive log synchronization engine that matches and syncs your dive history between **Garmin Connect**, **Divelogs.org**, **Subsurface** (Subsurface Cloud, a Subsurface git checkout, or a UDDF file) and, in beta, **MySSI** (new dives only; see the limitations).
 
 I started this project when i got back to diving and had to import all dives from logbooks to Garmin and to Divelogs.

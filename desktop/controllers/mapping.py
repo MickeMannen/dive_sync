@@ -97,7 +97,7 @@ class MappingController(QObject):
         self._selected: Optional[Dict[str, str]] = None      # {"receiver": ..., "id": ...}
         # Click-to-connect (2026-09-23): a sender field can be "armed" with a
         # click and the receiver field clicked second, instead of dragged onto.
-        # With 36 Submersion fields a drag often spans more than the viewport,
+        # With a long field list a drag often spans more than the viewport,
         # and neither board auto-scrolls while a drag is in flight.
         self._armed: Optional[Dict[str, str]] = None         # {"receiver": ..., "key": ...}
         self._view_direction: str = ""                         # the direction picked in the header, unsaved

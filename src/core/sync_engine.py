@@ -615,8 +615,6 @@ class SyncEngine:
             self.settings.propagate_deletes = self.pair.propagate_deletes
         if self.pair.create_on_garmin is not None:
             self.settings.create_on_garmin = self.pair.create_on_garmin
-        if self.pair.create_device_dives_on_submersion is not None:
-            self.settings.create_device_dives_on_submersion = self.pair.create_device_dives_on_submersion
         if self.pair.garmin_fit_upload is not None:
             self.settings.garmin_fit_upload = self.pair.garmin_fit_upload
 
@@ -729,24 +727,6 @@ class SyncEngine:
                                            "source_id": entry.get("source_id"),
                                            "reason": f"{name} did not add the dive"})
         return None
-
-    def _awaits_manual_import(self, receiver_id: str, dive: UnifiedDive) -> bool:
-        """True when ``dive`` must not be created on ``receiver_id`` because
-        the receiver gets its dive-computer data from the diver's own file
-        import instead (rework.md F17).
-
-        Submersion is that receiver: its FIT import derives the depth profile,
-        the cylinders, the tank-pressure series and the gas switches from the
-        ``.fit`` the diver hands the app, so dive_sync creating the dive first
-        would only leave a second, emptier copy for that import to duplicate.
-        A hand-logged Garmin dive has no ``.fit`` to import and is created
-        here as before; ``create_device_dives_on_submersion`` lifts the hold
-        on the recorded ones for anyone who wants the old behaviour."""
-        if receiver_id != "submersion" or self.settings.create_device_dives_on_submersion:
-            return False
-        # The sender says so when it knows (Garmin's metadataDTO.manualActivity);
-        # otherwise a dive that carries a profile was recorded by a computer.
-        return dive.device_logged if dive.device_logged is not None else bool(dive.samples)
 
     def _checked_rules(self) -> Dict[str, List[SyncRule]]:
         """The run's rules that are valid against this pair's catalogue.
@@ -1060,7 +1040,6 @@ class SyncEngine:
                  grace_window_override: Optional[int] = None,
                  propagate_deletes_override: Optional[bool] = None,
                  create_on_garmin_override: Optional[bool] = None,
-                 create_device_dives_on_submersion_override: Optional[bool] = None,
                  garmin_fit_upload_override: Optional[bool] = None,
                  use_garmin_cache_override: Optional[bool] = None,
                  mirror_override: Optional[bool] = None) -> Dict[str, Any]:
@@ -1100,8 +1079,6 @@ class SyncEngine:
             self.settings.propagate_deletes = propagate_deletes_override
         if create_on_garmin_override is not None:
             self.settings.create_on_garmin = create_on_garmin_override
-        if create_device_dives_on_submersion_override is not None:
-            self.settings.create_device_dives_on_submersion = create_device_dives_on_submersion_override
         if garmin_fit_upload_override is not None:
             self.settings.garmin_fit_upload = garmin_fit_upload_override
         # Mirror (the Sync page's checkbox): the receiver becomes a copy of the
@@ -1115,7 +1092,6 @@ class SyncEngine:
             self.settings.sync_filters.only_new = False
             self.settings.propagate_deletes = True
             self.settings.create_on_garmin = True
-            self.settings.create_device_dives_on_submersion = True
             logger.info("Mirror run: %s will be made a copy of the other side (deletes dives it does not have)",
                         self.receiver_id())
 
@@ -1379,15 +1355,6 @@ class SyncEngine:
         elif tgt in writable:
             for dive in unique_source:
                 advance(f"New dive {dive.date_time} -> {self.target_name}")
-                # A dive the receiver expects to import from its own .fit
-                # (rework.md F17) is left for that import to create.
-                if self._awaits_manual_import(tgt, dive):
-                    logger.info("  Not creating the dive at %s on %s: a dive computer recorded it, so it comes in "
-                                "with your own .fit import there (create_device_dives_on_submersion is off)",
-                                dive.date_time, self.target_name)
-                    sync_results["skipped"].append(
-                        {"reason": "awaits_manual_fit_import", "time": str(dive.date_time)})
-                    continue
                 if self._refused_upload(self.target, self.target_name, dive, sync_results):
                     continue
                 logger.info("Sync action: Upload %s dive at %s to %s", self.source_name, dive.date_time, self.target_name)
@@ -1420,15 +1387,6 @@ class SyncEngine:
         elif src in writable:
             for dive in unique_target:
                 advance(f"New dive {dive.date_time} -> {self.source_name}")
-                # A dive the receiver expects to import from its own .fit
-                # (rework.md F17) is left for that import to create.
-                if self._awaits_manual_import(src, dive):
-                    logger.info("  Not creating the dive at %s on %s: a dive computer recorded it, so it comes in "
-                                "with your own .fit import there (create_device_dives_on_submersion is off)",
-                                dive.date_time, self.source_name)
-                    sync_results["skipped"].append(
-                        {"reason": "awaits_manual_fit_import", "time": str(dive.date_time)})
-                    continue
                 if self._refused_upload(self.source, self.source_name, dive, sync_results):
                     continue
                 logger.info("Sync action: Upload %s dive at %s to %s", self.target_name, dive.date_time, self.source_name)

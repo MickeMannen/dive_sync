@@ -11,7 +11,7 @@ def test_every_account_keeps_its_files_in_one_folder(tmp_path):
     assert layout.garmin_token_dir("me@x.org", "", base) == os.path.join(base, "garmin", "me@x.org", "tokens")
     assert layout.subsurface_cloud_dir("me@x.org", base) == os.path.join(base, "subsurface", "me@x.org", "cloud")
     # a side without accounts
-    assert layout.dives_dir("submersion", None, base) == os.path.join(base, "submersion", "default", "data")
+    assert layout.dives_dir("subsurface", None, base) == os.path.join(base, "subsurface", "default", "data")
 
 
 def test_account_folder_names_stay_inside_the_service_folder():

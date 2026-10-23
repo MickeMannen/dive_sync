@@ -98,8 +98,7 @@ ColumnLayout {
             visible: text !== ""
         }
         // The account each service syncs and downloads with (rework.md E19),
-        // on a row of its own; Submersion is one store, so it has nothing to
-        // pick. A picker shows only with a choice to make, and the row only
+        // on a row of its own. A picker shows only with a choice to make, and the row only
         // with a picker on it.
         RowLayout {
             spacing: 16

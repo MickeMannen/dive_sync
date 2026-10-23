@@ -1,51 +1,12 @@
-"""Guards on the committed Submersion / Subsurface Cloud fixtures: they parse,
+"""Guards on the committed Subsurface Cloud and Garmin FIT fixtures: they parse,
 carry what the adapters will need, and contain no leaked identifiers."""
-import base64
-import json
 import os
 import re
-import zlib
 
 import pytest
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-SUBMERSION = os.path.join(DATA, "submersion")
 SUBSURFACE = os.path.join(DATA, "subsurface_cloud")
-
-
-def _submersion_files():
-    return sorted(os.listdir(SUBMERSION)) if os.path.isdir(SUBMERSION) else []
-
-
-@pytest.mark.skipif(not os.path.isdir(SUBMERSION), reason="submersion fixtures not present")
-def test_submersion_fixture_shape():
-    manifests = [f for f in _submersion_files() if f.endswith(".manifest.json")]
-    bases = [f for f in _submersion_files() if ".base." in f]
-    assert len(manifests) == 2 and len(bases) == 2
-    for name in manifests:
-        m = json.load(open(os.path.join(SUBMERSION, name)))
-        assert m["formatVersion"] == 1 and m["schemaVersion"] == 210 and m["provider"] == "s3"
-        assert m["deviceName"].startswith("Test device")
-        assert name == f"ssv1.{m['deviceId']}.manifest.json"
-    peers = [json.load(open(os.path.join(SUBMERSION, n)))["appliedPeerHlc"] for n in manifests]
-    assert any(peers), "one device should have applied the other's HLC"
-
-    base = json.load(open(os.path.join(SUBMERSION, bases[0])))
-    assert base["version"] == 2 and base["seq"] == 1
-    t = base["data"]
-    dives = t["dives"]
-    assert len(dives) == 5
-    assert all(d["diveDateTime"] > 10**12 for d in dives)  # milliseconds
-    assert t["divers"][0]["isDefault"] and t["divers"][0]["name"] == "Test Diver"
-    tanks_per_dive = {d["id"]: sum(1 for x in t["diveTanks"] if x["diveId"] == d["id"]) for d in dives}
-    assert sorted(tanks_per_dive.values()) == [1, 1, 1, 2, 2]
-    two_tank = next(d for d in dives if tanks_per_dive[d["id"]] == 2)
-    orders = sorted(x["tankOrder"] for x in t["diveTanks"] if x["diveId"] == two_tank["id"])
-    assert orders == [0, 1]
-    series = next(x for x in t["diveProfileSeries"] if x["diveId"] == dives[0]["id"])
-    raw = zlib.decompress(base64.b64decode(series["samples"]))
-    assert series["codecVersion"] == 1 and series["sampleCount"] > 100 and len(raw) > series["sampleCount"]
-    assert all(row["bytes"] == "" for row in t["importedFiles"])  # stripped
 
 
 @pytest.mark.skipif(not os.path.isdir(SUBSURFACE), reason="subsurface fixtures not present")
@@ -70,7 +31,7 @@ def test_fixtures_contain_no_identifiers():
     for root, _dirs, files in os.walk(DATA):
         for fn in files:
             path = os.path.join(root, fn)
-            if fn.endswith((".json", ".p0000")) or "subsurface_cloud" in root:
+            if fn.endswith(".json") or "subsurface_cloud" in root:
                 text = open(path, encoding="utf-8", errors="replace").read()
                 if re.search(r"[A-Za-z0-9._%+-]+@(?!example\.com)[A-Za-z0-9.-]+\.[a-z]{2,}", text):
                     leaks.append((fn, "email"))

@@ -1,4 +1,4 @@
-"""MySSI client and sync adapter (plans/convert.md I7, plans/myssi-sync.md; features.md B27).
+"""MySSI client and sync adapter (plans/convert.md I7, plans/myssi-sync.md).
 
 **Unofficial route - can stop working at any time.** SSI publishes no API
 and no file import. This module talks to the backend of the MySSI Android
@@ -719,7 +719,7 @@ def computer_reference(dive: UnifiedDive) -> Optional[str]:
 
 # The services whose id `computer_reference` writes and `reference_ids`
 # reads back; a reference of any other form is a computer serial.
-REFERENCE_SERVICES = ("garmin", "divelogs", "subsurface", "shearwater", "submersion", "uddf")
+REFERENCE_SERVICES = ("garmin", "divelogs", "subsurface", "shearwater", "uddf")
 
 
 def reference_ids(computer_ref: Optional[str]) -> Dict[str, str]:

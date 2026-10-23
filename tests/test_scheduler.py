@@ -236,8 +236,8 @@ def test_run_download_thread_services_picks_the_right_path_per_service(monkeypat
     monkeypatch.setattr(dive_cache, "download_service_dives",
                         lambda service, overwrite=False, base_dir=None, username=None: cache_calls.append(service) or 1)
 
-    scheduler.run_download_thread(base_dir=str(tmp_path), services=["submersion"])
-    assert engine_calls == [] and cache_calls == ["submersion"]   # no Garmin/Divelogs API hit
+    scheduler.run_download_thread(base_dir=str(tmp_path), services=["ssi"])
+    assert engine_calls == [] and cache_calls == ["ssi"]   # no Garmin/Divelogs API hit
     assert scheduler.last_download_results == {"success": True}
 
     engine_calls.clear(); cache_calls.clear()
@@ -252,8 +252,8 @@ def test_run_download_thread_services_picks_the_right_path_per_service(monkeypat
         raise RuntimeError("store unreachable")
 
     monkeypatch.setattr(dive_cache, "download_service_dives", boom)
-    scheduler.run_download_thread(base_dir=str(tmp_path), services=["garmin", "submersion", "subsurface"])
-    assert engine_calls == [(True, False)] and cache_calls == ["submersion", "subsurface"]
+    scheduler.run_download_thread(base_dir=str(tmp_path), services=["garmin", "ssi", "subsurface"])
+    assert engine_calls == [(True, False)] and cache_calls == ["ssi", "subsurface"]
     assert scheduler.last_download_results == {"success": False}
 
 
@@ -276,11 +276,11 @@ def test_run_sync_thread_builds_an_engine_from_two_specs(monkeypatch, tmp_path):
         return FakeEngine()
 
     monkeypatch.setattr(pairs, "engine_for", fake_engine_for)
-    scheduler.run_sync_thread(False, {"source": "garmin", "target": "submersion",
-                                      "directionality": "to_submersion"})
+    scheduler.run_sync_thread(False, {"source": "garmin", "target": "subsurface-cloud",
+                                      "directionality": "to_subsurface"})
 
-    assert captured["specs"] == ("garmin", "submersion")
-    assert captured["overrides"].get("direction_override") == "to_submersion"
+    assert captured["specs"] == ("garmin", "subsurface-cloud")
+    assert captured["overrides"].get("direction_override") == "to_subsurface"
 
 
 def test_run_download_thread_records_failure(monkeypatch, tmp_path):

@@ -369,34 +369,30 @@ def test_sync_controller_runs_scheduler_off_thread(qapp, scratch_data_dir, fake_
     assert wait_until(qapp, lambda: not c.running) and c.status == "Sync complete. 1 dive failed — check the log."
 
 
-def test_sync_controller_offers_every_configured_service(qapp, scratch_data_dir, fake_keyring, monkeypatch, submersion_enabled):
-    """Submersion and Subsurface are selectable without a hand-written pair:
+def test_sync_controller_offers_every_configured_service(qapp, scratch_data_dir, fake_keyring, monkeypatch):
+    """Subsurface is selectable without a hand-written pair:
     the page offers each combination of the services that have credentials,
     and those travel to the scheduler as two specs rather than a pair id."""
     from desktop.controllers.sync import SyncController
     from desktop import credentials as creds_store, logging_bridge
     from src.core import scheduler
-    from src.core.config import (CredentialsModel, DivelogsCredentials, GarminCredentials,
-                                 SubmersionCredentials, SubsurfaceCredentials)
+    from src.core.config import CredentialsModel, DivelogsCredentials, GarminCredentials, SubsurfaceCredentials
     creds_store.save_credentials_model(CredentialsModel(
         garmin=[GarminCredentials(username="g@x", password="pw")],
         divelogs=[DivelogsCredentials(username="d", password="pw")],
         subsurface=SubsurfaceCredentials(email="me@x.org", password="pw"),
-        submersion=SubmersionCredentials(endpoint_url="s3.eu-central-003.backblazeb2.com", bucket="b",
-                                         access_key_id="k", secret_access_key="s"),
     ))
     c = SyncController(logging_bridge.install())
-    assert [s["id"] for s in c.services] == ["garmin", "divelogs", "submersion", "subsurface"]
+    assert [s["id"] for s in c.services] == ["garmin", "divelogs", "subsurface"]
 
     labels = {p["label"]: p for p in c.pairs}
     assert "Garmin Connect ↔ Divelogs.org" in labels
-    assert "Garmin Connect ↔ Submersion" in labels
     assert "Garmin Connect ↔ Subsurface Cloud" in labels
-    assert "Divelogs.org ↔ Submersion" in labels
-    assert "Submersion ↔ Subsurface Cloud" in labels
+    assert "Divelogs.org ↔ Subsurface Cloud" in labels
+    assert not any("Submersion" in label for label in labels)
     # Garmin/Divelogs keeps the empty id it has always had.
     assert labels["Garmin Connect ↔ Divelogs.org"]["id"] == ""
-    assert [d["value"] for d in c.directionsFor("garmin~submersion")] == ["to_submersion", "to_garmin"]
+    assert [d["value"] for d in c.directionsFor("garmin~subsurface")] == ["to_subsurface", "to_garmin"]
     # Subsurface Cloud's spec differs from its service id.
     assert labels["Garmin Connect ↔ Subsurface Cloud"]["target"] == "subsurface-cloud"
 
@@ -404,9 +400,9 @@ def test_sync_controller_offers_every_configured_service(qapp, scratch_data_dir,
     monkeypatch.setattr(scheduler, "run_sync_thread",
                         lambda dry_run, custom_settings=None: seen.update(custom=custom_settings))
     monkeypatch.setattr(scheduler, "is_sync_running", False)
-    c.runSync(True, "to_submersion", True, True, "garmin~submersion")
+    c.runSync(True, "to_subsurface", True, True, "garmin~subsurface")
     assert wait_until(qapp, lambda: not c.running)
-    assert seen["custom"]["source"] == "garmin" and seen["custom"]["target"] == "submersion"
+    assert seen["custom"]["source"] == "garmin" and seen["custom"]["target"] == "subsurface-cloud"
     assert "pair" not in seen["custom"]         # no saved pair to look up
 
     # The built-in Garmin/Divelogs combination stays the plain default run.
@@ -423,10 +419,10 @@ def test_sync_controller_offers_every_configured_service(qapp, scratch_data_dir,
     monkeypatch.setattr(scheduler, "is_download_running", False)
     c.download(False, "")
     assert wait_until(qapp, lambda: not c.running)
-    assert downloads["services"] == ["garmin", "divelogs", "submersion", "subsurface"]
-    c.download(True, "submersion")
+    assert downloads["services"] == ["garmin", "divelogs", "subsurface"]
+    c.download(True, "subsurface")
     assert wait_until(qapp, lambda: not c.running)
-    assert downloads["services"] == ["submersion"] and downloads["overwrite"] is True
+    assert downloads["services"] == ["subsurface"] and downloads["overwrite"] is True
     # the page's ticks: a list, kept in the page's order, unknown ids dropped
     c.download(False, ["subsurface", "garmin", "uddf"])
     assert wait_until(qapp, lambda: not c.running)
@@ -550,7 +546,7 @@ def test_mapping_controller_board_operations(qapp, scratch_data_dir, fake_keyrin
 
 def test_mapping_controller_click_to_connect(qapp, scratch_data_dir, fake_keyring):
     """Clicking a sender field then a receiver field makes the same rule a
-    drag would (2026-09-23): with 36 Submersion fields a drag routinely spans
+    drag would (2026-09-23): with a long field list a drag routinely spans
     more than the viewport and neither board scrolls mid-drag."""
     from desktop.controllers.mapping import MappingController
     m = MappingController()
@@ -602,24 +598,20 @@ def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratc
     # Every card's status line says something from the start, so testing or
     # saving rewrites a line already on screen instead of adding one.
     assert s.garminStatus == s.divelogsStatus == s.subsurfaceStatus == "No account saved yet."
-    assert s.submersionStatus == "Not configured yet."
     s.saveGarminAccounts([{"username": "g@x", "password": "pw", "token_dir": ""}])
     assert s.garminStatus == "Saved: g@x. Press Test to check the login."
     s.saveDivelogsAccounts([{"username": "d", "password": "pw2"}])
-    s.save("me@x.org", "pw3", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "secret", False, "", "hunter2")
+    s.saveSubsurface("me@x.org", "pw3")
     assert s.hasCredentials and s.garminAccounts == [
         {"username": "g@x", "token_dir": "", "has_password": True}]
     assert s.divelogsAccounts == [{"username": "d", "has_password": True}]
     assert s.subsurfaceAccounts == [{"username": "me@x.org", "has_password": True}] and s.message == "Saved to keychain."
-    assert s.submersionBucket == "my-bucket"
-    assert json.loads(fake_keyring.store[(creds_store.SERVICE_NAME, "submersion_secret")])["secret_access_key"] == "secret"
-    assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
-    # keeping a blank password/passphrase keeps the stored ones
+    # keeping a blank password keeps the stored one
     s.saveGarminAccounts([{"username": "g@x", "password": "", "token_dir": ""}])
-    s.save("me@x.org", "", "s3", "https://s3.example.com", "eu-central-1", "my-bucket", "submersion-sync/", "keyid", "", False, "", "")
+    s.saveSubsurface("me@x.org", "")
     assert creds_store.load_credentials_model().get_garmin_accounts()[0].password == "pw"
-    assert json.loads(fake_keyring.store[(creds_store.SERVICE_NAME, "submersion_secret")])["secret_access_key"] == "secret"
-    assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
+    assert creds_store.load_credentials_model().get_subsurface_accounts()[0].password == "pw3"
+    assert not any("submersion" in key for _service, key in fake_keyring.store)
     # Subsurface Cloud holds several accounts too (rework.md E19): a saved
     # list replaces the stored one, a blank password keeps the stored one.
     s.saveSubsurface("other@x.org", "")
@@ -630,21 +622,6 @@ def test_settings_controller_saves_to_keychain_and_handles_profiles(qapp, scratc
     stored = {a.email: a.password for a in creds_store.load_credentials_model().get_subsurface_accounts()}
     assert stored == {"other@x.org": "pw4", "me@x.org": "pw3"}
     assert s.subsurfaceStatus == "2 accounts saved. Press Test to check a login."
-    s.saveSubmersion("s3", "s3.eu-central-003.backblazeb2.com", "", "other-bucket", "", "keyid", "", False, "", "")
-    assert s.submersionBucket == "other-bucket" and s.submersionEndpointUrl == "https://s3.eu-central-003.backblazeb2.com"
-    assert creds_store.load_credentials_model().submersion.passphrase == "hunter2"
-    assert s.submersionStatus == ("Saved: bucket 'other-bucket' at https://s3.eu-central-003.backblazeb2.com. "
-                                  "Press Test to check it.")
-    # Saving a store whose only 'override' repeats the endpoint's own region
-    # leaves nothing overridden, so the Advanced section stays folded away.
-    assert s.submersionRegionIsAuto is True
-    s.saveSubmersion("s3", "s3.eu-central-003.backblazeb2.com", "eu-central-003", "other-bucket", "", "keyid", "",
-                     False, "", "")
-    assert s.submersionRegion == "" and s.submersionRegionIsAuto is True
-    s.saveSubmersion("s3", "s3.eu-central-003.backblazeb2.com", "somewhere-else", "other-bucket", "", "keyid", "",
-                     False, "", "")
-    assert s.submersionRegion == "somewhere-else" and s.submersionRegionIsAuto is False
-    s.saveSubmersion("s3", "s3.eu-central-003.backblazeb2.com", "", "other-bucket", "", "keyid", "", False, "", "")
     # A username saved with no password at all (nothing stored to fall back
     # on) is a half-saved account: the settings page has to be able to show
     # that, or it only surfaces as a login failure on the next sync.
@@ -688,7 +665,7 @@ def test_qml_front_end_loads_without_warnings(qapp, scratch_data_dir, fake_keyri
     sections = root.property("sections").toVariant()   # QJSValue -> list
     assert root.property("currentSection") == sections.index("Settings")   # Settings is the first-run landing page
     assert sections[-1] == "About"
-    assert "Submersion Dives" not in sections and "Subsurface Dives" in sections   # Submersion sync is disabled
+    assert "Submersion Dives" not in sections and "Subsurface Dives" in sections   # Submersion support is gone (F18)
     # walk every section so each page instantiates
     for index in range(len(sections)):
         root.setProperty("currentSection", index)

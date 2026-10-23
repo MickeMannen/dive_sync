@@ -5,12 +5,12 @@ keeps its existing plain credentials.json unchanged (it's headless, so
 there's no OS keychain to use).
 
 Two things get keychain-backed this way: the Garmin/Divelogs
-username+password (and Subsurface/Submersion's, and MySSI's with its API
+username+password (and Subsurface's, and MySSI's with its API
 token, plans/myssi-sync.md K2), and (see
 materialize_garmin_token()/sync_garmin_token_from_file()) the Garmin session
 token cache - `garminconnect`/garth's token file grants live API access
 without the password, so it's just as sensitive. Everything else (Garmin
-token_dir, Subsurface base_url, Submersion's store config) lives in
+token_dir, Subsurface base_url) lives in
 desktop/preferences.py's plain JSON file instead: each keychain item needs
 its own one-time macOS access approval, and a hands-on test on 2026-09-22
 (rework.md D7/D9) found that storing every individual field as its own
@@ -260,40 +260,16 @@ def _save_accounts(service: str, accounts) -> None:
 
 def load_credentials_model():
     from src.core.config import (CredentialsModel, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials,
-                                 SubmersionCredentials, ShearwaterCredentials, SsiCredentials)
+                                 ShearwaterCredentials, SsiCredentials)
 
-    submersion_secret = _get_json("submersion_secret")
-    submersion_config = preferences.get_submersion_config()
-    if submersion_secret is None and not submersion_config:
-        # Legacy flat scheme (pre-consolidation): every field its own item.
-        access_key_id = _get("submersion", "access_key_id")
-        secret_access_key = _get("submersion", "secret_access_key")
-        non_secret = {field: _get("submersion", field) for field in preferences.SUBMERSION_NON_SECRET_FIELDS}
-        if access_key_id or secret_access_key or any(non_secret.values()):
-            submersion_secret = {"access_key_id": access_key_id, "secret_access_key": secret_access_key}
-            preferences.set_submersion_config(**{k: v for k, v in non_secret.items() if v})
-            submersion_config = preferences.get_submersion_config()
-            for field in ("access_key_id", "secret_access_key", *preferences.SUBMERSION_NON_SECRET_FIELDS):
-                _set("submersion", field, "")
-            _set_json("submersion_secret", submersion_secret)
-    submersion_secret = submersion_secret or {}
-
+    # An older build's Submersion items (the ``submersion_secret`` keychain
+    # item, ``submersion`` in desktop_prefs.json) are never read: Submersion
+    # support is gone (plans/subsurface-submersion.md F18), and reading an
+    # item would only cost a keychain prompt.
     return CredentialsModel(
         garmin=_load_accounts("garmin", GarminCredentials),
         divelogs=_load_accounts("divelogs", DivelogsCredentials),
         subsurface=_load_accounts("subsurface", SubsurfaceCredentials),
-        submersion=SubmersionCredentials(
-            store_type=submersion_config.get("store_type") or SubmersionCredentials().store_type,
-            endpoint_url=submersion_config.get("endpoint_url", ""),
-            region=submersion_config.get("region", ""),
-            bucket=submersion_config.get("bucket", ""),
-            prefix=submersion_config.get("prefix") or SubmersionCredentials().prefix,
-            access_key_id=submersion_secret.get("access_key_id", ""),
-            secret_access_key=submersion_secret.get("secret_access_key", ""),
-            path_style=bool(submersion_config.get("path_style")),
-            folder_path=submersion_config.get("folder_path", ""),
-            passphrase=submersion_secret.get("passphrase", ""),
-        ),
         # not secrets: the databases (one per Shearwater account) live in desktop_prefs.json
         shearwater=[ShearwaterCredentials(database=str(row.get("database", "")), account=str(row.get("account", "")))
                     for row in preferences.get_shearwater_config().get("databases", [])
@@ -310,28 +286,10 @@ def save_shearwater_accounts(accounts) -> None:
                                                  for a in (accounts or []) if a.database.strip()])
 
 
-def save_submersion_credentials(submersion) -> None:
-    """``submersion`` is a ``SubmersionCredentials`` (or None to clear)."""
-    if submersion and submersion.configured:
-        _set_json("submersion_secret", {
-            "access_key_id": submersion.access_key_id,
-            "secret_access_key": submersion.secret_access_key,
-            "passphrase": submersion.passphrase,
-        })
-        preferences.set_submersion_config(
-            store_type=submersion.store_type, endpoint_url=submersion.endpoint_url, region=submersion.region,
-            bucket=submersion.bucket, prefix=submersion.prefix, path_style=submersion.path_style,
-            folder_path=submersion.folder_path,
-        )
-    else:
-        _set_json("submersion_secret", None)
-
-
 def save_credentials_model(model) -> None:
     _save_accounts("garmin", model.get_garmin_accounts())
     _save_accounts("divelogs", model.get_divelogs_accounts())
     _save_accounts("subsurface", model.get_subsurface_accounts())
-    save_submersion_credentials(getattr(model, "submersion", None))
     save_shearwater_accounts(model.saved_shearwater_accounts() if hasattr(model, "saved_shearwater_accounts") else [])
     _save_accounts("ssi", model.get_ssi_accounts() if hasattr(model, "get_ssi_accounts") else [])
     logger.info("Credentials saved to OS keychain.")
@@ -343,7 +301,6 @@ def has_any_credentials() -> bool:
         model.get_garmin_accounts()
         or model.get_divelogs_accounts()
         or model.get_subsurface_accounts()
-        or model.submersion.configured
         or model.get_ssi_accounts()
     )
 

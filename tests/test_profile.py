@@ -30,7 +30,7 @@ def test_export_contains_everything_but_secrets():
     assert set(profile) == {"dive_sync_profile", "sync_filters", "grace_window_minutes",
                             "api_cooldown_seconds", "garmin_timezone", "sync_pairs", "schedule",
                             "cron_jobs", "notify_url", "notify_on", "propagate_deletes", "backup_retention_count", "create_on_garmin",
-                            "create_device_dives_on_submersion", "garmin_fit_upload"}
+                            "garmin_fit_upload"}
     text = json.dumps(profile)
     assert "password" not in text and "token" not in text
     assert profile["cron_jobs"][0]["id"] == "n"

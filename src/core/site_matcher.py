@@ -1,4 +1,4 @@
-"""Dive-site resolution shared by the Subsurface and Submersion adapters
+"""Dive-site resolution shared by the Subsurface and UDDF adapters
 (rework.md F14): exact name first, then the nearest existing site within
 ``radius_m`` of the coordinates, otherwise none (the caller creates one).
 """

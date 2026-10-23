@@ -60,16 +60,3 @@ def test_subsurface_cloud_login(live_credentials):
         pytest.skip("no Subsurface credentials in the test data dir")
     ok, message = check_cloud_login(creds.email, creds.password, creds.base_url)
     assert ok, message
-
-
-def test_submersion_store_access(live_credentials):
-    from src.core.services.submersion.store import S3Store, check_store_access
-    creds = live_credentials.submersion
-    if not creds.configured:
-        pytest.skip("no Submersion store in the test data dir")
-    ok, message = check_store_access(creds)
-    assert ok, message
-    print(message)
-    if creds.store_type == "s3":
-        names = S3Store(creds).list("ssv1.")
-        print(f"submersion sync files: {len(names)}; kinds: {sorted({n.split('.')[1] for n in names if n.count('.') > 1})}")

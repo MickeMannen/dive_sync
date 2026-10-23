@@ -87,9 +87,8 @@ def set_sort(service: str, column: str, ascending: bool) -> None:
 
 # -- non-secret credential fields (rework.md D9 finding, 2026-09-22) --------
 #
-# A Garmin account's token_dir, Subsurface's base_url and most of Submersion's
-# store config aren't secrets - they were previously stored in the keychain
-# alongside real passwords anyway, which multiplied how many separate
+# A Garmin account's token_dir and Subsurface's base_url aren't secrets -
+# they were previously stored in the keychain alongside real passwords anyway, which multiplied how many separate
 # per-item macOS Keychain access prompts a single app launch could trigger
 # (each keychain item needs its own one-time OS approval). Keeping them here
 # instead, next to the UI prefs above, cuts that down to one keychain item
@@ -123,11 +122,6 @@ def set_subsurface_base_url(base_url: str) -> None:
     _save(prefs)
 
 
-SUBMERSION_NON_SECRET_FIELDS = (
-    "store_type", "endpoint_url", "region", "bucket", "prefix", "path_style", "folder_path",
-)
-
-
 def get_shearwater_config() -> dict:
     """{database: path} - blank path = auto-detect the app's live file."""
     prefs = _load()
@@ -137,19 +131,6 @@ def get_shearwater_config() -> dict:
 def set_shearwater_config(**fields) -> None:
     prefs = _load()
     config = prefs.setdefault("shearwater", {})
-    for key, value in fields.items():
-        config[key] = value
-    _save(prefs)
-
-
-def get_submersion_config() -> dict:
-    prefs = _load()
-    return dict(prefs.get("submersion", {}))
-
-
-def set_submersion_config(**fields) -> None:
-    prefs = _load()
-    config = prefs.setdefault("submersion", {})
     for key, value in fields.items():
         config[key] = value
     _save(prefs)

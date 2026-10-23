@@ -17,7 +17,7 @@ class BaseDiveAdapter(ABC):
     service_id: ClassVar[str] = ""
     display_name: ClassVar[str] = ""
     # True when update_dive can persist the other service's id on the dive
-    # (Subsurface extradata, Submersion importId). Garmin and Divelogs have no
+    # (Subsurface extradata). Garmin and Divelogs have no
     # such field, so their pairs are remembered in the local sync state instead.
     stores_external_ids: ClassVar[bool] = False
     # False when the service never takes a dive from elsewhere (Shearwater

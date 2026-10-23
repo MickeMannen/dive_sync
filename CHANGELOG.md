@@ -1,8 +1,18 @@
 # Changelog
 
 All notable user-facing changes to DiveSync are recorded here. See `README.md`
-for current features and setup, and `rework.md`/`features.md` for the full
-development history and decision log.
+for current features and setup, and `rework.md` (local only) for the plan,
+the backlog and the decision log.
+
+## Unreleased
+
+- Submersion: support removed. It was switched off and is no longer
+  planned, so its settings, credentials and code are gone. A settings or
+  credentials file that still mentions Submersion keeps loading: a sync
+  pair or scheduled job with a Submersion side is dropped (the log says so
+  once) and the rest of the file is kept as it was.
+- Desktop app and Docker image: smaller downloads, as the installers no
+  longer carry the S3 and encryption libraries only Submersion used.
 
 ## 0.5.0 - 2026-10-20
 

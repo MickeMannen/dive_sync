@@ -10,13 +10,11 @@
         garmin/<account>/fit/           the account's downloaded .fit files
         garmin/<account>/tokens/        the account's Garmin login tokens
         subsurface/<account>/cloud/     the account's Subsurface Cloud checkout
-        submersion/                     Submersion device identity and clock
         ssi/APP_CACHE_SITES.zip         SSI's public site database, when downloaded (SsiClient.download_sites)
 
 Everything that belongs to one account sits in one folder, so removing an
 account's data is removing one folder. A side without accounts (a
-Submersion store, a local Subsurface directory) uses the account folder
-``default``.
+local Subsurface directory) uses the account folder ``default``.
 
 The data root is ``DATA_DIR`` (the desktop app sets it to its per-user data
 folder, Docker to the mounted volume); ``./data`` when unset, as before. The

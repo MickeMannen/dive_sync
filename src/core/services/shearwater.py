@@ -1,4 +1,4 @@
-"""Shearwater app adapter (rework.md Track H, features.md B21).
+"""Shearwater app adapter (rework.md Track H).
 
 The Shearwater app - Shearwater's "Shearwater Cloud" desktop program (macOS/
 Windows, Unity); DiveSync calls it the Shearwater app because DiveSync only

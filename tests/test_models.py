@@ -53,7 +53,7 @@ LEGACY_DIVE_JSON = """{
   "temp_max": 29.0,
   "temp_avg": 28.0,
   "external_ids": {
-    "submersion": "1E5A-9",
+    "subsurface": "1E5A-9",
     "garmin": "123"
   },
   "gas_mixtures": [
@@ -123,7 +123,7 @@ def legacy_dive(**overrides) -> UnifiedDive:
         timezone="Asia/Kuala_Lumpur",
         duration=4129, max_depth=18.3, avg_depth=8.196,
         temp_min=27.0, temp_max=29.0, temp_avg=28.0,
-        external_ids={"submersion": "1E5A-9", "garmin": "123"},
+        external_ids={"subsurface": "1E5A-9", "garmin": "123"},
         gas_mixtures=[
             GasMixture(oxygen=32, helium=0, start_pressure=162.57, end_pressure=78.04, tank_volume=11.1,
                        tank_name="Left", tank_role="sidemountLeft"),
@@ -367,7 +367,7 @@ def test_without_unset_keeps_named_keys_and_real_values():
 
 # ---------------------------------------------------------------- carried, not synced
 
-@pytest.mark.parametrize("service_id", ["garmin", "divelogs", "subsurface", "uddf", "submersion", "shearwater", "ssi"])
+@pytest.mark.parametrize("service_id", ["garmin", "divelogs", "subsurface", "uddf", "shearwater", "ssi"])
 def test_no_field_catalogue_names_a_carried_field(service_id):
     """What the boards, the engine and conflicts can see is the catalogue;
     the carried fields are in none of them (the three synced sparse fields

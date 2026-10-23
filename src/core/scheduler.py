@@ -212,7 +212,7 @@ def run_sync_thread(dry_run: bool, custom_settings: Optional[Dict[str, Any]] = N
         elif custom_settings and custom_settings.get("source") and custom_settings.get("target"):
             # Two service specs with no saved pair behind them: what the
             # desktop Sync page offers for the combinations of configured
-            # services, so syncing e.g. Garmin to Submersion needs no
+            # services, so syncing e.g. Garmin to Subsurface needs no
             # hand-written entry in settings.json first.
             from src.core.pairs import engine_for
             engine = engine_for(custom_settings["source"], custom_settings["target"],

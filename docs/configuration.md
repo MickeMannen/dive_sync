@@ -83,4 +83,4 @@ subsurface/<account>/cloud/        the Subsurface Cloud checkout
 ssi/<account>/data/                cached MySSI dives (the account is its email)
 ```
 
-A side without accounts (a Submersion store, a local Subsurface folder) uses the account folder `default`. Version 0.3.0 changed this layout and the desktop app's folder: it starts fresh and leaves an earlier version's data where it was (see [`CHANGELOG.md`](../CHANGELOG.md)).
+A side without accounts (a local Subsurface folder) uses the account folder `default`. Version 0.3.0 changed this layout and the desktop app's folder: it starts fresh and leaves an earlier version's data where it was (see [`CHANGELOG.md`](../CHANGELOG.md)).

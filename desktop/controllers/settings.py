@@ -19,7 +19,6 @@ class SettingsController(QObject):
     garminStatusChanged = Signal()
     divelogsStatusChanged = Signal()
     subsurfaceStatusChanged = Signal()
-    submersionStatusChanged = Signal()
     ssiStatusChanged = Signal()
     credentialsChanged = Signal()
     profileSummaryChanged = Signal()
@@ -30,7 +29,6 @@ class SettingsController(QObject):
         self._garmin_status = ""
         self._divelogs_status = ""
         self._subsurface_status = ""
-        self._submersion_status = ""
         self._ssi_status = ""
         self._profile_summary = ""
         self._pending_profile = None
@@ -80,17 +78,6 @@ class SettingsController(QObject):
     @Property(str, notify=subsurfaceStatusChanged)
     def subsurfaceStatus(self) -> str:
         return self._subsurface_status or self._accounts_status("subsurface")
-
-    @Property(str, notify=submersionStatusChanged)
-    def submersionStatus(self) -> str:
-        if self._submersion_status:
-            return self._submersion_status
-        store = self._model.submersion
-        if not store.configured:
-            return "Not configured yet."
-        if store.store_type == "folder":
-            return f"Saved: folder {store.folder_path}. Press Test to check it."
-        return f"Saved: bucket '{store.bucket}' at {store.endpoint_url}. Press Test to check it."
 
     @Property(str, notify=profileSummaryChanged)
     def profileSummary(self) -> str:
@@ -159,44 +146,6 @@ class SettingsController(QObject):
         creds_store._save_accounts("divelogs", accounts)
         self._saved()
         self._set("_divelogs_status", "", self.divelogsStatusChanged)
-
-    @Property(str, notify=credentialsChanged)
-    def submersionStoreType(self) -> str:
-        return self._model.submersion.store_type
-
-    @Property(str, notify=credentialsChanged)
-    def submersionEndpointUrl(self) -> str:
-        return self._model.submersion.endpoint_url
-
-    @Property(str, notify=credentialsChanged)
-    def submersionRegion(self) -> str:
-        return self._model.submersion.region
-
-    @Property(bool, notify=credentialsChanged)
-    def submersionRegionIsAuto(self) -> bool:
-        """No override saved - the region comes from the endpoint, so the
-        settings page can keep its Advanced section folded away."""
-        return not self._model.submersion.region
-
-    @Property(str, notify=credentialsChanged)
-    def submersionBucket(self) -> str:
-        return self._model.submersion.bucket
-
-    @Property(str, notify=credentialsChanged)
-    def submersionPrefix(self) -> str:
-        return self._model.submersion.prefix
-
-    @Property(str, notify=credentialsChanged)
-    def submersionAccessKeyId(self) -> str:
-        return self._model.submersion.access_key_id
-
-    @Property(bool, notify=credentialsChanged)
-    def submersionPathStyle(self) -> bool:
-        return self._model.submersion.path_style
-
-    @Property(str, notify=credentialsChanged)
-    def submersionFolderPath(self) -> str:
-        return self._model.submersion.folder_path
 
     # -- Shearwater app (rework.md Track H): a database path, not a login ----
 
@@ -362,45 +311,6 @@ class SettingsController(QObject):
             return message
         self._run(work, lambda text: self._set("_subsurface_status", str(text), self.subsurfaceStatusChanged))
 
-    @Slot(str, str, str, str, str, str, str, bool, str, str)
-    def testSubmersion(self, store_type: str, endpoint_url: str, region: str, bucket: str, prefix: str,
-                        access_key_id: str, secret_access_key: str, path_style: bool, folder_path: str,
-                        passphrase: str = "") -> None:
-        from src.core.config import SubmersionCredentials
-        config = SubmersionCredentials(
-            store_type=store_type or "s3",
-            endpoint_url=endpoint_url,
-            region=region,
-            bucket=bucket,
-            prefix=prefix or SubmersionCredentials().prefix,
-            access_key_id=access_key_id,
-            secret_access_key=secret_access_key or self._model.submersion.secret_access_key,
-            path_style=path_style,
-            folder_path=folder_path,
-            passphrase=passphrase or self._model.submersion.passphrase,
-        )
-        if not config.configured:
-            self._set("_submersion_status", "Fill in the store details first.", self.submersionStatusChanged)
-            return
-        self._set("_submersion_status", "Testing…", self.submersionStatusChanged)
-
-        def work():
-            import tempfile
-            from src.core.services.submersion.store import check_store_access
-            from src.core.services.submersion.adapter import SubmersionAdapter
-            ok, message = check_store_access(config)
-            if not ok:
-                return message
-            # Connectivity is fine; also try to unlock an end-to-end
-            # encrypted library so a wrong/missing passphrase surfaces here
-            # rather than only on the next real sync.
-            with tempfile.TemporaryDirectory() as scratch:
-                enc_ok, enc_message = SubmersionAdapter(config, device_state_dir=scratch)._resolve_encryption()
-            if not enc_ok:
-                return enc_message
-            return f"{message} {enc_message}." if enc_message else message
-        self._run(work, lambda text: self._set("_submersion_status", str(text), self.submersionStatusChanged))
-
     # -- save -------------------------------------------------------------
 
     def _saved(self) -> None:
@@ -420,43 +330,6 @@ class SettingsController(QObject):
             else:
                 row["password"] = password
         self.saveSubsurfaceAccounts(rows)
-
-    @Slot(str, str, str, str, str, str, str, bool, str, str)
-    def saveSubmersion(self, store_type: str, endpoint_url: str, region: str, bucket: str, prefix: str,
-                       access_key_id: str, secret_access_key: str, path_style: bool, folder_path: str,
-                       passphrase: str = "") -> None:
-        from src.core.config import SubmersionCredentials
-        creds_store.save_submersion_credentials(SubmersionCredentials(
-            store_type=store_type or "s3",
-            endpoint_url=endpoint_url,
-            region=region,
-            bucket=bucket,
-            prefix=prefix or SubmersionCredentials().prefix,
-            access_key_id=access_key_id,
-            secret_access_key=secret_access_key or self._model.submersion.secret_access_key,
-            path_style=path_style,
-            folder_path=folder_path,
-            passphrase=passphrase or self._model.submersion.passphrase,
-        ))
-        self._saved()
-        self._set("_submersion_status", "", self.submersionStatusChanged)
-
-    @Slot(str, str, str, str, str, str, str, str, str, bool, str, str)
-    def save(self, subsurface_email: str, subsurface_pw: str,
-             submersion_store_type: str, submersion_endpoint_url: str, submersion_region: str,
-             submersion_bucket: str, submersion_prefix: str, submersion_access_key_id: str,
-             submersion_secret_access_key: str, submersion_path_style: bool, submersion_folder_path: str,
-             submersion_passphrase: str = "") -> None:
-        """Kept for callers that still save both at once. Each card in the
-        settings page now has its own Save button, the way the Garmin and
-        Divelogs account lists always have (rework.md E7) - none of these
-        slots may go through save_credentials_model(), which would replace
-        the whole account list with whatever (nothing) it was given."""
-        self.saveSubsurface(subsurface_email, subsurface_pw)
-        self.saveSubmersion(submersion_store_type, submersion_endpoint_url, submersion_region,
-                            submersion_bucket, submersion_prefix, submersion_access_key_id,
-                            submersion_secret_access_key, submersion_path_style, submersion_folder_path,
-                            submersion_passphrase)
 
     # -- profiles ---------------------------------------------------------
 

@@ -10,7 +10,6 @@ A *service spec* is ``<service id>[:<argument>]``:
                            ``shearwater``; several accounts pick one per run, none saved = the app's active one)
     shearwater:<file>      one such database named by its path
     subsurface-cloud       Subsurface Cloud (credentials.json ``subsurface``; clone under subsurface/<account>/cloud)
-    submersion             Submersion sync store (credentials.json ``submersion``: S3 bucket or folder)
     ssi[:account]          MySSI (credentials.json ``ssi``; several accounts pick one per run by email,
                            as the spec's argument or --ssi-account; plans/myssi-sync.md K1)
 
@@ -25,11 +24,11 @@ import re
 from typing import List, Optional, Tuple, Dict
 
 from src.core.adapter import BaseDiveAdapter
-from src.core import config, layout
+from src.core import layout
 from src.core.config import SERVICE_ID_ALIASES, ConfigManager, SettingsModel, SyncPairModel
-from src.core.fields import FieldLink, common_default_links, default_field_links, submersion_default_links, FieldSpec
+from src.core.fields import FieldLink, common_default_links, default_field_links, FieldSpec
 
-KNOWN_SERVICES = ("garmin", "divelogs", "uddf", "subsurface", "subsurface-cloud", "submersion", "shearwater", "ssi")
+KNOWN_SERVICES = ("garmin", "divelogs", "uddf", "subsurface", "subsurface-cloud", "shearwater", "ssi")
 FILE_SERVICES = ("uddf", "subsurface")
 # takes an argument or not: Shearwater a path (without one the configured
 # account's file is used), MySSI an account email (without one the single
@@ -49,8 +48,6 @@ def parse_service_spec(spec: str) -> Tuple[str, Optional[str]]:
     service = service.strip().lower()
     if service not in KNOWN_SERVICES:
         raise ValueError(f"Unknown service {service!r}; expected one of {', '.join(KNOWN_SERVICES)}")
-    if service == "submersion" and not config.SUBMERSION_ENABLED:
-        raise ValueError("Submersion sync is disabled for now (it does not work yet)")
     arg = arg.strip() or None
     if service in FILE_SERVICES and not arg:
         raise ValueError(f"Service {service!r} needs a path: {service}:<path>")
@@ -72,8 +69,6 @@ def adapter_class_of(service_id: str):
         from src.core.services.subsurface import SubsurfaceAdapter as adapter
     elif service_id == "uddf":
         from src.core.services.uddf import UddfAdapter as adapter
-    elif service_id == "submersion":
-        from src.core.services.submersion.adapter import SubmersionAdapter as adapter
     elif service_id == "shearwater":
         from src.core.services.shearwater import ShearwaterAdapter as adapter
     elif service_id == "ssi":
@@ -95,14 +90,13 @@ def display_name_of(spec: str) -> str:
         from src.core.services.subsurface_cloud import SubsurfaceCloudAdapter
         return SubsurfaceCloudAdapter.display_name
     return {"garmin": "Garmin Connect", "divelogs": "Divelogs.org", "subsurface": "Subsurface",
-            "uddf": "UDDF file", "submersion": "Submersion", "shearwater": "Shearwater app",
+            "uddf": "UDDF file", "shearwater": "Shearwater app",
             "ssi": "MySSI"}.get(service, service)
 
 
 def default_links_for(source_id: str, target_id: str) -> List[FieldLink]:
     """The shipped board for a pair: the Garmin/Divelogs one when that is the
-    pair, the metadata-only one when Submersion is a side (rework.md F17),
-    otherwise the common links (dive number as a match key where both
+    pair, otherwise the common links (dive number as a match key where both
     services let the user set it). A common link naming a field one of the
     two services does not have (Subsurface keeps no visibility, UDDF no
     weight) is left out: the board could not be saved with it."""
@@ -111,10 +105,7 @@ def default_links_for(source_id: str, target_id: str) -> List[FieldLink]:
     # MySSI numbers its own dives (an upload takes the next number after its
     # highest), so like Divelogs' its number is neither a match key nor copied.
     numbered = not {"divelogs", "ssi"} & {source_id, target_id}
-    if "submersion" in (source_id, target_id):
-        links = submersion_default_links(source_id, target_id, match_on_dive_number=numbered)
-    else:
-        links = common_default_links(source_id, target_id, match_on_dive_number=numbered)
+    links = common_default_links(source_id, target_id, match_on_dive_number=numbered)
     if "shearwater" in (source_id, target_id):
         links += _shearwater_site_links(source_id, target_id)
     try:
@@ -226,13 +217,6 @@ def build_adapter(spec: str, settings: SettingsModel, credentials_path: Optional
         if not creds.configured:
             raise ValueError(f"No Subsurface Cloud password stored for {creds.email}.")
         return SubsurfaceCloudAdapter(creds.email, creds.password, creds.base_url)
-    if service == "submersion":
-        from src.core.config import CREDENTIALS_FILE
-        from src.core.services.submersion.adapter import SubmersionAdapter
-        creds = ConfigManager.load_credentials(credentials_path or CREDENTIALS_FILE).submersion
-        if not creds.configured:
-            raise ValueError("Submersion is not configured; run setup_credentials.py --services submersion")
-        return SubmersionAdapter(creds)
     if mock_data_dir:
         from src.core.services.mock_adapters import LocalMockDivelogsAdapter, LocalMockGarminAdapter
         if service == "garmin":
@@ -269,13 +253,13 @@ def _pick(accounts, username: Optional[str], label: str, flag: str, key=lambda a
 
 # The spec a configured service is synced through (Subsurface: its cloud).
 CONFIGURED_SPECS = {"garmin": "garmin", "divelogs": "divelogs", "subsurface": "subsurface-cloud",
-                    "submersion": "submersion", "shearwater": "shearwater", "ssi": "ssi"}
+                    "shearwater": "shearwater", "ssi": "ssi"}
 
 
 # The services with a local dive cache (a Dives page, "Download dives"), in
 # the order the pages show them. MySSI joined with its Dives page
 # (plans/myssi-sync.md K3): its whole logbook comes in one request.
-CACHE_SERVICE_ORDER = ("garmin", "divelogs", "submersion", "subsurface", "ssi")
+CACHE_SERVICE_ORDER = ("garmin", "divelogs", "subsurface", "ssi")
 
 
 def cache_services(configured: List[str]) -> List[dict]:
@@ -317,7 +301,7 @@ def board_pairs(settings: SettingsModel, configured: List[str]) -> List[dict]:
         try:
             joined.append({service_id_of(p.source), service_id_of(p.target)})
         except ValueError:
-            continue            # a disabled (Submersion) or unknown service: no board to offer
+            continue            # an unknown service: no board to offer
         out.append({"id": p.id, "source": p.source, "target": p.target, "saved": True})
     ids = {p.id for p in settings.sync_pairs}
     specs = configured_specs(configured)

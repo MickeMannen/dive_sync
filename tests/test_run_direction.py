@@ -14,7 +14,7 @@ import sys
 import pytest
 
 from src.core.config import (ConfigManager, CronJobModel, SettingsModel, SyncFilters, SyncPairModel,
-                             import_profile, migrate_run_directions)
+                             drop_retired_services, import_profile, migrate_run_directions)
 from tests.test_link_engine import FakeDivelogs, FakeGarmin, _dive, _engine
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,14 +51,14 @@ def test_models_never_hold_bidirectional():
     assert CronJobModel(id="j", pair="p", directionality="bidirectional").directionality is None
     # anything already directed is left exactly as written
     assert SettingsModel(directionality="to_garmin").directionality == "to_garmin"
-    assert SyncPairModel(id="p", directionality="to_submersion").directionality == "to_submersion"
+    assert SyncPairModel(id="p", directionality="to_subsurface").directionality == "to_subsurface"
 
 
 def test_load_settings_migrates_once_and_saves_back(tmp_path, caplog):
     path = str(tmp_path / "settings.json")
     with open(path, "w") as f:
         json.dump({"directionality": "bidirectional", "field_links": [],
-                   "sync_pairs": [{"id": "g2s", "source": "garmin", "target": "submersion",
+                   "sync_pairs": [{"id": "g2s", "source": "garmin", "target": "subsurface-cloud",
                                    "directionality": "bidirectional"}],
                    "cron_jobs": [{"id": "j", "pair": "g2s", "directionality": "bidirectional"}]}, f)
 
@@ -86,6 +86,78 @@ def test_v1_profile_with_bidirectional_imports_as_a_directed_run():
                                    "sync_pairs": [{"id": "p", "directionality": "bidirectional"}]}, SettingsModel())
     assert new.directionality == "to_divelogs"
     assert next(p for p in new.sync_pairs if p.id == "p").directionality == "to_target"
+
+
+# ---------------------------------------------------------------- retired services (Submersion)
+#
+# plans/subsurface-submersion.md F18: Submersion support was removed. A file
+# an older build wrote still loads; its Submersion pairs and the jobs that
+# ran them are dropped (said once, saved back), its other Submersion keys
+# ignored, the same way 'bidirectional' is migrated above.
+
+def _old_submersion_settings():
+    return {
+        "settings_version": 2,
+        "create_device_dives_on_submersion": False,
+        "sync_pairs": [
+            {"id": "garmin_divelogs", "source": "garmin", "target": "divelogs", "directionality": "to_divelogs",
+             "create_device_dives_on_submersion": None},
+            {"id": "garmin_submersion", "source": "garmin", "target": "submersion", "directionality": "to_target",
+             "create_device_dives_on_submersion": True,
+             "rules": {"submersion": [{"id": "notes", "target": "submersion.notes", "source": ["garmin.notes"]}]}},
+            {"id": "sub_to_ss", "source": "Submersion", "target": "subsurface-cloud", "directionality": "to_source"},
+            {"id": "g2s", "source": "garmin", "target": "subsurface-cloud", "directionality": "to_target"},
+        ],
+        "cron_jobs": [
+            {"id": "nightly", "frequency": "daily", "hour": 3},
+            {"id": "to-submersion", "pair": "garmin_submersion"},
+            {"id": "by-specs", "source": "submersion", "target": "garmin", "directionality": "to_garmin"},
+            {"id": "to-subsurface", "pair": "g2s"},
+        ],
+    }
+
+
+def test_drop_retired_services_removes_submersion_pairs_and_their_jobs():
+    data = _old_submersion_settings()
+    changes = drop_retired_services(data)
+    assert [p["id"] for p in data["sync_pairs"]] == ["garmin_divelogs", "g2s"]
+    assert [j["id"] for j in data["cron_jobs"]] == ["nightly", "to-subsurface"]
+    assert len(changes) == 4 and any("garmin_submersion" in c for c in changes)
+    assert drop_retired_services(data) == []                       # idempotent
+    assert drop_retired_services({}) == [] and drop_retired_services(None) == []
+
+
+def test_load_settings_drops_submersion_once_and_saves_back(tmp_path, caplog):
+    path = str(tmp_path / "settings.json")
+    with open(path, "w") as f:
+        json.dump(_old_submersion_settings(), f)
+    with caplog.at_level(logging.WARNING, logger="dive_sync.config"):
+        settings = ConfigManager.load_settings(path)
+    assert [p.id for p in settings.sync_pairs] == ["garmin_divelogs", "g2s"]
+    assert [j.id for j in settings.cron_jobs] == ["nightly", "to-subsurface"]
+    assert not hasattr(settings, "create_device_dives_on_submersion")
+    warnings = [r for r in caplog.records if "Submersion" in r.getMessage()]
+    assert len(warnings) == 1 and "no longer supports" in warnings[0].getMessage()
+    # written back without any of it, so the next load is silent
+    with open(path) as f:
+        assert "submersion" not in f.read().lower()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="dive_sync.config"):
+        assert ConfigManager.load_settings(path) == settings
+    assert not [r for r in caplog.records if "Submersion" in r.getMessage()]
+
+
+def test_submersion_pairs_are_dropped_from_a_profile_or_payload_too():
+    """Not only a file: the model drops them wherever settings are built
+    (a profile import, a web settings post)."""
+    settings = SettingsModel.model_validate(_old_submersion_settings())
+    assert [p.id for p in settings.sync_pairs] == ["garmin_divelogs", "g2s"]
+    profile = dict(_old_submersion_settings(), dive_sync_profile=2)
+    profile.pop("settings_version")
+    new, summary = import_profile(profile, SettingsModel())
+    assert [p.id for p in new.sync_pairs] == ["garmin_divelogs", "g2s"]
+    assert [j.id for j in new.cron_jobs] == ["nightly", "to-subsurface"]
+    assert summary.ignored_keys == ["create_device_dives_on_submersion"]
 
 
 # ---------------------------------------------------------------- engine

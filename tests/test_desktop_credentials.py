@@ -35,7 +35,7 @@ def fake_keyring(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolated_preferences(tmp_path, monkeypatch):
-    """Garmin token_dir (and Subsurface/Submersion's non-secret fields) live
+    """Garmin token_dir (and Subsurface's base_url) live
     in desktop/preferences.py's plain JSON file since 2026-09-22 (D9
     finding: too many separate keychain items), so account round-trip tests
     now touch it too - must never be the real one (AGENTS.md/rework.md:
@@ -46,6 +46,40 @@ def isolated_preferences(tmp_path, monkeypatch):
 
 def test_has_any_credentials_initially_false(fake_keyring):
     assert creds_store.has_any_credentials() is False
+
+
+def test_old_submersion_keychain_items_and_prefs_are_left_alone(fake_keyring, tmp_path, monkeypatch):
+    """plans/subsurface-submersion.md F18: an older build kept a Submersion
+    store as the ``submersion_secret`` keychain item (or, before that, flat
+    ``submersion_<field>`` items) plus a ``submersion`` section in
+    desktop_prefs.json. The app still starts on such a data folder: the
+    items are never read (no keychain prompt for them), count as no
+    credentials and never reach credentials.json."""
+    import json
+    import desktop.preferences as prefs
+    from src.core import config
+    fake_keyring.store[(creds_store.SERVICE_NAME, "submersion_secret")] = json.dumps(
+        {"access_key_id": "id", "secret_access_key": "key", "passphrase": "hunter2"})
+    fake_keyring.store[(creds_store.SERVICE_NAME, "submersion_access_key_id")] = "old-id"
+    with open(prefs.PREFS_FILE, "w") as f:
+        json.dump({"submersion": {"store_type": "s3", "bucket": "dives"}, "units": "imperial"}, f)
+    read = []
+    get = fake_keyring.get_password
+    monkeypatch.setattr(creds_store.keyring, "get_password", lambda service, key: read.append(key) or get(service, key))
+
+    assert creds_store.has_any_credentials() is False
+    model = creds_store.load_credentials_model()
+    assert model.configured_services() == [] and not hasattr(model, "submersion")
+    assert not [key for key in read if key.startswith("submersion")]
+    target = str(tmp_path / "credentials.json")
+    monkeypatch.setattr(config, "CREDENTIALS_FILE", target)
+    creds_store.materialize_local_cache()
+    with open(target) as f:
+        assert "submersion" not in f.read()
+    # a save touches only its own items; the old ones are left as they were
+    creds_store.save_credentials_model(CredentialsModel(garmin=[GarminCredentials(username="g", password="pw")]))
+    assert (creds_store.SERVICE_NAME, "submersion_secret") in fake_keyring.store
+    assert prefs.get_units() == "imperial"            # the rest of desktop_prefs.json reads as before
 
 
 def test_keychain_service_is_the_app_identity():

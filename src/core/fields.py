@@ -632,7 +632,7 @@ def copy_value(field_type: str, value: Any) -> Any:
     adapter may itself be unable to store (e.g. Divelogs has no slot for a
     role), in which case the adapter's own write path drops it, but the
     engine must not discard it pre-emptively for pairs that do model it
-    (Submersion <-> Subsurface)."""
+    (Shearwater <-> Subsurface)."""
     if value is None:
         return None
     if field_type == "tanks":
@@ -820,33 +820,6 @@ def common_default_links(source_id: str, target_id: str, match_on_dive_number: b
     if match_on_dive_number:
         links.append(FieldLink(id="dive_number", source=[f"{s}.dive_number"], target=f"{t}.dive_number",
                                direction="to_target", conflict="prefer_source", match_order=1))
-    return links
-
-
-def submersion_default_links(source_id: str, target_id: str, match_on_dive_number: bool = True) -> List[FieldLink]:
-    """The shipped board for a pair with Submersion on one side (rework.md F17,
-    decided 2026-09-24): the common links minus ``samples`` and ``tanks``.
-
-    Submersion's depth profile, cylinders, tank-pressure series and gas
-    switches come from the diver importing the dive's ``.fit`` in the app,
-    which derives them from the file; dive_sync only keeps the soft fields in
-    step. Both fields are read-only in Submersion's catalogue too, so a
-    hand-written rule for them is dropped with a warning rather than silently
-    honoured - this just keeps them off the shipped board.
-
-    With Garmin on the other side the board also names the two fields the
-    generic one cannot guess: Garmin's *location name* is the dive site (its
-    *activity* name is a title, which is what the unified ``location`` field
-    collapses to and what made dive_sync name Submersion's sites after it),
-    and its *activity name* is the dive's own name."""
-    links = [link for link in common_default_links(source_id, target_id, match_on_dive_number=match_on_dive_number)
-             if link.id not in ("samples", "tanks")]
-    if {source_id, target_id} == {"garmin", "submersion"}:
-        garmin_sends = source_id == "garmin"
-        for link_id, garmin_key, sub_key in (("site", "garmin.locationName", "submersion.location"),
-                                             ("dive_name", "garmin.activityName", "submersion.dive_name")):
-            source, target = (garmin_key, sub_key) if garmin_sends else (sub_key, garmin_key)
-            links.append(FieldLink(id=link_id, source=[source], target=target, conflict="manual"))
     return links
 
 

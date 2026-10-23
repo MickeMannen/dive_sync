@@ -31,7 +31,7 @@ Welcome, AI Agent! This file outlines the instructions, constraints, and develop
     *   Per-run changes go in as `SyncEngine.run_sync(...)` override arguments; `run_sync` reloads `settings.json` first, so mutating `engine.settings` beforehand does nothing.
 *   **Testing & Verification**:
     *   Every function, endpoint, adapter method or controller slot has unit tests in `tests/`, in the module that covers its file (`src/core/services/shearwater.py` → `tests/test_shearwater.py`, `src/web/app.py` → `tests/test_web_api.py`, `desktop/controllers/*.py` → `tests/test_desktop_qt.py`). A change to a function is a change to its tests in the same commit.
-    *   Test against mock data, never live services: the in-memory fakes (`tests/test_link_engine.py` `FakeGarmin`/`FakeDivelogs`/`RecordingAdapter`), the fixture files under `tests/data/` (a Subsurface checkout, an anonymised Shearwater database, Submersion samples), `monkeypatch` for the network, the keychain (`fake_keyring`) and the clock. New fixture data is anonymised (no real names, sites, emails or free text) and small.
+    *   Test against mock data, never live services: the in-memory fakes (`tests/test_link_engine.py` `FakeGarmin`/`FakeDivelogs`/`RecordingAdapter`), the fixture files under `tests/data/` (a Subsurface checkout, an anonymised Shearwater database, Garmin `.fit` files), `monkeypatch` for the network, the keychain (`fake_keyring`) and the clock. New fixture data is anonymised (no real names, sites, emails or free text) and small.
     *   While implementing one part, run the test modules that cover it (`python -m pytest tests/test_x.py -q`) after each step; before calling the change done, and always before preparing a release, run the whole suite with `./run_tests.sh`.
 
 ---
@@ -42,7 +42,7 @@ Work moves through three roles, each on the model suited to it. A role runs as a
 
 | Role | Model | Does |
 |---|---|---|
-| Research | Opus 5.5 | Investigates before code is written: reads the code, the docs and external formats, answers "what is this file / API / behaviour", proposes the design and the questions for the owner. Writes into the plan (`plans/`, one file per type of plan plus the decisions log, indexed by `rework.md`) and `features.md` (backlog), never into `src/`. |
+| Research | Opus 5.5 | Investigates before code is written: reads the code, the docs and external formats, answers "what is this file / API / behaviour", proposes the design and the questions for the owner. Writes into the plan (`plans/`, one file per type of plan plus the decisions log, indexed by `rework.md`) and the backlog (`plans/backlog.md`), never into `src/`. |
 | Implementation | Fable 5.1 | Writes the code **and the tests that pin it** (a test is the specification of the code next to it, so it is written by the same model, one part at a time), running that part's test modules as it goes. Updates `CHANGELOG.md` (Unreleased), the docs page in `docs/` (and README when the feature list changes) and the plan's step status. |
 | Verification | Sonnet 5.5 | Runs the applicable test modules after an implementation step, or the full suite before a release; triages failures into "the test is wrong" / "the code is wrong" with the failing assertion and log lines quoted; reviews a step's diff against these guidelines; adds boilerplate cases and fixture data. Never rewrites the code it is checking. |
 

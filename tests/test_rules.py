@@ -17,8 +17,7 @@ from fastapi.testclient import TestClient
 from src.core.config import (DEFAULT_PAIR_ID, PROFILE_VERSION, SETTINGS_VERSION, ConfigManager, ProfileError,
                              SettingsModel, SyncFilters, SyncPairModel, export_profile, import_profile)
 from src.core.fields import (FieldLink, SyncRule, common_default_links, default_field_links, legacy_field_links,
-                             links_to_rules, pre_c12_default_field_links, rules_to_links,
-                             submersion_default_links)
+                             links_to_rules, pre_c12_default_field_links, rules_to_links)
 from src.core.templates import validate_links
 from src.web.app import app
 from tests.test_profile import _catalog
@@ -119,7 +118,7 @@ def _boards():
         "default": ("garmin", "divelogs", default_field_links()),
         "legacy": ("garmin", "divelogs", legacy_field_links()),
         "pre_c12": ("garmin", "divelogs", pre_c12_default_field_links()),
-        "common": ("garmin", "submersion", common_default_links("garmin", "submersion")),
+        "common": ("garmin", "subsurface", common_default_links("garmin", "subsurface")),
         "common_divelogs": ("divelogs", "subsurface", common_default_links("divelogs", "subsurface", match_on_dive_number=False)),
     }
 
@@ -216,16 +215,15 @@ def test_top_level_keys_are_views_over_the_default_pair():
     s.field_links = default_field_links()
     assert s.default_pair().directionality == "to_divelogs" and len(s.field_links) == 9
     # a pair's link view follows the same rule; None = the shipped defaults
-    pair = SyncPairModel(id="p", source="garmin", target="submersion")
+    pair = SyncPairModel(id="p", source="garmin", target="subsurface-cloud")
     assert pair.rules is None and pair.field_links is None
-    # Submersion's shipped board is the metadata-only one (rework.md F17)
-    assert [l.id for l in pair.effective_field_links()] == [l.id for l in submersion_default_links("garmin", "submersion")]
+    from src.core.pairs import default_links_for
+    assert [l.id for l in pair.effective_field_links()] == [l.id for l in default_links_for("garmin", "subsurface")]
     uddf = SyncPairModel(id="u", source="garmin", target="uddf:out.uddf")
     # the shipped board for the pair: the common links UDDF can hold (it has no weight field)
-    from src.core.pairs import default_links_for
     assert [l.id for l in uddf.effective_field_links()] == [l.id for l in default_links_for("garmin", "uddf")]
-    pair.field_links = [FieldLink(id="notes", source=["garmin.notes"], target="submersion.notes", direction="to_target")]
-    assert list(pair.rules) == ["submersion"] and pair.field_links[0].direction == "to_target"
+    pair.field_links = [FieldLink(id="notes", source=["garmin.notes"], target="subsurface.notes", direction="to_target")]
+    assert list(pair.rules) == ["subsurface"] and pair.field_links[0].direction == "to_target"
     # nothing legacy is ever written
     dumped = s.model_dump()
     assert "field_links" not in dumped and "directionality" not in dumped and "field_links" not in dumped["sync_pairs"][0]
@@ -236,8 +234,8 @@ def test_v1_settings_file_with_pairs_migrates_to_v2_once(tmp_path, caplog):
     v1 = {
         "directionality": "to_garmin",
         "field_links": [l.model_dump() for l in legacy_field_links()],
-        "sync_pairs": [{"id": "g2s", "source": "garmin", "target": "submersion", "directionality": "to_submersion",
-                        "field_links": [{"id": "notes", "source": ["garmin.notes"], "target": "submersion.notes",
+        "sync_pairs": [{"id": "g2s", "source": "garmin", "target": "subsurface-cloud", "directionality": "to_subsurface",
+                        "field_links": [{"id": "notes", "source": ["garmin.notes"], "target": "subsurface.notes",
                                          "direction": "to_target", "conflict": "prefer_source"}]}],
     }
     json.dump(v1, open(path, "w"))
@@ -249,7 +247,7 @@ def test_v1_settings_file_with_pairs_migrates_to_v2_once(tmp_path, caplog):
     assert loaded.directionality == "to_garmin"
     assert {l.id: l for l in loaded.field_links} == {l.id: l for l in legacy_field_links()}
     g2s = loaded.sync_pairs[1]
-    assert list(g2s.rules) == ["submersion"] and g2s.rules["submersion"][0].conflict == "prefer_source"
+    assert list(g2s.rules) == ["subsurface"] and g2s.rules["subsurface"][0].conflict == "prefer_source"
     on_disk = json.load(open(path))
     assert on_disk["settings_version"] == 2 and "field_links" not in on_disk
     assert "field_links" not in on_disk["sync_pairs"][1] and "rules" in on_disk["sync_pairs"][1]
@@ -261,7 +259,7 @@ def test_v1_settings_file_with_pairs_migrates_to_v2_once(tmp_path, caplog):
 
 def test_v2_file_without_the_default_pair_gets_it_back_with_defaults(tmp_path):
     path = str(tmp_path / "settings.json")
-    json.dump({"settings_version": 2, "sync_pairs": [{"id": "g2s", "source": "garmin", "target": "submersion"}]}, open(path, "w"))
+    json.dump({"settings_version": 2, "sync_pairs": [{"id": "g2s", "source": "garmin", "target": "subsurface-cloud"}]}, open(path, "w"))
     loaded = ConfigManager.load_settings(path)
     assert [p.id for p in loaded.sync_pairs] == [DEFAULT_PAIR_ID, "g2s"]
     assert {l.id for l in loaded.field_links} == {l.id for l in default_field_links()}   # not the pre-C12 board
@@ -270,8 +268,8 @@ def test_v2_file_without_the_default_pair_gets_it_back_with_defaults(tmp_path):
 # ---------------------------------------------------------------- profiles
 
 def test_profile_v2_round_trips_and_v1_is_folded_in(tmp_path):
-    settings = SettingsModel(sync_pairs=[SyncPairModel(id="g2s", source="garmin", target="submersion",
-                                                       directionality="to_submersion")])
+    settings = SettingsModel(sync_pairs=[SyncPairModel(id="g2s", source="garmin", target="subsurface-cloud",
+                                                       directionality="to_subsurface")])
     settings.field_links = [FieldLink(id="buddy", source=["garmin.buddy"], target="divelogs.buddy", conflict="manual")]
     profile = export_profile(settings)
     assert profile["dive_sync_profile"] == PROFILE_VERSION == 2
@@ -296,7 +294,7 @@ def _isolated(tmp_path, monkeypatch):
     _isolated_settings(tmp_path, monkeypatch)
 
 
-def test_settings_api_serves_rules_and_keeps_the_default_pair(tmp_path, monkeypatch, submersion_enabled):
+def test_settings_api_serves_rules_and_keeps_the_default_pair(tmp_path, monkeypatch):
     _isolated(tmp_path, monkeypatch)
     client = TestClient(app)
     data = client.get("/api/settings").json()
@@ -309,16 +307,16 @@ def test_settings_api_serves_rules_and_keeps_the_default_pair(tmp_path, monkeypa
     payload = {"directionality": "to_garmin", "sync_filters": data["sync_filters"], "grace_window_minutes": 15,
                "api_cooldown_seconds": 1.0, "schedule": [], "cron_jobs": [],
                "field_links": [{"id": "buddy", "source": ["garmin.buddy"], "target": "divelogs.buddy", "conflict": "manual"}],
-               "sync_pairs": [{"id": "g2s", "source": "garmin", "target": "submersion", "directionality": "to_submersion",
+               "sync_pairs": [{"id": "g2s", "source": "garmin", "target": "subsurface-cloud", "directionality": "to_subsurface",
                                "enabled": True, "field_links": [{"id": "notes", "source": ["garmin.notes"],
-                                                                 "target": "submersion.notes", "direction": "to_target"}]}]}
+                                                                 "target": "subsurface.notes", "direction": "to_target"}]}]}
     res = client.post("/api/settings", json=payload)
     assert res.status_code == 200, res.text
     data = client.get("/api/settings").json()
     assert [p["id"] for p in data["sync_pairs"]] == [DEFAULT_PAIR_ID, "g2s"]
     assert data["directionality"] == "to_garmin"
     assert {r: [x["id"] for x in v] for r, v in data["sync_pairs"][0]["rules"].items()} == {"divelogs": ["buddy"], "garmin": ["buddy"]}
-    assert data["sync_pairs"][1]["rules"] == {"submersion": [{"id": "notes", "target": "submersion.notes", "source": ["garmin.notes"],
+    assert data["sync_pairs"][1]["rules"] == {"subsurface": [{"id": "notes", "target": "subsurface.notes", "source": ["garmin.notes"],
                                                               "conflict": "source_wins", "template": None, "reverse": None,
                                                               "reverse_conflict": None, "separator": ", ", "when": None,
                                                               "take": None}]}
@@ -516,7 +514,7 @@ def test_fields_endpoint_ships_default_rules_and_mapping_test_takes_rules(tmp_pa
     assert seen["match_keys"] == [["garmin.dive_number", "divelogs.dive_number"]] and seen["limit"] == 5
 
 
-def test_board_saves_rules_through_sync_pairs(tmp_path, monkeypatch, submersion_enabled):
+def test_board_saves_rules_through_sync_pairs(tmp_path, monkeypatch):
     """The rebuilt status-page board posts the pair entry with rules and
     match_keys (no top-level field_links) - also for the garmin_divelogs
     pair - and every pair's board is validated against its own catalogue."""
@@ -548,8 +546,8 @@ def test_board_saves_rules_through_sync_pairs(tmp_path, monkeypatch, submersion_
     res = client.post("/api/settings", json=payload)
     assert res.status_code == 400 and "Pair 'garmin_divelogs'" in res.text and "cannot link" in res.text
     # ... and so is one on another pair
-    other = {"id": "g2s", "source": "garmin", "target": "submersion", "directionality": "to_submersion", "enabled": True,
-             "rules": {"submersion": [{"id": "x", "target": "submersion.buddy", "source": ["garmin.tanks"]}]}}
+    other = {"id": "g2s", "source": "garmin", "target": "subsurface-cloud", "directionality": "to_subsurface", "enabled": True,
+             "rules": {"subsurface": [{"id": "x", "target": "subsurface.buddy", "source": ["garmin.tanks"]}]}}
     payload["sync_pairs"] = [other]
     res = client.post("/api/settings", json=payload)
     assert res.status_code == 400 and "Pair 'g2s'" in res.text

@@ -8,6 +8,7 @@ This file is the entry point for Claude Code sessions in this repo. It points to
 ## Where to look
 - [docs/technical.md](docs/technical.md) (was `CONTEXT.md` until 2026-10-18) — architecture, directory layout, core concepts (dive normalization via `UnifiedDive`, three-tier dive matching in `SyncEngine`, deletion flow). Read this before touching `src/core/`.
 - [AGENTS.md](AGENTS.md) — coding conventions and constraints for AI agents working in this repo (Pydantic models, `BaseDiveAdapter` interface, declarative JSONPath mappings in `src/core/mapping/`, API rate-limit/cooldown rules, test requirements). Follow these when writing or editing code here.
+- `rework.md` (local only, gitignored, like `plans/`) — the index of the plan: `plans/backlog.md` is the only list of open work and its status, `plans/owner-checks.md` everything waiting on the owner, the track files under `plans/` the step designs, `plans/decisions.md` the decisions log.
 - [README.md](README.md) and [docs/](docs/README.md) — user-facing docs: features, credentials setup, CLI flags, Docker deployment, known limitations. A user-facing change updates the docs page it belongs to, not only the README.
 
 ## Quick commands

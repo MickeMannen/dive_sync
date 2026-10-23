@@ -241,7 +241,7 @@ class Site:
 # Subsurface's cylinderuse enum, as written by save_cylinder_info (only
 # values above OC_GAS get a "use=" attribute at all; the default open-circuit
 # gas has none). This is a narrower, different axis than a multi-tank "role"
-# (Submersion's backGas/stage/deco/...): Subsurface only distinguishes a
+# (back gas/stage/deco/...): Subsurface only distinguishes a
 # rebreather diluent/oxygen tank, a bailout tank, or an unused spare.
 USE_TO_TANK_ROLE = {"diluent": "diluent", "oxygen": "oxygen", "bailout": "bailout", "not used": "not_used"}
 TANK_ROLE_TO_USE = {v: k for k, v in USE_TO_TANK_ROLE.items()}

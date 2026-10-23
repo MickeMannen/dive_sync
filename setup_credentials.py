@@ -24,15 +24,11 @@ from src.core.config import (
     CredentialsModel,
     DivelogsCredentials,
     GarminCredentials,
-    SUBMERSION_ENABLED,
     SsiCredentials,
-    SubmersionCredentials,
     SubsurfaceCredentials,
-    normalize_endpoint_url,
-    region_from_endpoint,
 )
 
-SERVICES = ("garmin", "divelogs", "subsurface", "ssi") + (("submersion",) if SUBMERSION_ENABLED else ())
+SERVICES = ("garmin", "divelogs", "subsurface", "ssi")
 
 
 def append_to_gitignore(entry: str):
@@ -126,37 +122,6 @@ def setup_subsurface(current: CredentialsModel) -> Tuple[Optional[SubsurfaceCred
     return creds, ok
 
 
-def setup_submersion(current: CredentialsModel) -> Tuple[Optional[SubmersionCredentials], Optional[bool]]:
-    existing = current.submersion
-    print("\n--- Submersion sync store (S3-compatible, e.g. Backblaze B2) ---")
-    print("In Submersion, set the sync provider to S3 and point it at the same bucket.")
-    print("For Backblaze B2: create a bucket, then an application key restricted to that bucket;")
-    print("the endpoint is s3.<region>.backblazeb2.com - https:// is assumed when you leave the scheme off.")
-    endpoint = normalize_endpoint_url(_ask("Endpoint URL", existing.endpoint_url))
-    bucket = _ask("Bucket", existing.bucket)
-    key_id = _ask("Access key id (B2: application key id)", existing.access_key_id)
-    secret = _ask("Secret access key (B2: application key)", existing.secret_access_key, secret=True)
-    # Advanced, the way Submersion folds these away: the region is normally read
-    # straight out of the endpoint, and the prefix is the one Submersion uses.
-    derived = region_from_endpoint(endpoint)
-    print(f"Region read from the endpoint: {derived or '(none - a self-hosted store needs one set by hand)'}")
-    region = ""
-    if not derived or existing.region or _yes("Override the region?", default=False):
-        region = _ask("Region (blank = read it from the endpoint)", existing.region)
-    prefix = _ask("Key prefix", existing.prefix or "submersion-sync/")
-    if not (endpoint and bucket and key_id and secret):
-        print("ℹ Submersion store skipped.")
-        return None, None
-    creds = SubmersionCredentials(store_type="s3", endpoint_url=endpoint, region=region, bucket=bucket,
-                                  prefix=prefix, access_key_id=key_id, secret_access_key=secret,
-                                  path_style=existing.path_style)
-    print("Checking the store (one read-only listing)...")
-    from src.core.services.submersion.store import check_store_access
-    ok, message = check_store_access(creds)
-    print(("✓ " if ok else "✗ ") + message)
-    return creds, ok
-
-
 def setup_ssi(current: CredentialsModel) -> Tuple[Optional[SsiCredentials], Optional[bool]]:
     """MySSI (plans/myssi-sync.md K5): the email and password of the MySSI
     app. Several accounts are a list in credentials.json; this tool edits
@@ -190,7 +155,6 @@ SECTIONS: Dict[str, Callable[[CredentialsModel], Tuple[Optional[object], Optiona
     "divelogs": setup_divelogs,
     "subsurface": setup_subsurface,
     "ssi": setup_ssi,
-    "submersion": setup_submersion,
 }
 
 

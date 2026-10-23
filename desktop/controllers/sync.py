@@ -59,7 +59,7 @@ class SyncController(QObject):
     def pairs(self):
         """Every combination of the configured services, plus whatever pairs
         are saved in settings. The combinations carry their specs rather than
-        a pair id, so syncing e.g. Garmin to Submersion needs no hand-written
+        a pair id, so syncing e.g. Garmin to Subsurface needs no hand-written
         entry in settings.json first (the scheduler builds the engine from
         the two specs). Garmin ↔ Divelogs keeps the empty id it has always
         had, so anything that stored that selection still resolves."""

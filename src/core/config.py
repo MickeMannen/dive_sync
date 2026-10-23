@@ -1,27 +1,18 @@
 import os
 import json
 import logging
-import re
 from typing import Any, Dict, List, Literal, Optional, Union
-from urllib.parse import urlparse
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from src.core.fields import FieldLink, SyncRule, default_field_links, links_to_rules, rules_to_links
 
 logger = logging.getLogger("dive_sync.config")
 
-# Submersion sync is switched off for now: it did not work reliably against a
-# real library. The adapter, its credentials model and the cache code stay in
-# place, but no service list, UI or CLI offers it and a pair that names it is
-# refused (see ``pairs.parse_service_spec``). Flip this to bring it back.
-SUBMERSION_ENABLED = False
-
-
 # ---------------------------------------------------------------------------
 # Run direction (rework.md G0)
 # ---------------------------------------------------------------------------
 # A sync run has exactly one receiver: ``directionality`` names it as
-# ``to_<service id>`` (``to_divelogs``, ``to_garmin``, ``to_submersion``, ...)
+# ``to_<service id>`` (``to_divelogs``, ``to_garmin``, ``to_subsurface``, ...)
 # or with the pair-neutral spellings ``to_target`` / ``to_source``. The old
 # ``bidirectional`` run mode - one run writing both sides - is gone: a two-way
 # sync is two directed runs (two cron jobs, two CLI calls), never one, so the
@@ -98,6 +89,63 @@ def migrate_run_directions(data: Dict[str, Any]) -> List[str]:
     for job in data.get("cron_jobs") or []:
         _migrate_job_direction(job, changes)
     return changes
+
+# ---------------------------------------------------------------------------
+# Retired services (plans/subsurface-submersion.md F18)
+# ---------------------------------------------------------------------------
+# Submersion support was removed on 2026-10-23. A settings file, profile or
+# API payload written by an older build may still hold a pair or a cron job
+# with a Submersion side; those are dropped on the way in (a job that names a
+# dropped pair goes with it), so the rest of the file keeps loading. Its other
+# leftovers - ``create_device_dives_on_submersion`` at the top level or on a
+# pair, a ``submersion`` block in credentials.json - are unknown keys the
+# models ignore, and the next save leaves them out.
+
+RETIRED_SERVICES = ("submersion",)
+
+
+def _names_retired_service(entry: Dict[str, Any]) -> bool:
+    return any(service_id_of_spec(str(entry.get(side) or "")) in RETIRED_SERVICES
+               for side in ("source", "target"))
+
+
+def drop_retired_services(data: Dict[str, Any]) -> List[str]:
+    """Remove the sync pairs and cron jobs of a raw settings dict that name a
+    retired service (Submersion), in place, and return one line per removal
+    (empty when there was nothing to drop)."""
+    changes: List[str] = []
+    if not isinstance(data, dict):
+        return changes
+    dropped_pairs = set()
+    pairs = data.get("sync_pairs")
+    if isinstance(pairs, list):
+        kept = []
+        for pair in pairs:
+            if isinstance(pair, dict) and _names_retired_service(pair):
+                dropped_pairs.add(pair.get("id"))
+                changes.append(f"sync_pairs[{pair.get('id', '?')}] ({pair.get('source')} -> {pair.get('target')})")
+            else:
+                kept.append(pair)
+        if len(kept) != len(pairs):
+            data["sync_pairs"] = kept
+    jobs = data.get("cron_jobs")
+    if isinstance(jobs, list):
+        kept = []
+        for job in jobs:
+            if isinstance(job, dict) and (_names_retired_service(job)
+                                          or (job.get("pair") and job.get("pair") in dropped_pairs)):
+                changes.append(f"cron_jobs[{job.get('id', '?')}]")
+            else:
+                kept.append(job)
+        if len(kept) != len(jobs):
+            data["cron_jobs"] = kept
+    return changes
+
+
+def _log_retired_services(where: str, changes: List[str]) -> None:
+    logger.warning("%s named Submersion, which DiveSync no longer supports; dropped: %s",
+                   where, "; ".join(changes))
+
 
 SETTINGS_FILE = os.path.join(os.environ.get("DATA_DIR", "."), "settings.json")
 CREDENTIALS_FILE = os.path.join(os.environ.get("DATA_DIR", "."), "credentials.json")
@@ -178,7 +226,6 @@ class SyncPairModel(BaseModel):
         description="Ordered [source-side key, target-side key] pairs tried as match keys before start time")
     propagate_deletes: Optional[bool] = Field(None, description="Per-pair override of whether a dive deleted on one side is deleted on the other (rework.md C13); None = the global default")
     create_on_garmin: Optional[bool] = Field(None, description="Per-pair override of whether a new dive found only on the other side is created on Garmin (rework.md C16); None = the global default. Matched-dive updates are never affected")
-    create_device_dives_on_submersion: Optional[bool] = Field(None, description="Per-pair override of whether a dive a dive computer recorded is created on Submersion (rework.md F17); None = the global default. Hand-logged dives are created either way")
     garmin_fit_upload: Optional[bool] = Field(None, description="Per-pair override of how a new dive is created on Garmin (plans/gap-roadmap.md R13, beta): True uploads it as a .fit file (profile, tanks and gases arrive), False posts the manual activity; None = the global default. Whether a dive is created on Garmin at all is still create_on_garmin's call")
 
     @model_validator(mode="before")
@@ -291,10 +338,6 @@ class SettingsModel(BaseModel):
         False,
         description="Beta, off by default (plans/gap-roadmap.md R13): a new dive created on Garmin is uploaded as a .fit file written from the dive (profile, tanks, gases and the computer's channels arrive in Connect; what a .fit cannot hold is set through the activity afterwards or named in the log) instead of posted as a manual activity with the summary only. A dive without a profile is still posted as a manual activity. Only changes how a dive is created; create_on_garmin decides whether it is",
     )
-    create_device_dives_on_submersion: bool = Field(
-        False,
-        description="Whether a dive only the other side has is created on Submersion when a dive computer recorded it (rework.md F17). Off by default: the diver imports each device dive's .fit in the Submersion app, which derives the profile, cylinders, tank pressures and gas switches from the file, and dive_sync then syncs the soft fields onto the dive that import created - creating it here first would only produce a second, emptier copy. A hand-logged dive (nothing to import) is created regardless of this switch, and matched-dive field updates are never affected by it",
-    )
 
     @field_validator("notify_on", mode="before")
     @classmethod
@@ -318,6 +361,12 @@ class SettingsModel(BaseModel):
         status page's default form and both boards' "default" entry post)."""
         if not isinstance(data, dict):
             return data
+        # plans/subsurface-submersion.md F18: pairs and jobs with a Submersion
+        # side are dropped (ConfigManager.load_settings does it first and
+        # saves; this catches a profile or an API payload).
+        retired = drop_retired_services(data)
+        if retired:
+            _log_retired_services("Settings", retired)
         _migrate_direction(data, DEFAULT_RUN_DIRECTION, "directionality")
         legacy_links = data.pop("field_links", None)
         legacy_direction = data.pop("directionality", None)
@@ -389,102 +438,6 @@ class SubsurfaceCredentials(BaseModel):
     def configured(self) -> bool:
         return bool(self.email and self.password)
 
-def normalize_endpoint_url(url: str) -> str:
-    """An endpoint the way the user typed it in Submersion's own settings, made
-    into something boto3 accepts: a bare host gets ``https://``, and a trailing
-    slash goes away. Never downgraded to plain http on its own - a store that
-    really is unencrypted (a self-hosted MinIO on the LAN) has to say so with
-    an explicit ``http://``, so credentials are never sent in the clear by an
-    accident of typing."""
-    url = (url or "").strip().rstrip("/")
-    if not url:
-        return ""
-    if "://" not in url:
-        url = "https://" + url
-    return url
-
-
-# Hosts whose region is right there in the endpoint, which is why Submersion
-# never asks for it separately.
-_ENDPOINT_REGION_RES = (
-    re.compile(r"^s3[.-](?P<region>[a-z0-9-]+)\.backblazeb2\.com$"),
-    re.compile(r"^s3[.-](?P<region>[a-z0-9-]+)\.amazonaws\.com$"),
-    re.compile(r"^.+\.s3[.-](?P<region>[a-z0-9-]+)\.amazonaws\.com$"),
-    re.compile(r"^s3\.(?P<region>[a-z0-9-]+)\.wasabisys\.com$"),
-    re.compile(r"^(?P<region>[a-z0-9-]+)\.digitaloceanspaces\.com$"),
-    re.compile(r"^s3\.(?P<region>[a-z0-9-]+)\.scw\.cloud$"),
-)
-
-
-def region_from_endpoint(url: str) -> str:
-    """The region an endpoint already names, or "" when the host is not one we
-    recognise (self-hosted Garage/MinIO and the like - those need the Advanced
-    field filled in by hand)."""
-    host = urlparse(normalize_endpoint_url(url)).hostname or ""
-    if not host:
-        return ""
-    if host.endswith(".r2.cloudflarestorage.com"):
-        return "auto"
-    if host == "s3.amazonaws.com":
-        return "us-east-1"
-    for pattern in _ENDPOINT_REGION_RES:
-        m = pattern.match(host)
-        if m:
-            return m.group("region")
-    return ""
-
-
-class SubmersionCredentials(BaseModel):
-    """Submersion sync store. Only S3-compatible stores (Backblaze B2, Cloudflare
-    R2, Garage, ...) are supported for unattended sync; a local folder store
-    (Dropbox / iCloud folder) is a later, desktop-only option.
-
-    The fields mirror Submersion's own sync settings screen: endpoint, bucket
-    and the two key halves are what a user is asked for, while region, prefix
-    and path_style sit behind an Advanced section in both of our UIs and are
-    filled in from the endpoint / their defaults when left blank."""
-    store_type: str = Field("s3", description="'s3' or 'folder'")
-    endpoint_url: str = Field("", description="S3 endpoint, e.g. s3.eu-central-003.backblazeb2.com; https:// is assumed when no scheme is given")
-    region: str = Field("", description="S3 region override; blank means 'whatever the endpoint says' (see effective_region)")
-    bucket: str = ""
-    prefix: str = Field("submersion-sync/", description="Key prefix Submersion writes its ssv1.* files under")
-    access_key_id: str = Field("", description="B2: the application key id")
-    secret_access_key: str = Field("", description="B2: the application key")
-    path_style: bool = Field(False, description="Use path-style addressing (needed by some self-hosted stores)")
-    folder_path: str = Field("", description="store_type 'folder': the synced folder on this machine")
-    passphrase: str = Field("", description="End-to-end encryption passphrase (rework.md E11), only needed when "
-                             "the Submersion library has E2E encryption turned on. Left blank for a plaintext store")
-
-    @model_validator(mode="after")
-    def _normalize_endpoint(self) -> "SubmersionCredentials":
-        """Runs wherever these credentials are built - loaded from disk, posted
-        to the web API, saved from the desktop app - so no caller has to
-        normalize on its own."""
-        normalized = normalize_endpoint_url(self.endpoint_url)
-        if normalized != self.endpoint_url:
-            self.endpoint_url = normalized
-        # A region that only repeats what the endpoint already says is not an
-        # override, so don't keep it as one: an older config that spelled out
-        # 'eu-central-003' next to a B2 endpoint would otherwise read as a
-        # departure from the defaults and pop the Advanced section open.
-        if self.region and self.region == region_from_endpoint(normalized):
-            self.region = ""
-        return self
-
-    @property
-    def effective_region(self) -> str:
-        """What the store actually signs with: the Advanced override when the
-        user set one, otherwise the region the endpoint already names. Derived
-        on use rather than saved, so re-pointing the endpoint at another
-        provider does not leave a stale region behind."""
-        return self.region or region_from_endpoint(self.endpoint_url)
-
-    @property
-    def configured(self) -> bool:
-        if self.store_type == "folder":
-            return bool(self.folder_path)
-        return bool(self.endpoint_url and self.bucket and self.access_key_id and self.secret_access_key)
-
 class ShearwaterCredentials(BaseModel):
     """One Shearwater app account's database (rework.md Track H). Not a
     login: the desktop app keeps one SQLite file per account on the computer
@@ -543,7 +496,6 @@ class CredentialsModel(BaseModel):
     # A list in the desktop app (rework.md E19: several accounts, one picked
     # per page); the web UI and Docker keep writing the single-account form.
     subsurface: Union[List[SubsurfaceCredentials], SubsurfaceCredentials] = Field(default_factory=SubsurfaceCredentials)
-    submersion: SubmersionCredentials = Field(default_factory=SubmersionCredentials)
     # A list (several Shearwater accounts, one picked per run, rework.md
     # Track H) or the single form the web UI writes.
     shearwater: Union[List[ShearwaterCredentials], ShearwaterCredentials] = Field(default_factory=list)
@@ -581,8 +533,6 @@ class CredentialsModel(BaseModel):
             out.append("divelogs")
         if any(a.configured for a in self.get_subsurface_accounts()):
             out.append("subsurface")
-        if SUBMERSION_ENABLED and self.submersion.configured:
-            out.append("submersion")
         if self.get_shearwater_accounts():
             out.append("shearwater")
         if any(a.configured for a in self.get_ssi_accounts()):
@@ -648,6 +598,9 @@ class ConfigManager:
                 # it here, say so once, and save the file back so the next load
                 # is silent.
                 migrated = migrate_run_directions(data)
+                # plans/subsurface-submersion.md F18: Submersion's pairs and
+                # jobs go, said once, and the file is saved without them.
+                retired = drop_retired_services(data)
                 # rework.md G1: link boards become receiver rules on the explicit
                 # garmin_divelogs pair; rewritten once, then saved as version 2.
                 legacy_board = ("field_links" in data or "directionality" in data
@@ -666,7 +619,9 @@ class ConfigManager:
                         "sync_pairs[].rules, and the Garmin <-> Divelogs pair is the explicit '%s' entry (rework.md G1).",
                         path, SETTINGS_VERSION, DEFAULT_PAIR_ID,
                     )
-                if migrated or legacy_board:
+                if retired:
+                    _log_retired_services(f"Settings file {path}", retired)
+                if migrated or legacy_board or retired:
                     ConfigManager.save_settings(settings, path)
                 return settings
             except Exception as e:
@@ -744,7 +699,6 @@ PROFILE_SECTIONS = (
     "propagate_deletes",
     "backup_retention_count",
     "create_on_garmin",
-    "create_device_dives_on_submersion",
     "garmin_fit_upload",
 )
 LEGACY_PROFILE_SECTIONS = ("directionality", "field_links")
@@ -822,8 +776,7 @@ def _describe_pairs(old: List[SyncPairModel], new: List[SyncPairModel]) -> List[
         if before.match_keys != pair.match_keys:
             lines.append(f"match_keys[{pair_id}]: {before.match_keys} -> {pair.match_keys}")
         for attr in ("source", "target", "directionality", "enabled", "grace_window_minutes",
-                     "propagate_deletes", "create_on_garmin", "create_device_dives_on_submersion",
-                     "garmin_fit_upload"):
+                     "propagate_deletes", "create_on_garmin", "garmin_fit_upload"):
             if getattr(before, attr) != getattr(pair, attr):
                 lines.append(f"sync_pairs[{pair_id}].{attr}: {getattr(before, attr)!r} -> {getattr(pair, attr)!r}")
     return lines

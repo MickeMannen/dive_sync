@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from src.web.app import app
@@ -402,7 +404,7 @@ def test_fields_preview_api_and_template_validation_on_save(tmp_path, monkeypatc
     assert client.post("/api/settings", json=payload).status_code == 200
 
 
-def test_credentials_api_preserves_subsurface_and_submersion(tmp_path, monkeypatch):
+def test_credentials_api_preserves_subsurface(tmp_path, monkeypatch):
     import src.core.config
     client = TestClient(app)
     creds_file = str(tmp_path / "credentials.json")
@@ -412,57 +414,68 @@ def test_credentials_api_preserves_subsurface_and_submersion(tmp_path, monkeypat
     monkeypatch.setattr(src.core.config.ConfigManager, "save_credentials", lambda creds, path=creds_file: original_save(creds, creds_file))
 
     subsurface = {"email": "me@x.org", "password": "pw"}
-    submersion = {"endpoint_url": "https://s3.eu-central-003.backblazeb2.com", "region": "eu-central-003",
-                  "bucket": "dives", "access_key_id": "id", "secret_access_key": "key"}
     res = client.post("/api/credentials", json={"garmin_accounts": [{"username": "g", "password": "p"}],
-                                                 "subsurface": subsurface, "submersion": submersion})
+                                                 "subsurface": subsurface})
     assert res.status_code == 200
     status = client.get("/api/credentials/status").json()
     assert status["subsurface_configured"] and status["subsurface_email"] == "me@x.org"
-    assert status["submersion_configured"] and status["submersion_store"]["bucket"] == "dives"
-    assert "password" not in status and "secret_access_key" not in str(status)
+    assert "password" not in status
 
     # a Garmin/Divelogs-only save (the current form) keeps them
     res = client.post("/api/credentials", json={"garmin_accounts": [{"username": "g2", "password": "p"}]})
     assert res.status_code == 200
     status = client.get("/api/credentials/status").json()
-    assert status["garmin_username"] == "g2" and status["subsurface_configured"] and status["submersion_configured"]
+    assert status["garmin_username"] == "g2" and status["subsurface_configured"]
 
     from src.core.services import subsurface_cloud
-    from src.core.services.submersion import store as submersion_store
     monkeypatch.setattr(subsurface_cloud, "check_cloud_login", lambda e, p, b: (True, "cloud ok"))
-    monkeypatch.setattr(submersion_store, "check_store_access", lambda c: (False, "denied"))
-    res = client.post("/api/credentials/test", json={"subsurface": subsurface, "submersion": submersion})
+    res = client.post("/api/credentials/test", json={"subsurface": subsurface})
     assert res.status_code == 200
     body = res.json()
     assert body["subsurface"] is True and body["subsurface_message"] == "cloud ok"
-    assert body["submersion"] is False and body["submersion_message"] == "denied"
     assert body["garmin"] is None
 
 
-def test_credentials_test_checks_submersion_passphrase_after_connectivity(monkeypatch):
-    """rework.md E11: once the store itself is reachable, /api/credentials/test
-    also tries to unlock an end-to-end encrypted library, so a wrong or
-    missing passphrase is reported here rather than only on the next sync."""
-    from src.core.services.submersion import store as submersion_store
-    from src.core.services.submersion.adapter import SubmersionAdapter
+def test_old_submersion_entries_are_ignored_by_the_api(tmp_path, monkeypatch):
+    """plans/subsurface-submersion.md F18: Submersion support is gone. A
+    credentials file or a page from an older build that still carries a
+    Submersion store, a Submersion pair or create_device_dives_on_submersion
+    is accepted; the Submersion parts are dropped, the rest is kept."""
+    import src.core.config
+    _isolated_settings(tmp_path, monkeypatch)
+    creds_file = str(tmp_path / "credentials.json")
+    original_load = src.core.config.ConfigManager.load_credentials
+    original_save = src.core.config.ConfigManager.save_credentials
+    monkeypatch.setattr(src.core.config.ConfigManager, "load_credentials", lambda path=creds_file: original_load(creds_file))
+    monkeypatch.setattr(src.core.config.ConfigManager, "save_credentials", lambda creds, path=creds_file: original_save(creds, creds_file))
+    store = {"endpoint_url": "https://s3.eu-central-003.backblazeb2.com", "bucket": "dives",
+             "access_key_id": "id", "secret_access_key": "key"}
+    with open(creds_file, "w") as f:
+        json.dump({"garmin": {"username": "g", "password": "p"}, "submersion": store}, f)
     client = TestClient(app)
-    submersion = {"endpoint_url": "https://x", "region": "r", "bucket": "b",
-                  "access_key_id": "id", "secret_access_key": "key"}
-    monkeypatch.setattr(submersion_store, "check_store_access", lambda c: (True, "S3 store OK"))
 
-    monkeypatch.setattr(SubmersionAdapter, "_resolve_encryption",
-                        lambda self: (False, "the configured passphrase does not unlock this store's encrypted library"))
-    body = client.post("/api/credentials/test", json={"submersion": submersion}).json()
-    assert body["submersion"] is False and "does not unlock" in body["submersion_message"]
+    status = client.get("/api/credentials/status").json()
+    assert status["garmin_username"] == "g" and not any("submersion" in key for key in status)
+    res = client.post("/api/credentials", json={"garmin_accounts": [{"username": "g", "password": ""}],
+                                                 "submersion": store})
+    assert res.status_code == 200
+    saved = json.load(open(creds_file))
+    assert "submersion" not in saved and saved["garmin"][0]["password"] == "p"
+    body = client.post("/api/credentials/test", json={"submersion": store}).json()
+    assert "submersion" not in body
 
-    monkeypatch.setattr(SubmersionAdapter, "_resolve_encryption", lambda self: (True, ""))
-    body = client.post("/api/credentials/test", json={"submersion": submersion}).json()
-    assert body["submersion"] is True and body["submersion_message"] == "S3 store OK"
-
-    monkeypatch.setattr(SubmersionAdapter, "_resolve_encryption", lambda self: (True, "unlocked encrypted library abc"))
-    body = client.post("/api/credentials/test", json={"submersion": submersion}).json()
-    assert body["submersion"] is True and "unlocked encrypted library abc" in body["submersion_message"]
+    payload = _base_settings_payload()
+    payload["create_device_dives_on_submersion"] = True
+    payload["sync_pairs"] = [{"id": "g2s", "source": "garmin", "target": "submersion", "directionality": "to_target"},
+                             {"id": "g2ss", "source": "garmin", "target": "subsurface-cloud", "directionality": "to_target"}]
+    payload["cron_jobs"] = [{"id": "to-submersion", "pair": "g2s", "frequency": "daily", "hour": 3, "minute": 0,
+                             "day_of_week": 0, "interval_minutes": 60, "only_new": True, "sync_gases": True,
+                             "enabled": True}]
+    res = client.post("/api/settings", json=payload)
+    assert res.status_code == 200, res.text
+    data = client.get("/api/settings").json()
+    assert [p["id"] for p in data["sync_pairs"]] == ["garmin_divelogs", "g2ss"]
+    assert data["cron_jobs"] == [] and "create_device_dives_on_submersion" not in data
 
 
 # ---------------------------------------------------------------- phase 6 endpoints

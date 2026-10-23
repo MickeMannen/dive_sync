@@ -1050,8 +1050,8 @@ class UddfDocument:
                 if 0 <= idx < len(tank_ids):
                     _sub(wp, "tankpressure", _fmt(bar_to_pa(ch.pressures[idx])), ref=tank_ids[idx])
         elif s.pressure is not None and tank_ids:
-            # A sample with one pressure and no channels (Shearwater, Subsurface,
-            # Submersion): the reading is the first tank's (owner, 2026-10-02).
+            # A sample with one pressure and no channels (Shearwater,
+            # Subsurface): the reading is the first tank's (owner, 2026-10-02).
             _sub(wp, "tankpressure", _fmt(bar_to_pa(s.pressure)), ref=tank_ids[0])
 
     def _event_mix(self, event: DiveEvent, unified: UnifiedDive) -> Optional[str]:

@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SubmersionCredentials, SsiCredentials, CredentialsModel, CronJobModel, SyncPairModel
+from src.core.config import DEFAULT_PAIR_ID, ConfigManager, SettingsModel, SyncFilters, SyncScheduleSlot, GarminCredentials, DivelogsCredentials, SubsurfaceCredentials, SsiCredentials, CredentialsModel, CronJobModel, SyncPairModel
 from src.core.fields import FieldLink, SyncRule, build_catalog, links_to_rules
 from src.core.templates import preview as preview_link, validate_links
 from src.core.config import ProfileError, export_profile, import_profile
@@ -109,7 +109,6 @@ class SettingsSchema(BaseModel):
     api_cooldown_seconds: float
     propagate_deletes: bool = False
     create_on_garmin: bool = False
-    create_device_dives_on_submersion: bool = False
     # R13 (beta); not on the dashboard's settings form, so omitted keeps what is stored
     garmin_fit_upload: Optional[bool] = None
     schedule: List[Dict[str, int]]
@@ -163,7 +162,6 @@ class CredentialsSchema(BaseModel):
     # Shearwater app's database is a desktop-app setting (rework.md Track H)
     # and has no section here: a stored entry survives every save.
     subsurface: Optional[SubsurfaceCredentials] = None
-    submersion: Optional[SubmersionCredentials] = None
     # MySSI accounts (plans/myssi-sync.md K5): a list like Garmin's and
     # Divelogs', sent whole by the form (an empty list means "no accounts");
     # omitted (None, an older page) leaves what is stored. A row's blank
@@ -249,7 +247,6 @@ def save_settings(data: SettingsSchema):
             api_cooldown_seconds=data.api_cooldown_seconds,
             propagate_deletes=data.propagate_deletes,
             create_on_garmin=data.create_on_garmin,
-            create_device_dives_on_submersion=data.create_device_dives_on_submersion,
             garmin_fit_upload=(data.garmin_fit_upload if data.garmin_fit_upload is not None
                                else current.garmin_fit_upload),
             schedule=schedule_slots,
@@ -323,9 +320,6 @@ def _adapter_class(service_id: str):
     if service_id in ("subsurface", "subsurface-cloud"):
         from src.core.services.subsurface import SubsurfaceAdapter
         return SubsurfaceAdapter
-    if service_id == "submersion":
-        from src.core.services.submersion.adapter import SubmersionAdapter
-        return SubmersionAdapter
     return ADAPTER_CLASSES[service_id]
 
 
@@ -403,19 +397,6 @@ def get_credentials_status():
         "ssi_account_rows": [{"email": a.email, "has_password": bool(a.password)} for a in ssi_accounts],
         "ssi_note": ssi.BETA_NOTE,
         "ssi_unofficial_note": ssi.UNOFFICIAL_NOTE,
-        "submersion_configured": creds.submersion.configured,
-        "submersion_store": {
-            "store_type": creds.submersion.store_type,
-            "endpoint_url": creds.submersion.endpoint_url,
-            "region": creds.submersion.region,
-            # No override saved: the region comes from the endpoint, so the
-            # settings page can leave its Advanced section folded away.
-            "region_auto": not creds.submersion.region,
-            "bucket": creds.submersion.bucket,
-            "prefix": creds.submersion.prefix,
-            "path_style": creds.submersion.path_style,
-            "folder_path": creds.submersion.folder_path,
-        },
     }
 
 
@@ -458,7 +439,7 @@ def _merge_ssi_accounts(submitted: list, existing: list):
 def save_credentials(data: CredentialsSchema):
     try:
         # Only the sections the form sends are replaced; the stored
-        # Subsurface / Submersion entries survive a Garmin/Divelogs save,
+        # Subsurface entries survive a Garmin/Divelogs save,
         # and so do the MySSI accounts when the section is left out.
         current = ConfigManager.load_credentials()
         creds = current.model_copy(update={
@@ -469,8 +450,6 @@ def save_credentials(data: CredentialsSchema):
             creds = creds.model_copy(update={"ssi": _merge_ssi_accounts(data.ssi_accounts, current.get_ssi_accounts())})
         if data.subsurface is not None:
             creds = creds.model_copy(update={"subsurface": data.subsurface})
-        if data.submersion is not None:
-            creds = creds.model_copy(update={"submersion": data.submersion})
         ConfigManager.save_credentials(creds)
         logger.info("Credentials updated via status page.")
         return {"status": "success", "message": "Credentials saved successfully."}
@@ -544,28 +523,6 @@ def test_credentials(data: CredentialsSchema):
         ok, message = check_cloud_login(data.subsurface.email, data.subsurface.password, data.subsurface.base_url)
         results["subsurface"] = ok
         results["subsurface_message"] = message
-
-    if data.submersion is not None and data.submersion.configured:
-        from src.core.services.submersion.store import check_store_access
-        ok, message = check_store_access(data.submersion)
-        if ok:
-            # Connectivity is fine; also try to unlock an end-to-end
-            # encrypted library so a wrong/missing passphrase surfaces here
-            # rather than only on the next real sync.
-            import tempfile
-            from src.core.services.submersion.adapter import SubmersionAdapter
-            with tempfile.TemporaryDirectory() as scratch:
-                adapter = SubmersionAdapter(data.submersion, device_state_dir=scratch)
-                try:
-                    enc_ok, enc_message = adapter._resolve_encryption()
-                except Exception as e:
-                    enc_ok, enc_message = False, str(e)
-                if not enc_ok:
-                    ok, message = False, enc_message
-                elif enc_message:
-                    message = f"{message} {enc_message}."
-        results["submersion"] = ok
-        results["submersion_message"] = message
 
     return results
 

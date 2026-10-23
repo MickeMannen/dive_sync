@@ -83,7 +83,7 @@ SERVICE_HIDDEN_COLUMNS = {"subsurface": {"visibility"},      # Subsurface rates 
 # What a shared column means on a service, where it differs from the heading.
 SERVICE_COLUMN_LABELS = {"subsurface": {"location": "Dive site"}, "divelogs": {"location": "Location, dive site"},
                          "ssi": {"location": "Dive site"}}      # MySSI: a site from SSI's own database
-SERVICE_NAMES = {"garmin": "Garmin Connect", "divelogs": "Divelogs.org", "submersion": "Submersion",
+SERVICE_NAMES = {"garmin": "Garmin Connect", "divelogs": "Divelogs.org",
                  "subsurface": "Subsurface", "ssi": "MySSI"}
 
 

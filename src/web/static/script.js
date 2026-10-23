@@ -109,7 +109,7 @@ function renderJobResults(lastResults, lastRuns) {
 
 // ---------------------------------------------------------------- history
 
-const SERVICE_NAMES = { garmin: "Garmin", divelogs: "Divelogs", subsurface: "Subsurface", uddf: "UDDF", submersion: "Submersion", shearwater: "Shearwater", ssi: "MySSI" };
+const SERVICE_NAMES = { garmin: "Garmin", divelogs: "Divelogs", subsurface: "Subsurface", uddf: "UDDF", shearwater: "Shearwater", ssi: "MySSI" };
 
 function serviceName(id) {
   return SERVICE_NAMES[id] || id || "?";
@@ -883,7 +883,6 @@ function settingsPayload(extra) {
     units: $("units").value,            // app-local (web_prefs.json), never in the profile
     propagate_deletes: !!saved.propagate_deletes,
     create_on_garmin: !!saved.create_on_garmin,
-    create_device_dives_on_submersion: !!saved.create_device_dives_on_submersion,
     schedule: (saved.schedule || []).map((s) => ({ hour: s.hour, minute: s.minute })),
     cron_jobs: jobs,
     sync_pairs: readPairsTable(),
@@ -931,7 +930,7 @@ const TEMPLATE_SOURCE_TYPES = ["text", "number", "datetime", "list"];
 const MATCH_KEY_TYPES = ["number", "datetime"];
 // board.rules: {receiverId: [rule]}; board.matchKeys: [[sourceSideKey, targetSideKey]]
 // `armed` is the click-to-connect half-move: click a sender field, then click
-// a receiver field. With 36 Submersion fields a drag often spans more than the
+// a receiver field. With a long field list a drag often spans more than the
 // viewport, and a drag in flight does not scroll the page reliably.
 // viewTarget: the receiver on view (Target box); the board shows the rules for writing it
 const board = { pairId: null, rules: {}, matchKeys: [], saved: null, catalog: {}, sourceId: null, targetId: null, selected: null, armed: null, viewTarget: null };

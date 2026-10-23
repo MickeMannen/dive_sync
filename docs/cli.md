@@ -69,8 +69,6 @@ python sync.py --source garmin --target ssi --dry-run                 # one acco
 python sync.py --source garmin --target ssi:me@example.com --full-sync   # or --ssi-account me@example.com
 ```
 
-**Submersion** is disabled for now (see the note in the [README](../README.md)).
-
 ### Mapping, conflicts and profiles
 
 Which field feeds which, in what direction, and who wins a conflict is defined by the *mapping board* — see [Mapping](mapping.md) for what that actually means. Edit it visually in the desktop app or on the web dashboard, or from the CLI:

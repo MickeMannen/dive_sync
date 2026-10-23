@@ -1,12 +1,12 @@
 """Read/edit/delete access to the locally cached dive JSON files
-(data/garmin/, data/divelogs/, data/submersion/, data/subsurface/), plus
+(data/garmin/, data/divelogs/, data/subsurface/, data/ssi/), plus
 pushing edits/deletes to the remote service. This is the shared logic behind
 any dive-editing UI (the desktop app's per-service Dives sections) - kept
 here, rather than duplicated per-UI, so there is exactly one place that
 understands each cached JSON shape.
 
 Garmin and Divelogs are cached as the raw payload their API returned;
-Submersion and Subsurface are cached as UnifiedDive (see
+Subsurface and MySSI are cached as UnifiedDive (see
 UNIFIED_CACHE_SERVICES below).
 """
 import os
@@ -493,7 +493,7 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
 
 
 # ---------------------------------------------------------------------------
-# Services cached as UnifiedDive (rework.md F3 services: Submersion, Subsurface)
+# Services cached as UnifiedDive (rework.md F3 services: Subsurface; MySSI)
 # ---------------------------------------------------------------------------
 #
 # Garmin and Divelogs are cached as the raw payload their API returned, and
@@ -505,7 +505,7 @@ def list_divelogs_dives(username: Optional[str] = None, base_dir: Optional[str] 
 # MySSI (plans/myssi-sync.md K3) is one more: its adapter reads the whole
 # logbook as UnifiedDives in one request, cached per account under
 # ``ssi/<email>/data`` (layout.py).
-UNIFIED_CACHE_SERVICES = ("submersion", "subsurface", "ssi")
+UNIFIED_CACHE_SERVICES = ("subsurface", "ssi")
 
 
 def is_unified_cache(service: str) -> bool:
@@ -519,17 +519,13 @@ def _unified_dive_filename(dive: Dict[str, Any], service: str, index: int) -> st
 
 
 def _safe_filename(stem: str) -> str:
-    """Submersion ids are UUIDs and Subsurface's are date-based strings; keep
+    """Subsurface's ids are date-based strings; keep
     them recognisable but never let one escape the cache directory."""
     return re.sub(r"[^A-Za-z0-9._-]", "_", stem) or "dive"
 
 
 def unified_cache_dir(service: str, username: Optional[str] = None, base_dir: Optional[str] = None) -> str:
-    """``<service>/<account>/data`` (layout.py). Submersion's device identity
-    and clock stay in ``submersion/`` itself, out of reach of an
-    ``overwrite=True`` that clears this folder: losing that device id makes
-    dive_sync republish as a brand-new device, orphaning everything it
-    published before."""
+    """``<service>/<account>/data`` (layout.py)."""
     return layout.dives_dir(service, username, base_dir)
 
 
@@ -1200,8 +1196,8 @@ def _active_credentials(service: str, username: Optional[str]):
 
 
 def _unified_adapter(service: str, username: Optional[str] = None):
-    """The configured adapter for a UnifiedDive-cached service: the one
-    Submersion store, a Subsurface Cloud account or a MySSI account -
+    """The configured adapter for a UnifiedDive-cached service: a Subsurface
+    Cloud account or a MySSI account -
     ``username`` is its email or its cache folder name (account_dir_name).
     A MySSI adapter is built through pairs.build_adapter like a sync's, so
     the token it obtains goes back to the credentials file (K2)."""

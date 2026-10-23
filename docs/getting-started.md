@@ -37,7 +37,6 @@ Supported services:
 * **Garmin Connect** and **Divelogs.org**: username and password.
 * **Subsurface Cloud**: the email and password from Subsurface's cloud storage preferences. Verified with one read-only request against the cloud git server.
 * **MySSI** (beta): the email and password of the MySSI app (`--services ssi`). Verified with one login. MySSI has no public API, so DiveSync uses the app's own connection, which SSI can change or close at any time; see [Command line](cli.md#other-services-uddf-files-subsurface-and-the-shearwater-app) for what a sync with it does and does not do.
-* **Submersion**: disabled for now (see the note in the [README](../README.md)); its settings are kept for when it works.
 
 The desktop app asks for the same credentials on its **Settings** page and keeps them in the OS keychain instead of a file.
 

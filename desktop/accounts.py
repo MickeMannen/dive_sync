@@ -67,7 +67,7 @@ def engine_kwargs(selection: Dict[str, str] = None) -> dict:
 
 def accounts_for_spec(spec: str, model=None) -> List[str]:
     """The accounts a pair side can run as; [""] for a side without accounts
-    (a UDDF file, a local Subsurface checkout, the Submersion store)."""
+    (a UDDF file, a local Subsurface checkout)."""
     from src.core.pairs import parse_service_spec
     try:
         service, _ = parse_service_spec(spec)

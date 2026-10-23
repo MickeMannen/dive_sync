@@ -276,9 +276,8 @@ class UnifiedDive(BaseModel):
         None,
         description=(
             "True when a dive computer recorded this dive, False when it was entered by hand, None when the "
-            "service does not say. Provenance rather than dive data: it decides whether a receiver that gets its "
-            "computer data elsewhere (Submersion, whose profile comes from the diver's own .fit import) should "
-            "have the dive created for it at all (rework.md F17)"
+            "service does not say. Provenance rather than dive data, kept where a receiver has a place for it "
+            "(MySSI's imported flag)"
         ),
     )
     service_fields: Dict[str, Any] = Field(

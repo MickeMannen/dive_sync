@@ -630,8 +630,8 @@ class FakeSubsurface(RecordingAdapter):
 
 
 def test_sync_from_subsurface_writes_the_pressure_profile(tmp_path):
-    """A sample with a pressure and no channels (what the Shearwater,
-    Subsurface and Submersion adapters produce) is written as the first
+    """A sample with a pressure and no channels (what the Shearwater and
+    Subsurface adapters produce) is written as the first
     tank's ``tankpressure`` (owner, 2026-10-02): the new output of a sync
     is pinned in ``tests/data/uddf/subsurface_sync.uddf``, and it reads
     back as the source produced it (pressure set, no channels), so a

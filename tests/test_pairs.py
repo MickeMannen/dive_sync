@@ -151,24 +151,10 @@ def test_cli_source_target_offline(tmp_path):
     assert "Uploaded to UDDF file: 0" in res.stdout   # remembered pair, no duplicate
 
 
-def test_submersion_spec_is_refused_while_disabled():
-    with pytest.raises(ValueError, match="disabled"):
+def test_submersion_spec_is_unknown():
+    """Submersion support is gone (plans/subsurface-submersion.md F18)."""
+    with pytest.raises(ValueError, match="Unknown service 'submersion'"):
         parse_service_spec("submersion")
-
-
-def test_submersion_spec_builds_adapter(tmp_path, monkeypatch, submersion_enabled):
-    import json
-    from src.core.config import SettingsModel
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    creds = tmp_path / "credentials.json"
-    creds.write_text(json.dumps({"submersion": {"store_type": "folder", "folder_path": str(tmp_path / "store")}}))
-    a = build_adapter("submersion", SettingsModel(), credentials_path=str(creds))
-    assert a.service_id == "submersion" and a.config.folder_path == str(tmp_path / "store")
-    assert service_id_of("submersion") == "submersion"
-    empty = tmp_path / "empty.json"
-    empty.write_text("{}")
-    with pytest.raises(ValueError, match="not configured"):
-        build_adapter("submersion", SettingsModel(), credentials_path=str(empty))
 
 
 def test_every_shipped_default_board_is_valid():
@@ -178,7 +164,7 @@ def test_every_shipped_default_board_is_valid():
     from src.core.fields import build_catalog
     from src.core.pairs import field_catalog_of
     from src.core.templates import validate_links
-    for a, b in combinations(["garmin", "divelogs", "subsurface", "uddf", "submersion", "ssi"], 2):
+    for a, b in combinations(["garmin", "divelogs", "subsurface", "uddf", "ssi"], 2):
         catalog = build_catalog(field_catalog_of(a), field_catalog_of(b))
         assert validate_links(default_links_for(a, b), catalog) == [], (a, b)
 
@@ -195,16 +181,17 @@ def test_board_pairs_offer_configured_combinations_not_saved_yet():
     ]
 
 
-def test_board_pairs_leave_out_a_disabled_service():
-    """A saved Garmin <-> Submersion pair stays in settings while Submersion
-    is disabled, but no page offers it (and listing conflicts doesn't fail)."""
+def test_board_pairs_leave_out_an_unknown_service():
+    """A pair naming a service this build does not know (here a retired one,
+    put in after loading; a loaded settings file drops it) is not offered,
+    and listing the boards doesn't fail."""
     from src.core.pairs import board_pairs
     settings = SettingsModel()
     settings.sync_pairs.append(SyncPairModel(id="garmin_submersion", source="garmin", target="submersion"))
     assert [b["id"] for b in board_pairs(settings, ["garmin", "divelogs"])] == ["garmin_divelogs"]
 
 
-def test_every_shipped_board_can_be_saved(submersion_enabled):
+def test_every_shipped_board_can_be_saved():
     """The board a pair opens with must pass the save-time validation: the
     Garmin <-> Shearwater one shipped a number-to-text visibility link and a
     tanks link into a read-only field, so Save was refused every time and
@@ -212,7 +199,7 @@ def test_every_shipped_board_can_be_saved(submersion_enabled):
     from src.core.fields import links_to_rules, rules_to_links
     from src.core.pairs import default_links_for, field_catalog_of
     from src.core.templates import validate_links
-    services = ["garmin", "divelogs", "subsurface", "uddf", "shearwater", "submersion", "ssi"]
+    services = ["garmin", "divelogs", "subsurface", "uddf", "shearwater", "ssi"]
     for i, a in enumerate(services):
         for b in services[i + 1:]:
             catalog = {f.key: f for f in field_catalog_of(a) + field_catalog_of(b)}
