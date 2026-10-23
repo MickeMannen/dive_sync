@@ -4,7 +4,7 @@ All notable user-facing changes to DiveSync are recorded here. See `README.md`
 for current features and setup, and `rework.md` (local only) for the plan,
 the backlog and the decision log.
 
-## Unreleased
+## 0.5.1 - 2026-10-23
 
 - Submersion: support removed. It was switched off and is no longer
   planned, so its settings, credentials and code are gone. A settings or
